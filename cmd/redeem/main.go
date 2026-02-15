@@ -367,15 +367,28 @@ func runCaptureOnce(args []string, stdout io.Writer, stderr io.Writer) int {
 	profile := fs.String("profile", "default", "profile name")
 	snapshotEvery := fs.Int("snapshot-every", 100, "snapshot cadence")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "niri JSON fixture path")
+	niriCmd := fs.String("niri-cmd", envOrDefault("REDEEM_NIRI_CMD", "niri msg -j workspaces windows"), "niri snapshot command")
+	processWhitelistExtra := fs.String("process-whitelist-extra", "", "comma-separated extra process tags")
+	includeSessionTag := fs.Bool("include-session-tag", true, "capture terminal session tags")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *fixture == "" {
-		fmt.Fprintln(stderr, "capture once requires --fixture (or REDEEM_NIRI_FIXTURE) in this build")
+	if strings.TrimSpace(*fixture) == "" && strings.TrimSpace(*niriCmd) == "" {
+		fmt.Fprintln(stderr, "capture once requires --fixture or --niri-cmd")
 		return 2
 	}
 
-	runner, err := buildCaptureRunner(*stateDir, *host, *profile, *snapshotEvery, *fixture, stderr)
+	runner, err := buildCaptureRunner(captureBuildConfig{
+		stateDir:              *stateDir,
+		host:                  *host,
+		profile:               *profile,
+		snapshotEvery:         *snapshotEvery,
+		fixture:               *fixture,
+		niriCmd:               *niriCmd,
+		processWhitelistExtra: splitCSV(*processWhitelistExtra),
+		includeSessionTag:     *includeSessionTag,
+		stderr:                stderr,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "capture init failed: %v\n", err)
 		return 1
@@ -404,15 +417,28 @@ func runCaptureRun(args []string, stdout io.Writer, stderr io.Writer) int {
 	snapshotEvery := fs.Int("snapshot-every", 100, "snapshot cadence")
 	interval := fs.Duration("interval", 60*time.Second, "capture interval")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "niri JSON fixture path")
+	niriCmd := fs.String("niri-cmd", envOrDefault("REDEEM_NIRI_CMD", "niri msg -j workspaces windows"), "niri snapshot command")
+	processWhitelistExtra := fs.String("process-whitelist-extra", "", "comma-separated extra process tags")
+	includeSessionTag := fs.Bool("include-session-tag", true, "capture terminal session tags")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *fixture == "" {
-		fmt.Fprintln(stderr, "capture run requires --fixture (or REDEEM_NIRI_FIXTURE) in this build")
+	if strings.TrimSpace(*fixture) == "" && strings.TrimSpace(*niriCmd) == "" {
+		fmt.Fprintln(stderr, "capture run requires --fixture or --niri-cmd")
 		return 2
 	}
 
-	runner, err := buildCaptureRunner(*stateDir, *host, *profile, *snapshotEvery, *fixture, stderr)
+	runner, err := buildCaptureRunner(captureBuildConfig{
+		stateDir:              *stateDir,
+		host:                  *host,
+		profile:               *profile,
+		snapshotEvery:         *snapshotEvery,
+		fixture:               *fixture,
+		niriCmd:               *niriCmd,
+		processWhitelistExtra: splitCSV(*processWhitelistExtra),
+		includeSessionTag:     *includeSessionTag,
+		stderr:                stderr,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "capture init failed: %v\n", err)
 		return 1
@@ -430,18 +456,39 @@ func runCaptureRun(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-func buildCaptureRunner(stateDir string, host string, profile string, snapshotEvery int, fixture string, stderr io.Writer) (*capture.Runner, error) {
-	eventStore, err := events.NewStore(stateDir)
+type captureBuildConfig struct {
+	stateDir              string
+	host                  string
+	profile               string
+	snapshotEvery         int
+	fixture               string
+	niriCmd               string
+	processWhitelistExtra []string
+	includeSessionTag     bool
+	stderr                io.Writer
+}
+
+func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
+	eventStore, err := events.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, err
 	}
-	snapshotStore, err := snapshots.NewStore(stateDir)
+	snapshotStore, err := snapshots.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, err
 	}
 
-	snapshotter := niri.FileSnapshotter{Path: fixture}
-	enricher := procmeta.NewEnricher(procmeta.NoopReader{}, procmeta.Config{IncludeSessionTag: true})
+	var snapshotter collector.Snapshotter
+	if strings.TrimSpace(cfg.fixture) != "" {
+		snapshotter = niri.FileSnapshotter{Path: cfg.fixture}
+	} else {
+		snapshotter = niri.CommandSnapshotter{Command: cfg.niriCmd}
+	}
+
+	enricher := procmeta.NewEnricher(procmeta.NoopReader{}, procmeta.Config{
+		WhitelistExtra:    cfg.processWhitelistExtra,
+		IncludeSessionTag: cfg.includeSessionTag,
+	})
 	stateCollector := collector.New(snapshotter, enricher)
 
 	return capture.NewRunner(capture.Config{
@@ -449,12 +496,31 @@ func buildCaptureRunner(stateDir string, host string, profile string, snapshotEv
 		DiffEngine:    diff.NewEngine(),
 		EventStore:    eventStore,
 		SnapshotStore: snapshotStore,
-		SnapshotEvery: snapshotEvery,
-		Host:          host,
-		Profile:       profile,
+		SnapshotEvery: cfg.snapshotEvery,
+		Host:          cfg.host,
+		Profile:       cfg.profile,
 		Source:        "capture.cli",
-		Logger:        stderr,
+		Logger:        cfg.stderr,
 	}), nil
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func envOrDefault(name string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func printHelp(w io.Writer) {

@@ -4,11 +4,13 @@ let
   settingsFormat = pkgs.formats.yaml { };
   settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" {
     stateDir = cfg.stateDir;
+    host = cfg.host;
     profile = cfg.profile;
     capture = {
       enabled = cfg.capture.enable;
       interval = cfg.capture.interval;
       snapshotEvery = cfg.capture.snapshotEvery;
+      niriCommand = cfg.capture.niriCommand;
     };
     retention = {
       days = cfg.retention.days;
@@ -16,14 +18,16 @@ let
     processMetadata = {
       whitelist = cfg.processWhitelist;
       whitelistExtra = cfg.processWhitelistExtra;
+      includeSessionTag = cfg.processIncludeSessionTag;
     };
     restore = {
       appAllowlist = cfg.restore.appAllowlist;
       terminal = {
         command = cfg.terminal.command;
+        zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
       };
     };
-  };
+  } // cfg.extraConfig;
 in {
   options.programs.terminal-redeemer = {
     enable = lib.mkEnableOption "terminal-redeemer";
@@ -42,6 +46,12 @@ in {
       type = lib.types.str;
       default = "${config.home.homeDirectory}/.terminal-redeemer";
       description = "Root state directory.";
+    };
+
+    host = lib.mkOption {
+      type = lib.types.str;
+      default = "local";
+      description = "Host partition key for event storage.";
     };
 
     profile = lib.mkOption {
@@ -68,6 +78,12 @@ in {
         default = 100;
         description = "Write snapshot every N events.";
       };
+
+      niriCommand = lib.mkOption {
+        type = lib.types.str;
+        default = "niri msg -j workspaces windows";
+        description = "Command used to collect Niri JSON snapshots.";
+      };
     };
 
     retention.days = lib.mkOption {
@@ -88,6 +104,12 @@ in {
       description = "Extra process names to annotate.";
     };
 
+    processIncludeSessionTag = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to include session tag extraction for terminals.";
+    };
+
     restore.appAllowlist = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -98,6 +120,18 @@ in {
       type = lib.types.str;
       default = "kitty";
       description = "Terminal command used during restore.";
+    };
+
+    terminal.zellijAttachOrCreate = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Use zellij attach-or-create strategy during restore.";
+    };
+
+    extraConfig = lib.mkOption {
+      type = lib.types.attrs;
+      default = { };
+      description = "Additional raw config merged into rendered YAML.";
     };
   };
 
@@ -112,7 +146,16 @@ in {
       };
       Service = {
         Type = "oneshot";
-        ExecStart = "${lib.getExe cfg.package} capture once --config %h/.config/terminal-redeemer/config.yaml";
+        ExecStart = ''
+          ${lib.getExe cfg.package} capture once \
+            --state-dir ${lib.escapeShellArg cfg.stateDir} \
+            --host ${lib.escapeShellArg cfg.host} \
+            --profile ${lib.escapeShellArg cfg.profile} \
+            --snapshot-every ${toString cfg.capture.snapshotEvery} \
+            --niri-cmd ${lib.escapeShellArg cfg.capture.niriCommand} \
+            --process-whitelist-extra ${lib.escapeShellArg (lib.concatStringsSep "," cfg.processWhitelistExtra)} \
+            --include-session-tag=${lib.boolToString cfg.processIncludeSessionTag}
+        '';
       };
     };
 
