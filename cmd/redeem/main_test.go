@@ -332,6 +332,71 @@ func TestRestoreApplyInvalidTimestamp(t *testing.T) {
 	}
 }
 
+func TestParseAtSpecSupportsRelativeAge(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
+
+	got, err := parseAtSpec("1m", now)
+	if err != nil {
+		t.Fatalf("parse 1m: %v", err)
+	}
+	if !got.Equal(now.Add(-1 * time.Minute)) {
+		t.Fatalf("expected now-1m, got %s", got)
+	}
+
+	got, err = parseAtSpec("2d", now)
+	if err != nil {
+		t.Fatalf("parse 2d: %v", err)
+	}
+	if !got.Equal(now.Add(-48 * time.Hour)) {
+		t.Fatalf("expected now-48h, got %s", got)
+	}
+
+	got, err = parseAtSpec("1h30m", now)
+	if err != nil {
+		t.Fatalf("parse 1h30m: %v", err)
+	}
+	if !got.Equal(now.Add(-90 * time.Minute)) {
+		t.Fatalf("expected now-90m, got %s", got)
+	}
+}
+
+func TestHistoryInspectRelativeAt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer func() {
+		_ = writer.Close()
+	}()
+
+	now := time.Now().UTC()
+	if _, err := writer.Append(events.Event{V: 1, TS: now.Add(-2 * time.Minute), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "older"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append older event: %v", err)
+	}
+	if _, err := writer.Append(events.Event{V: 1, TS: now.Add(-20 * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "newer"}, StateHash: "sha256:b"}); err != nil {
+		t.Fatalf("append newer event: %v", err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"history", "inspect", "--state-dir", root, "--at", "1m"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"title\": \"older\"") {
+		t.Fatalf("expected state at 1m ago to include older title, got %q", out.String())
+	}
+}
+
 func TestHistoryListEmptyStateDir(t *testing.T) {
 	t.Parallel()
 
@@ -479,6 +544,45 @@ func TestRestoreApplyPreviewUsesConfiguredRestoreSettings(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "restore_plan ready=2 skipped=0 degraded=0") {
 		t.Fatalf("expected config-driven ready plan, got %q", out.String())
+	}
+}
+
+func TestRestoreApplyDryRunPrintsActionsWithoutExecuting(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-app", Patch: map[string]any{"app_id": "code", "workspace_id": "ws-1"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append app event: %v", err)
+	}
+
+	configPath := filepath.Join(root, "config.yaml")
+	configPayload := []byte("stateDir: " + root + "\nrestore:\n  appAllowlist:\n    code: \"false\"\n  terminal:\n    command: kitty\n    zellijAttachOrCreate: true\n")
+	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z", "--dry-run"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected dry-run code 0, got %d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Would Restore:") {
+		t.Fatalf("expected would-restore section, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Summary: would_restore=1 skipped=0 degraded=0") {
+		t.Fatalf("unexpected dry-run summary: %q", out.String())
 	}
 }
 

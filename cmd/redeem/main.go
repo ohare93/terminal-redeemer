@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -132,6 +134,7 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
 	atRaw := fs.String("at", "", "timestamp (RFC3339)")
 	yes := fs.Bool("yes", false, "apply plan without prompt")
+	dryRun := fs.Bool("dry-run", false, "print restore actions without executing")
 	if err := fs.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -142,7 +145,7 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 		_, _ = fmt.Fprintln(stderr, "restore apply requires --at")
 		return 2
 	}
-	at, err := time.Parse(time.RFC3339Nano, *atRaw)
+	at, err := parseAtSpec(*atRaw, time.Now().UTC())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "invalid --at: %v\n", err)
 		return 2
@@ -161,6 +164,10 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 
 	planner := restore.NewPlanner(restore.PlannerConfig{Terminal: restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate}, AppAllowlist: resolvedConfig.Restore.AppAllowlist})
 	plan := planner.Build(state)
+	if *dryRun {
+		printRestoreDryRun(stdout, plan)
+		return 0
+	}
 
 	if !*yes {
 		summary := summarizePlan(plan)
@@ -173,6 +180,56 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 	result := executor.Execute(context.Background(), plan)
 	printRestoreExecution(stdout, result)
 	return 0
+}
+
+func printRestoreDryRun(stdout io.Writer, plan restore.Plan) {
+	readyItems := make([]restore.Item, 0)
+	degradedItems := make([]restore.Item, 0)
+	skippedItems := make([]restore.Item, 0)
+
+	for _, item := range plan.Items {
+		switch item.Status {
+		case restore.StatusReady:
+			readyItems = append(readyItems, item)
+		case restore.StatusDegraded:
+			degradedItems = append(degradedItems, item)
+		default:
+			skippedItems = append(skippedItems, item)
+		}
+	}
+
+	_, _ = fmt.Fprintln(stdout, "Restore Dry Run")
+	_, _ = fmt.Fprintln(stdout, "")
+
+	if len(readyItems) > 0 {
+		_, _ = fmt.Fprintln(stdout, "Would Restore:")
+		for _, item := range readyItems {
+			writef(stdout, "- %s\n", item.WindowKey)
+			writef(stdout, "  command: %s\n", item.Command)
+		}
+		_, _ = fmt.Fprintln(stdout, "")
+	}
+
+	if len(degradedItems) > 0 {
+		_, _ = fmt.Fprintln(stdout, "Degraded:")
+		for _, item := range degradedItems {
+			writef(stdout, "- %s\n", item.WindowKey)
+			writef(stdout, "  reason: %s\n", item.Reason)
+		}
+		_, _ = fmt.Fprintln(stdout, "")
+	}
+
+	if len(skippedItems) > 0 {
+		_, _ = fmt.Fprintln(stdout, "Skipped:")
+		for _, item := range skippedItems {
+			writef(stdout, "- %s\n", item.WindowKey)
+			writef(stdout, "  reason: %s\n", item.Reason)
+		}
+		_, _ = fmt.Fprintln(stdout, "")
+	}
+
+	writef(stdout, "Summary: would_restore=%d skipped=%d degraded=%d\n", len(readyItems), len(skippedItems), len(degradedItems))
+	_, _ = fmt.Fprintln(stdout, "Run with --yes to execute.")
 }
 
 func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -199,7 +256,7 @@ func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer
 		at = timestamps[len(timestamps)-1]
 	}
 	if strings.TrimSpace(*atRaw) != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, *atRaw)
+		parsed, err := parseAtSpec(*atRaw, time.Now().UTC())
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "invalid --at: %v\n", err)
 			return 2
@@ -421,7 +478,7 @@ func runHistoryInspect(args []string, resolvedConfig config.Config, stdout io.Wr
 		at = eventsList[len(eventsList)-1].TS
 	} else {
 		var err error
-		at, err = time.Parse(time.RFC3339Nano, *atRaw)
+		at, err = parseAtSpec(*atRaw, time.Now().UTC())
 		if err != nil {
 			writef(stderr, "invalid --at: %v\n", err)
 			return 2
@@ -457,6 +514,85 @@ func parseOptionalTimestamp(raw string) (*time.Time, error) {
 		return nil, err
 	}
 	return &ts, nil
+}
+
+func parseAtSpec(raw string, now time.Time) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("timestamp is empty")
+	}
+
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return ts, nil
+	}
+
+	age, err := parseRelativeAge(raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("expected RFC3339 timestamp or relative age like 1m/2d")
+	}
+
+	return now.Add(-age), nil
+}
+
+func parseRelativeAge(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return 0, fmt.Errorf("empty relative age")
+	}
+
+	total := time.Duration(0)
+	i := 0
+	for i < len(raw) {
+		start := i
+		for i < len(raw) && raw[i] >= '0' && raw[i] <= '9' {
+			i++
+		}
+		if start == i || i >= len(raw) {
+			return 0, fmt.Errorf("invalid relative age")
+		}
+
+		value, err := strconv.Atoi(raw[start:i])
+		if err != nil {
+			return 0, fmt.Errorf("invalid relative age")
+		}
+		if value < 0 {
+			return 0, fmt.Errorf("invalid relative age")
+		}
+
+		unit := raw[i]
+		i++
+
+		mult, ok := relativeUnitMultiplier(unit)
+		if !ok {
+			return 0, fmt.Errorf("invalid relative age")
+		}
+
+		segment := time.Duration(value) * mult
+		if segment < 0 || segment > (time.Duration(math.MaxInt64)-total) {
+			return 0, fmt.Errorf("relative age overflow")
+		}
+		total += segment
+	}
+
+	if total <= 0 {
+		return 0, fmt.Errorf("relative age must be > 0")
+	}
+	return total, nil
+}
+
+func relativeUnitMultiplier(unit byte) (time.Duration, bool) {
+	switch unit {
+	case 's':
+		return time.Second, true
+	case 'm':
+		return time.Minute, true
+	case 'h':
+		return time.Hour, true
+	case 'd':
+		return 24 * time.Hour, true
+	default:
+		return 0, false
+	}
 }
 
 func runCapture(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
