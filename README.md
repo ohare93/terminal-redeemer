@@ -6,11 +6,14 @@ CLI command: `redeem`
 
 ## Status
 
-This repository is scaffolded for V1 implementation. See:
+V1 core flows are implemented and tested:
 
-- `DESIGN.md`
-- `IMPLEMENTATION_PLAN.md`
-- `MILESTONES.md`
+- capture (`once`, `run`)
+- history (`list`, `inspect`)
+- replay at timestamp
+- restore (`apply`, `tui`)
+- prune (`run`)
+- Home Manager module scaffolding and eval checks
 
 ## Quick Start
 
@@ -36,6 +39,37 @@ go test ./...
 
 ```bash
 go run ./cmd/redeem --help
+```
+
+### Capture once (fixture)
+
+```bash
+go run ./cmd/redeem capture once \
+  --fixture ./testdata/niri-snapshot.json \
+  --state-dir ~/.terminal-redeemer
+```
+
+### Capture once (live command)
+
+```bash
+go run ./cmd/redeem capture once \
+  --niri-cmd 'niri msg -j workspaces windows' \
+  --state-dir ~/.terminal-redeemer
+```
+
+### Inspect and restore
+
+```bash
+go run ./cmd/redeem history list --state-dir ~/.terminal-redeemer
+go run ./cmd/redeem history inspect --state-dir ~/.terminal-redeemer --at 2026-02-15T10:00:00Z
+go run ./cmd/redeem restore tui --state-dir ~/.terminal-redeemer
+go run ./cmd/redeem restore apply --state-dir ~/.terminal-redeemer --at 2026-02-15T10:00:00Z --yes
+```
+
+### Retention prune
+
+```bash
+go run ./cmd/redeem prune run --state-dir ~/.terminal-redeemer --days 30
 ```
 
 ## Flake Outputs
