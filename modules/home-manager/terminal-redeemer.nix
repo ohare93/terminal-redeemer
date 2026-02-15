@@ -2,12 +2,11 @@
 let
   cfg = config.programs.terminal-redeemer;
   settingsFormat = pkgs.formats.yaml { };
-  settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" {
+  renderedConfig = {
     stateDir = cfg.stateDir;
     host = cfg.host;
     profile = cfg.profile;
     capture = {
-      enabled = cfg.capture.enable;
       interval = cfg.capture.interval;
       snapshotEvery = cfg.capture.snapshotEvery;
       niriCommand = cfg.capture.niriCommand;
@@ -28,6 +27,10 @@ let
       };
     };
   } // cfg.extraConfig;
+  settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" renderedConfig;
+  configPath = "${config.xdg.configHome}/terminal-redeemer/config.yaml";
+  captureExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} capture once";
+  pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
 in {
   options.programs.terminal-redeemer = {
     enable = lib.mkEnableOption "terminal-redeemer";
@@ -92,6 +95,14 @@ in {
       description = "Retention period in days.";
     };
 
+    retention.prune.enable = lib.mkEnableOption "terminal-redeemer retention prune timer";
+
+    retention.prune.onCalendar = lib.mkOption {
+      type = lib.types.str;
+      default = "daily";
+      description = "Calendar expression for retention prune schedule.";
+    };
+
     processWhitelist = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "opencode" "claude" ];
@@ -133,10 +144,18 @@ in {
       default = { };
       description = "Additional raw config merged into rendered YAML.";
     };
+
+    renderedConfig = lib.mkOption {
+      type = lib.types.attrs;
+      visible = false;
+      default = { };
+      description = "Internal rendered runtime config for eval checks.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
+    programs.terminal-redeemer.renderedConfig = renderedConfig;
 
     xdg.configFile."terminal-redeemer/config.yaml".source = settingsFile;
 
@@ -146,16 +165,7 @@ in {
       };
       Service = {
         Type = "oneshot";
-        ExecStart = ''
-          ${lib.getExe cfg.package} capture once \
-            --state-dir ${lib.escapeShellArg cfg.stateDir} \
-            --host ${lib.escapeShellArg cfg.host} \
-            --profile ${lib.escapeShellArg cfg.profile} \
-            --snapshot-every ${toString cfg.capture.snapshotEvery} \
-            --niri-cmd ${lib.escapeShellArg cfg.capture.niriCommand} \
-            --process-whitelist-extra ${lib.escapeShellArg (lib.concatStringsSep "," cfg.processWhitelistExtra)} \
-            --include-session-tag=${lib.boolToString cfg.processIncludeSessionTag}
-        '';
+        ExecStart = captureExecStart;
       };
     };
 
@@ -167,6 +177,28 @@ in {
         OnBootSec = "1m";
         OnUnitActiveSec = cfg.capture.interval;
         Unit = "terminal-redeemer-capture.service";
+      };
+      Install.WantedBy = [ "timers.target" ];
+    };
+
+    systemd.user.services.terminal-redeemer-prune = lib.mkIf cfg.retention.prune.enable {
+      Unit = {
+        Description = "terminal-redeemer retention prune";
+      };
+      Service = {
+        Type = "oneshot";
+        ExecStart = pruneExecStart;
+      };
+    };
+
+    systemd.user.timers.terminal-redeemer-prune = lib.mkIf cfg.retention.prune.enable {
+      Unit = {
+        Description = "terminal-redeemer retention prune schedule";
+      };
+      Timer = {
+        OnCalendar = cfg.retention.prune.onCalendar;
+        Persistent = true;
+        Unit = "terminal-redeemer-prune.service";
       };
       Install.WantedBy = [ "timers.target" ];
     };
