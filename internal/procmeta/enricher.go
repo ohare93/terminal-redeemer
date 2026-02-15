@@ -29,9 +29,14 @@ type Enricher struct {
 	reader    Reader
 	whitelist map[string]struct{}
 	config    Config
+	verifier  SessionVerifier
 }
 
 func NewEnricher(reader Reader, config Config) *Enricher {
+	return NewEnricherWithVerifier(reader, config, NewZellijSessionVerifier(nil))
+}
+
+func NewEnricherWithVerifier(reader Reader, config Config, verifier SessionVerifier) *Enricher {
 	whitelist := map[string]struct{}{
 		"opencode": {},
 		"claude":   {},
@@ -43,7 +48,7 @@ func NewEnricher(reader Reader, config Config) *Enricher {
 		whitelist[strings.ToLower(strings.TrimSpace(p))] = struct{}{}
 	}
 
-	return &Enricher{reader: reader, whitelist: whitelist, config: config}
+	return &Enricher{reader: reader, whitelist: whitelist, config: config, verifier: verifier}
 }
 
 func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
@@ -69,7 +74,7 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 		terminal.ProcessTags = tags
 	}
 	if e.config.IncludeSessionTag {
-		terminal.SessionTag = extractSessionTag(window.Title, info)
+		terminal.SessionTag = e.extractSessionTag(window.Title, info)
 	}
 
 	if terminal.CWD != "" || len(terminal.ProcessTags) > 0 || terminal.SessionTag != "" {
@@ -77,6 +82,23 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 	}
 
 	return out, nil
+}
+
+func (e *Enricher) extractSessionTag(windowTitle string, info ProcessInfo) string {
+	if session := extractSessionTagFromProcess(info); session != "" {
+		return session
+	}
+
+	candidate := extractSessionTagFromTitle(windowTitle)
+	if candidate == "" || e.verifier == nil {
+		return ""
+	}
+
+	ok, err := e.verifier.Exists(candidate)
+	if err != nil || !ok {
+		return ""
+	}
+	return candidate
 }
 
 func (e *Enricher) filterTags(chain []string) []string {
@@ -105,8 +127,9 @@ func isTerminal(appID string) bool {
 }
 
 var titleSessionPattern = regexp.MustCompile(`\[session:([^\]]+)\]`)
+var titlePrefixPattern = regexp.MustCompile(`^([^|]+)\s+\|`)
 
-func extractSessionTag(windowTitle string, info ProcessInfo) string {
+func extractSessionTagFromProcess(info ProcessInfo) string {
 	if session := strings.TrimSpace(info.Env["ZELLIJ_SESSION_NAME"]); session != "" {
 		return session
 	}
@@ -121,10 +144,35 @@ func extractSessionTag(windowTitle string, info ProcessInfo) string {
 		}
 	}
 
+	return ""
+}
+
+func extractSessionTagFromTitle(windowTitle string) string {
 	match := titleSessionPattern.FindStringSubmatch(windowTitle)
 	if len(match) > 1 {
 		return strings.TrimSpace(match[1])
 	}
 
+	prefix := titlePrefixPattern.FindStringSubmatch(windowTitle)
+	if len(prefix) > 1 {
+		candidate := strings.TrimSpace(prefix[1])
+		if looksLikeSessionName(candidate) {
+			return candidate
+		}
+	}
+
 	return ""
+}
+
+func looksLikeSessionName(candidate string) bool {
+	if candidate == "" {
+		return false
+	}
+	for _, r := range candidate {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }

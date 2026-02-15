@@ -617,7 +617,7 @@ func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
 		snapshotter = niri.CommandSnapshotter{Command: cfg.niriCmd}
 	}
 
-	enricher := procmeta.NewEnricher(procmeta.NoopReader{}, procmeta.Config{
+	enricher := procmeta.NewEnricher(procmeta.ProcReader{}, procmeta.Config{
 		Whitelist:         cfg.processWhitelist,
 		WhitelistExtra:    cfg.processWhitelistExtra,
 		IncludeSessionTag: cfg.includeSessionTag,

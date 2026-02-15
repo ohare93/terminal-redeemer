@@ -52,7 +52,7 @@ func TestSessionTagExtractionBestEffort(t *testing.T) {
 		Args: []string{"zellij", "attach", "redeemer"},
 		Env:  map[string]string{"ZELLIJ_SESSION_NAME": "from-env"},
 	}}}
-	enricher := NewEnricher(reader, Config{IncludeSessionTag: true})
+	enricher := NewEnricherWithVerifier(reader, Config{IncludeSessionTag: true}, stubVerifier{})
 
 	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "terminal [session:title]"}
 	got, err := enricher.EnrichWindow(window)
@@ -62,6 +62,46 @@ func TestSessionTagExtractionBestEffort(t *testing.T) {
 
 	if got.Terminal == nil || got.Terminal.SessionTag != "from-env" {
 		t.Fatalf("expected env-priority session tag, got %#v", got.Terminal)
+	}
+}
+
+func TestSessionTagExtractedFromTitleWhenVerified(t *testing.T) {
+	t.Parallel()
+
+	enricher := NewEnricherWithVerifier(
+		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/home/jmo"}}},
+		Config{IncludeSessionTag: true},
+		stubVerifier{ok: map[string]bool{"sensible-bee": true}},
+	)
+
+	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "sensible-bee | OC | Restore-terminal-session boot failure..."}
+	got, err := enricher.EnrichWindow(window)
+	if err != nil {
+		t.Fatalf("enrich window: %v", err)
+	}
+
+	if got.Terminal == nil || got.Terminal.SessionTag != "sensible-bee" {
+		t.Fatalf("expected verified title session tag, got %#v", got.Terminal)
+	}
+}
+
+func TestSessionTagFromTitleDroppedWhenNotVerified(t *testing.T) {
+	t.Parallel()
+
+	enricher := NewEnricherWithVerifier(
+		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/home/jmo"}}},
+		Config{IncludeSessionTag: true},
+		stubVerifier{ok: map[string]bool{}},
+	)
+
+	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "sensible-bee | OC | Restore-terminal-session boot failure..."}
+	got, err := enricher.EnrichWindow(window)
+	if err != nil {
+		t.Fatalf("enrich window: %v", err)
+	}
+
+	if got.Terminal != nil && got.Terminal.SessionTag != "" {
+		t.Fatalf("expected unverified title to be dropped, got %#v", got.Terminal)
 	}
 }
 
@@ -93,6 +133,18 @@ func TestReaderFailureReturnsError(t *testing.T) {
 type stubReader struct {
 	byPID map[int]ProcessInfo
 	err   error
+}
+
+type stubVerifier struct {
+	ok  map[string]bool
+	err error
+}
+
+func (s stubVerifier) Exists(session string) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.ok[session], nil
 }
 
 func (s stubReader) Inspect(pid int) (ProcessInfo, error) {
