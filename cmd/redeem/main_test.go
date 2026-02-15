@@ -108,3 +108,33 @@ func TestHistoryInspectAtTimestamp(t *testing.T) {
 		t.Fatalf("expected history output with title, got %q", out.String())
 	}
 }
+
+func TestRestoreApplyPreview(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer writer.Close()
+
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "shell"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"restore", "apply", "--state-dir", root, "--at", "2026-02-15T10:00:00Z"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "restore_plan") {
+		t.Fatalf("expected restore plan output, got %q", out.String())
+	}
+}

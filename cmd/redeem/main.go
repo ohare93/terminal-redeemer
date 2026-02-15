@@ -20,6 +20,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/niri"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/replay"
+	"github.com/jmo/terminal-redeemer/internal/restore"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
 )
 
@@ -41,11 +42,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCapture(args[1:], stdout, stderr)
 	case "history":
 		return runHistory(args[1:], stdout, stderr)
+	case "restore":
+		return runRestore(args[1:], stdout, stderr)
 	case "doctor":
 		fmt.Fprintf(stdout, "stateDir=%s\n", config.DefaultStateDir())
 		fmt.Fprintln(stdout, "status=ok")
 		return 0
-	case "restore", "prune", "bottle":
+	case "prune", "bottle":
 		fmt.Fprintf(stderr, "subcommand '%s' scaffolded but not implemented yet\n", args[0])
 		return 2
 	default:
@@ -53,6 +56,82 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		printHelp(stderr)
 		return 2
 	}
+}
+
+func runRestore(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: redeem restore apply --at <timestamp> [--yes]")
+		return 2
+	}
+	if args[0] != "apply" {
+		fmt.Fprintf(stderr, "unknown restore subcommand: %s\n", args[0])
+		return 2
+	}
+
+	fs := flag.NewFlagSet("restore apply", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	stateDir := fs.String("state-dir", config.DefaultStateDir(), "state directory")
+	atRaw := fs.String("at", "", "timestamp (RFC3339)")
+	yes := fs.Bool("yes", false, "apply plan without prompt")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*atRaw) == "" {
+		fmt.Fprintln(stderr, "restore apply requires --at")
+		return 2
+	}
+	at, err := time.Parse(time.RFC3339Nano, *atRaw)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid --at: %v\n", err)
+		return 2
+	}
+
+	engine, err := replay.NewEngine(*stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "restore init failed: %v\n", err)
+		return 1
+	}
+	state, err := engine.At(at)
+	if err != nil {
+		fmt.Fprintf(stderr, "restore replay failed: %v\n", err)
+		return 1
+	}
+
+	planner := restore.NewPlanner(restore.PlannerConfig{Terminal: restore.TerminalConfig{Command: "kitty", ZellijAttachOrCreate: true}, AppAllowlist: map[string]string{}})
+	plan := planner.Build(state)
+
+	if !*yes {
+		summary := summarizePlan(plan)
+		fmt.Fprintf(stdout, "restore_plan ready=%d skipped=%d degraded=%d\n", summary.ready, summary.skipped, summary.degraded)
+		fmt.Fprintln(stdout, "pass --yes to execute")
+		return 0
+	}
+
+	executor := restore.NewExecutor(restore.ShellRunner{})
+	result := executor.Execute(context.Background(), plan)
+	fmt.Fprintf(stdout, "restore_summary restored=%d skipped=%d failed=%d\n", result.Restored, result.Skipped, result.Failed)
+	return 0
+}
+
+type planSummary struct {
+	ready    int
+	skipped  int
+	degraded int
+}
+
+func summarizePlan(plan restore.Plan) planSummary {
+	s := planSummary{}
+	for _, item := range plan.Items {
+		switch item.Status {
+		case restore.StatusReady:
+			s.ready++
+		case restore.StatusDegraded:
+			s.degraded++
+		default:
+			s.skipped++
+		}
+	}
+	return s
 }
 
 func runHistory(args []string, stdout io.Writer, stderr io.Writer) int {
