@@ -75,12 +75,8 @@ func (r ZellijSessionCWDResolver) Resolve(session string) (string, error) {
 	}
 
 	servers := make([]int, 0, 4)
-	needle := "/" + session
 	for pid, meta := range metas {
-		if strings.ToLower(meta.comm) != "zellij" {
-			continue
-		}
-		if strings.Contains(meta.cmdline, "--server") && strings.Contains(meta.cmdline, needle) {
+		if isZellijServerForSession(meta.comm, meta.cmdline, session) {
 			servers = append(servers, pid)
 		}
 	}
@@ -90,8 +86,7 @@ func (r ZellijSessionCWDResolver) Resolve(session string) (string, error) {
 	}
 
 	home, _ := os.UserHomeDir()
-	best := ""
-	bestScore := -1
+	best, bestScore := "", -1
 	for _, serverPID := range servers {
 		candidates := bfsChildren(children, serverPID, 4)
 		for _, c := range candidates {
@@ -99,13 +94,7 @@ func (r ZellijSessionCWDResolver) Resolve(session string) (string, error) {
 			if err != nil || strings.TrimSpace(cwd) == "" {
 				continue
 			}
-			score := c.depth * 10
-			if isInteractiveComm(metas[c.pid].comm) {
-				score += 50
-			}
-			if home != "" && cwd != home {
-				score += 20
-			}
+			score := scoreSessionCWDCandidate(c.depth, metas[c.pid].comm, cwd, home)
 			if score > bestScore {
 				bestScore = score
 				best = cwd
@@ -118,6 +107,22 @@ func (r ZellijSessionCWDResolver) Resolve(session string) (string, error) {
 	}
 
 	return best, nil
+}
+
+func isZellijServerForSession(comm string, cmdline string, session string) bool {
+	needle := "/" + strings.TrimSpace(session)
+	return strings.EqualFold(comm, "zellij") && strings.Contains(cmdline, "--server") && strings.Contains(cmdline, needle)
+}
+
+func scoreSessionCWDCandidate(depth int, comm string, cwd string, home string) int {
+	score := depth * 10
+	if isInteractiveComm(comm) {
+		score += 50
+	}
+	if home != "" && cwd != home {
+		score += 20
+	}
+	return score
 }
 
 type childCandidate struct {
