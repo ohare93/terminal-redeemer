@@ -32,6 +32,22 @@ func TestTimestampSelection(t *testing.T) {
 	}
 }
 
+func TestSelectTimestampDefaultsToLatestWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	timestamps := []time.Time{
+		time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 2, 15, 11, 0, 0, 0, time.UTC),
+	}
+
+	m := NewModel(restore.Plan{}, timestamps)
+	m.SelectTimestamp(time.Time{})
+
+	if got := m.SelectedTimestamp(); !got.Equal(timestamps[1]) {
+		t.Fatalf("expected latest timestamp selected by default, got %s", got)
+	}
+}
+
 func TestToggleByWorkspaceAndWindow(t *testing.T) {
 	t.Parallel()
 

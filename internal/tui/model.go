@@ -90,6 +90,24 @@ func (m *Model) SelectedTimestamp() time.Time {
 	return m.timestamps[m.tsIndex]
 }
 
+func (m *Model) SelectTimestamp(ts time.Time) {
+	if len(m.timestamps) == 0 {
+		m.tsIndex = 0
+		return
+	}
+	if ts.IsZero() {
+		m.tsIndex = len(m.timestamps) - 1
+		return
+	}
+	for i, candidate := range m.timestamps {
+		if candidate.Equal(ts) {
+			m.tsIndex = i
+			return
+		}
+	}
+	m.tsIndex = len(m.timestamps) - 1
+}
+
 func (m *Model) NextTimestamp() {
 	if len(m.timestamps) == 0 {
 		return

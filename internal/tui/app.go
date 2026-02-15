@@ -36,21 +36,22 @@ type row struct {
 }
 
 func NewApp(plan restore.Plan, timestamps []time.Time) *App {
-	return NewAppWithPlanLoader(plan, timestamps, nil)
+	return NewAppWithPlanLoader(plan, timestamps, time.Time{}, nil)
 }
 
-func NewAppWithPlanLoader(plan restore.Plan, timestamps []time.Time, loadPlan func(time.Time) (restore.Plan, error)) *App {
+func NewAppWithPlanLoader(plan restore.Plan, timestamps []time.Time, selectedAt time.Time, loadPlan func(time.Time) (restore.Plan, error)) *App {
 	app := &App{model: NewModel(plan, timestamps), loadPlan: loadPlan}
+	app.model.SelectTimestamp(selectedAt)
 	app.rebuildRows()
 	return app
 }
 
 func Run(plan restore.Plan, timestamps []time.Time) (restore.Plan, bool, error) {
-	return RunWithPlanLoader(plan, timestamps, nil)
+	return RunWithPlanLoader(plan, timestamps, time.Time{}, nil)
 }
 
-func RunWithPlanLoader(plan restore.Plan, timestamps []time.Time, loadPlan func(time.Time) (restore.Plan, error)) (restore.Plan, bool, error) {
-	app := NewAppWithPlanLoader(plan, timestamps, loadPlan)
+func RunWithPlanLoader(plan restore.Plan, timestamps []time.Time, selectedAt time.Time, loadPlan func(time.Time) (restore.Plan, error)) (restore.Plan, bool, error) {
+	app := NewAppWithPlanLoader(plan, timestamps, selectedAt, loadPlan)
 	program := tea.NewProgram(app)
 	finalModel, err := program.Run()
 	if err != nil {

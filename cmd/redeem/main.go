@@ -285,7 +285,7 @@ func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer
 		return 1
 	}
 
-	filteredPlan, confirmed, err := tui.RunWithPlanLoader(initialPlan, timestamps, planAt)
+	filteredPlan, confirmed, err := tui.RunWithPlanLoader(initialPlan, timestamps, at, planAt)
 	if err != nil {
 		writef(stderr, "restore tui failed: %v\n", err)
 		return 1

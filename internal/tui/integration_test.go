@@ -21,7 +21,7 @@ func TestTimestampSelectionReloadsPlan(t *testing.T) {
 	}
 
 	loadedAt := make([]time.Time, 0, 1)
-	app := NewAppWithPlanLoader(plans[t0.UnixNano()], []time.Time{t0, t1}, func(ts time.Time) (restore.Plan, error) {
+	app := NewAppWithPlanLoader(plans[t0.UnixNano()], []time.Time{t0, t1}, t0, func(ts time.Time) (restore.Plan, error) {
 		loadedAt = append(loadedAt, ts)
 		return plans[ts.UnixNano()], nil
 	})
@@ -40,6 +40,29 @@ func TestTimestampSelectionReloadsPlan(t *testing.T) {
 	preview := app.model.PreviewLines()
 	if len(preview) != 1 || preview[0] != "w-new ready: kitty --directory /new" {
 		t.Fatalf("unexpected preview for selected timestamp: %#v", preview)
+	}
+}
+
+func TestDefaultTimestampSelectionUsesLatest(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(1 * time.Hour)
+	plans := map[int64]restore.Plan{
+		t0.UnixNano(): {Items: []restore.Item{{WindowKey: "w-old", Status: restore.StatusReady, Command: "old", WorkspaceID: "ws-1", AppID: "kitty"}}},
+		t1.UnixNano(): {Items: []restore.Item{{WindowKey: "w-new", Status: restore.StatusReady, Command: "new", WorkspaceID: "ws-2", AppID: "kitty"}}},
+	}
+
+	loadedAt := make([]time.Time, 0, 1)
+	app := NewAppWithPlanLoader(plans[t1.UnixNano()], []time.Time{t0, t1}, time.Time{}, func(ts time.Time) (restore.Plan, error) {
+		loadedAt = append(loadedAt, ts)
+		return plans[ts.UnixNano()], nil
+	})
+
+	app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(loadedAt) != 1 || !loadedAt[0].Equal(t1) {
+		t.Fatalf("expected latest timestamp selected by default, got %#v", loadedAt)
 	}
 }
 
