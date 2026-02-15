@@ -105,6 +105,27 @@ func TestSessionTagFromTitleDroppedWhenNotVerified(t *testing.T) {
 	}
 }
 
+func TestSessionTitleCanUpgradeHomeCWDUsingResolver(t *testing.T) {
+	t.Parallel()
+
+	enricher := NewEnricherWithDependencies(
+		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/home/jmo"}}},
+		Config{IncludeSessionTag: true},
+		stubVerifier{ok: map[string]bool{"sensible-bee": true}},
+		stubSessionCWDResolver{cwdBySession: map[string]string{"sensible-bee": "/home/jmo/Development/active/tools/terminal-redeemer"}},
+	)
+
+	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "sensible-bee | OC | Restore-terminal-session boot failure..."}
+	got, err := enricher.EnrichWindow(window)
+	if err != nil {
+		t.Fatalf("enrich window: %v", err)
+	}
+
+	if got.Terminal == nil || got.Terminal.CWD != "/home/jmo/Development/active/tools/terminal-redeemer" {
+		t.Fatalf("expected resolver cwd upgrade, got %#v", got.Terminal)
+	}
+}
+
 func TestNonTerminalWindowUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -140,11 +161,23 @@ type stubVerifier struct {
 	err error
 }
 
+type stubSessionCWDResolver struct {
+	cwdBySession map[string]string
+	err          error
+}
+
 func (s stubVerifier) Exists(session string) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
 	return s.ok[session], nil
+}
+
+func (s stubSessionCWDResolver) Resolve(session string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.cwdBySession[session], nil
 }
 
 func (s stubReader) Inspect(pid int) (ProcessInfo, error) {
