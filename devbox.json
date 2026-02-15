@@ -4,8 +4,7 @@
     "go@1.24",
     "gopls@latest",
     "golangci-lint@latest",
-    "jq@latest",
-    "jj@latest"
+    "jq@latest"
   ],
   "shell": {
     "init_hook": [
