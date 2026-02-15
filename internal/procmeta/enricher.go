@@ -30,13 +30,18 @@ type Enricher struct {
 	whitelist map[string]struct{}
 	config    Config
 	verifier  SessionVerifier
+	resolver  SessionCWDResolver
 }
 
 func NewEnricher(reader Reader, config Config) *Enricher {
-	return NewEnricherWithVerifier(reader, config, NewZellijSessionVerifier(nil))
+	return NewEnricherWithDependencies(reader, config, NewZellijSessionVerifier(nil), NewZellijSessionCWDResolver(""))
 }
 
 func NewEnricherWithVerifier(reader Reader, config Config, verifier SessionVerifier) *Enricher {
+	return NewEnricherWithDependencies(reader, config, verifier, NewZellijSessionCWDResolver(""))
+}
+
+func NewEnricherWithDependencies(reader Reader, config Config, verifier SessionVerifier, resolver SessionCWDResolver) *Enricher {
 	whitelist := map[string]struct{}{
 		"opencode": {},
 		"claude":   {},
@@ -48,7 +53,7 @@ func NewEnricherWithVerifier(reader Reader, config Config, verifier SessionVerif
 		whitelist[strings.ToLower(strings.TrimSpace(p))] = struct{}{}
 	}
 
-	return &Enricher{reader: reader, whitelist: whitelist, config: config, verifier: verifier}
+	return &Enricher{reader: reader, whitelist: whitelist, config: config, verifier: verifier, resolver: resolver}
 }
 
 func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
@@ -75,6 +80,14 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 	}
 	if e.config.IncludeSessionTag {
 		terminal.SessionTag = e.extractSessionTag(window.Title, info)
+		if session := strings.TrimSpace(terminal.SessionTag); session != "" && e.resolver != nil {
+			if upgraded, err := e.resolver.Resolve(session); err == nil {
+				upgraded = strings.TrimSpace(upgraded)
+				if upgraded != "" {
+					terminal.CWD = upgraded
+				}
+			}
+		}
 	}
 
 	if terminal.CWD != "" || len(terminal.ProcessTags) > 0 || terminal.SessionTag != "" {
