@@ -41,16 +41,17 @@ type Plan struct {
 }
 
 type Item struct {
-	WindowKey string
-	Status    Status
-	Reason    string
-	Command   string
+	WindowKey   string
+	WorkspaceID string
+	Status      Status
+	Reason      string
+	Command     string
 }
 
 func (p *Planner) Build(state model.State) Plan {
 	plan := Plan{Items: make([]Item, 0, len(state.Windows))}
 	for _, window := range state.Windows {
-		item := Item{WindowKey: window.Key}
+		item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID}
 		if isTerminal(window.AppID) {
 			item = p.planTerminal(window)
 		} else {
@@ -62,7 +63,7 @@ func (p *Planner) Build(state model.State) Plan {
 }
 
 func (p *Planner) planTerminal(window model.Window) Item {
-	item := Item{WindowKey: window.Key}
+	item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID}
 	if window.Terminal == nil || strings.TrimSpace(window.Terminal.CWD) == "" {
 		item.Status = StatusSkipped
 		item.Reason = "missing terminal metadata"
@@ -80,7 +81,7 @@ func (p *Planner) planTerminal(window model.Window) Item {
 }
 
 func (p *Planner) planApp(window model.Window) Item {
-	item := Item{WindowKey: window.Key}
+	item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID}
 	command, ok := p.config.AppAllowlist[window.AppID]
 	if !ok {
 		item.Status = StatusSkipped

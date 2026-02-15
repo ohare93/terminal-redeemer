@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/replay"
 	"github.com/jmo/terminal-redeemer/internal/restore"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
+	"github.com/jmo/terminal-redeemer/internal/tui"
 )
 
 func main() {
@@ -63,8 +65,11 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runRestore(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: redeem restore apply --at <timestamp> [--yes]")
+		fmt.Fprintln(stderr, "usage: redeem restore <apply|tui> [flags]")
 		return 2
+	}
+	if args[0] == "tui" {
+		return runRestoreTUI(args[1:], stdout, stderr)
 	}
 	if args[0] != "apply" {
 		fmt.Fprintf(stderr, "unknown restore subcommand: %s\n", args[0])
@@ -114,6 +119,83 @@ func runRestore(args []string, stdout io.Writer, stderr io.Writer) int {
 	result := executor.Execute(context.Background(), plan)
 	fmt.Fprintf(stdout, "restore_summary restored=%d skipped=%d failed=%d\n", result.Restored, result.Skipped, result.Failed)
 	return 0
+}
+
+func runRestoreTUI(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("restore tui", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	stateDir := fs.String("state-dir", config.DefaultStateDir(), "state directory")
+	atRaw := fs.String("at", "", "timestamp (RFC3339, optional)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	eventsList, err := replay.ListEvents(*stateDir, nil, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "restore tui failed to list history: %v\n", err)
+		return 1
+	}
+	timestamps := uniqueEventTimestamps(eventsList)
+
+	at := time.Now().UTC()
+	if len(timestamps) > 0 {
+		at = timestamps[len(timestamps)-1]
+	}
+	if strings.TrimSpace(*atRaw) != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, *atRaw)
+		if err != nil {
+			fmt.Fprintf(stderr, "invalid --at: %v\n", err)
+			return 2
+		}
+		at = parsed
+	}
+
+	engine, err := replay.NewEngine(*stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "restore tui init failed: %v\n", err)
+		return 1
+	}
+	state, err := engine.At(at)
+	if err != nil {
+		fmt.Fprintf(stderr, "restore tui replay failed: %v\n", err)
+		return 1
+	}
+
+	planner := restore.NewPlanner(restore.PlannerConfig{Terminal: restore.TerminalConfig{Command: "kitty", ZellijAttachOrCreate: true}, AppAllowlist: map[string]string{}})
+	plan := planner.Build(state)
+
+	filteredPlan, confirmed, err := tui.Run(plan, timestamps)
+	if err != nil {
+		fmt.Fprintf(stderr, "restore tui failed: %v\n", err)
+		return 1
+	}
+	if !confirmed {
+		fmt.Fprintln(stdout, "restore cancelled")
+		return 0
+	}
+
+	executor := restore.NewExecutor(restore.ShellRunner{})
+	result := executor.Execute(context.Background(), filteredPlan)
+	fmt.Fprintf(stdout, "restore_summary restored=%d skipped=%d failed=%d\n", result.Restored, result.Skipped, result.Failed)
+	return 0
+}
+
+func uniqueEventTimestamps(eventsList []events.Event) []time.Time {
+	if len(eventsList) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{})
+	out := make([]time.Time, 0, len(eventsList))
+	for _, event := range eventsList {
+		k := event.TS.UnixNano()
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, event.TS)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
 }
 
 func runPrune(args []string, stdout io.Writer, stderr io.Writer) int {
