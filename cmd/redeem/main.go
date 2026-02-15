@@ -407,15 +407,25 @@ func runHistoryInspect(args []string, resolvedConfig config.Config, stdout io.Wr
 		}
 		return 2
 	}
+	var at time.Time
 	if strings.TrimSpace(*atRaw) == "" {
-		_, _ = fmt.Fprintln(stderr, "history inspect requires --at")
-		return 2
-	}
-
-	at, err := time.Parse(time.RFC3339Nano, *atRaw)
-	if err != nil {
-		writef(stderr, "invalid --at: %v\n", err)
-		return 2
+		eventsList, err := replay.ListEvents(*stateDir, nil, nil)
+		if err != nil {
+			writef(stderr, "history inspect failed: %v\n", err)
+			return 1
+		}
+		if len(eventsList) == 0 {
+			_, _ = fmt.Fprintln(stderr, "history inspect found no events")
+			return 1
+		}
+		at = eventsList[len(eventsList)-1].TS
+	} else {
+		var err error
+		at, err = time.Parse(time.RFC3339Nano, *atRaw)
+		if err != nil {
+			writef(stderr, "invalid --at: %v\n", err)
+			return 2
+		}
 	}
 
 	engine, err := replay.NewEngine(*stateDir)

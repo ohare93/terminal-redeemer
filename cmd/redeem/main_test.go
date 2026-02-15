@@ -91,7 +91,6 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 		{name: "capture once unknown flag", args: []string{"capture", "once", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "capture run unknown flag", args: []string{"capture", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "history list unknown flag", args: []string{"history", "list", "--no-such-flag"}, want: "flag provided but not defined"},
-		{name: "history inspect missing at", args: []string{"history", "inspect"}, want: "history inspect requires --at"},
 		{name: "restore apply missing at", args: []string{"restore", "apply"}, want: "restore apply requires --at"},
 		{name: "restore tui unknown flag", args: []string{"restore", "tui", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
@@ -113,6 +112,41 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 				t.Fatalf("expected stderr containing %q, got %q", tc.want, stderr.String())
 			}
 		})
+	}
+}
+
+func TestHistoryInspectDefaultsToLatest(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer func() {
+		_ = writer.Close()
+	}()
+
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "old"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append old event: %v", err)
+	}
+	if _, err := writer.Append(events.Event{V: 1, TS: t0.Add(2 * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "new"}, StateHash: "sha256:b"}); err != nil {
+		t.Fatalf("append new event: %v", err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"history", "inspect", "--state-dir", root}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "\"title\": \"new\"") {
+		t.Fatalf("expected latest state output, got %q", out.String())
 	}
 }
 
