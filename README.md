@@ -17,53 +17,34 @@ Current CLI behavior is implemented and covered by tests:
 
 ## Quick Start
 
-### Enter dev environment
-
-```bash
-use_dev_env
-```
-
-Or use devbox directly:
-
-```bash
-devbox shell
-```
-
-### Run tests
-
-```bash
-go test ./...
-```
-
 ### Try CLI
 
 ```bash
-go run ./cmd/redeem --help
+redeem --help
 ```
 
 ### Capture once (fixture)
 
 ```bash
-go run ./cmd/redeem capture once \
-  --fixture ./testdata/niri-snapshot.json \
-  --state-dir ~/.terminal-redeemer
+redeem capture once \
+  --fixture ./testdata/niri-snapshot.json
 ```
 
 ### Capture once (live command)
 
 ```bash
-go run ./cmd/redeem capture once \
-  --niri-cmd 'niri msg -j windows' \
-  --state-dir ~/.terminal-redeemer
+redeem capture once \
+  --niri-cmd 'niri msg -j windows'
 ```
 
 ### Inspect and restore
 
 ```bash
-go run ./cmd/redeem history list --state-dir ~/.terminal-redeemer
-go run ./cmd/redeem history inspect --state-dir ~/.terminal-redeemer --at 2026-02-15T10:00:00Z
-go run ./cmd/redeem restore tui --state-dir ~/.terminal-redeemer
-go run ./cmd/redeem restore apply --state-dir ~/.terminal-redeemer --at 2026-02-15T10:00:00Z --yes
+redeem history list
+redeem history inspect --at 10m
+redeem restore tui
+redeem restore apply --at 10m --dry-run
+redeem restore apply --at 10m --yes
 ```
 
 `restore apply` behavior:
@@ -85,7 +66,7 @@ go run ./cmd/redeem restore apply --state-dir ~/.terminal-redeemer --at 2026-02-
 ### Retention prune
 
 ```bash
-go run ./cmd/redeem prune run --state-dir ~/.terminal-redeemer --days 30
+redeem prune run --days 30
 ```
 
 `prune run` prints:
@@ -95,7 +76,7 @@ go run ./cmd/redeem prune run --state-dir ~/.terminal-redeemer --days 30
 ### Doctor checks
 
 ```bash
-go run ./cmd/redeem doctor
+redeem doctor
 ```
 
 `doctor` prints one line per check and then a summary:
@@ -118,14 +99,3 @@ Current checks:
 - `packages.<system>.terminal-redeemer`
 - `apps.<system>.redeem`
 - `homeManagerModules.terminal-redeemer`
-
-## Development
-
-This project uses `devbox` for local development scripts:
-
-```bash
-devbox run build
-devbox run test
-devbox run lint
-devbox run install-local
-```
