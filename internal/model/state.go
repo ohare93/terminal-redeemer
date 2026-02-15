@@ -22,6 +22,7 @@ type Window struct {
 	Key         string    `json:"key"`
 	AppID       string    `json:"app_id"`
 	WorkspaceID string    `json:"workspace_id"`
+	PID         int       `json:"pid,omitempty"`
 	Title       string    `json:"title,omitempty"`
 	Terminal    *Terminal `json:"terminal,omitempty"`
 }
