@@ -6,13 +6,13 @@ CLI command: `redeem`
 
 ## Status
 
-V1 core flows are implemented and tested:
+Current CLI behavior is implemented and covered by tests:
 
 - capture (`once`, `run`)
 - history (`list`, `inspect`)
-- replay at timestamp
 - restore (`apply`, `tui`)
 - prune (`run`)
+- doctor (`doctor`)
 - Home Manager module scaffolding and eval checks
 
 ## Quick Start
@@ -66,11 +66,52 @@ go run ./cmd/redeem restore tui --state-dir ~/.terminal-redeemer
 go run ./cmd/redeem restore apply --state-dir ~/.terminal-redeemer --at 2026-02-15T10:00:00Z --yes
 ```
 
+`restore apply` behavior:
+
+- Without `--yes`, it prints a preview summary and exits without executing commands:
+  - `restore_plan ready=<n> skipped=<n> degraded=<n>`
+  - `pass --yes to execute`
+- With `--yes`, it executes ready items and prints:
+  - `restore_item ...` lines only for non-ready outcomes (`skipped`, `degraded`, `failed`)
+  - `restore_summary restored=<n> skipped=<n> failed=<n>`
+- `--at` is required.
+
+`restore tui` behavior:
+
+- Starts interactive selection over timestamps and plan items.
+- If cancelled, prints `restore cancelled`.
+- If confirmed, executes the filtered plan and prints the same execution output format as `restore apply --yes` (`restore_item ...`, `restore_summary ...`).
+
 ### Retention prune
 
 ```bash
 go run ./cmd/redeem prune run --state-dir ~/.terminal-redeemer --days 30
 ```
+
+`prune run` prints:
+
+- `prune_summary events_pruned=<n> snapshots_pruned=<n>`
+
+### Doctor checks
+
+```bash
+go run ./cmd/redeem doctor
+```
+
+`doctor` prints one line per check and then a summary:
+
+- `doctor_check name=<check> status=<pass|fail> detail=<text>`
+- `doctor_summary total=<n> passed=<n> failed=<n>`
+
+Current checks:
+
+- `state_dir_writable`
+- `config_load`
+- `niri_source`
+- `kitty_available`
+- `zellij_available`
+- `events_integrity`
+- `snapshots_integrity`
 
 ## Flake Outputs
 
