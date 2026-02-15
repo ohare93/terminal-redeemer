@@ -193,3 +193,85 @@ func TestPruneRunCommand(t *testing.T) {
 		t.Fatalf("expected prune summary output, got %q", out.String())
 	}
 }
+
+func TestHistoryInspectInvalidTimestamp(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"history", "inspect", "--state-dir", t.TempDir(), "--at", "not-a-time"}, &out, &stderr)
+	if code != 2 {
+		t.Fatalf("expected code 2, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "invalid --at") {
+		t.Fatalf("expected invalid --at error, got %q", stderr.String())
+	}
+}
+
+func TestRestoreApplyInvalidTimestamp(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"restore", "apply", "--state-dir", t.TempDir(), "--at", "not-a-time"}, &out, &stderr)
+	if code != 2 {
+		t.Fatalf("expected code 2, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "invalid --at") {
+		t.Fatalf("expected invalid --at error, got %q", stderr.String())
+	}
+}
+
+func TestHistoryListEmptyStateDir(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"history", "list", "--state-dir", t.TempDir()}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
+	}
+	if strings.TrimSpace(out.String()) != "" {
+		t.Fatalf("expected empty output for empty history, got %q", out.String())
+	}
+}
+
+func TestRestoreApplyPreviewAndApplyParityForSkippedOnlyPlan(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer writer.Close()
+
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "firefox", "workspace_id": "ws-1", "title": "web"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+
+	var previewOut bytes.Buffer
+	var previewErr bytes.Buffer
+	previewCode := run([]string{"restore", "apply", "--state-dir", root, "--at", "2026-02-15T10:00:00Z"}, &previewOut, &previewErr)
+	if previewCode != 0 {
+		t.Fatalf("expected preview code 0, got %d stderr=%q", previewCode, previewErr.String())
+	}
+	if !strings.Contains(previewOut.String(), "restore_plan ready=0 skipped=1") {
+		t.Fatalf("unexpected preview summary: %q", previewOut.String())
+	}
+
+	var applyOut bytes.Buffer
+	var applyErr bytes.Buffer
+	applyCode := run([]string{"restore", "apply", "--state-dir", root, "--at", "2026-02-15T10:00:00Z", "--yes"}, &applyOut, &applyErr)
+	if applyCode != 0 {
+		t.Fatalf("expected apply code 0, got %d stderr=%q", applyCode, applyErr.String())
+	}
+	if !strings.Contains(applyOut.String(), "restore_summary restored=0 skipped=1 failed=0") {
+		t.Fatalf("unexpected apply summary: %q", applyOut.String())
+	}
+}
