@@ -19,6 +19,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/niri"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
+	"github.com/jmo/terminal-redeemer/internal/prune"
 	"github.com/jmo/terminal-redeemer/internal/replay"
 	"github.com/jmo/terminal-redeemer/internal/restore"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
@@ -44,11 +45,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runHistory(args[1:], stdout, stderr)
 	case "restore":
 		return runRestore(args[1:], stdout, stderr)
+	case "prune":
+		return runPrune(args[1:], stdout, stderr)
 	case "doctor":
 		fmt.Fprintf(stdout, "stateDir=%s\n", config.DefaultStateDir())
 		fmt.Fprintln(stdout, "status=ok")
 		return 0
-	case "prune", "bottle":
+	case "bottle":
 		fmt.Fprintf(stderr, "subcommand '%s' scaffolded but not implemented yet\n", args[0])
 		return 2
 	default:
@@ -110,6 +113,29 @@ func runRestore(args []string, stdout io.Writer, stderr io.Writer) int {
 	executor := restore.NewExecutor(restore.ShellRunner{})
 	result := executor.Execute(context.Background(), plan)
 	fmt.Fprintf(stdout, "restore_summary restored=%d skipped=%d failed=%d\n", result.Restored, result.Skipped, result.Failed)
+	return 0
+}
+
+func runPrune(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "run" {
+		fmt.Fprintln(stderr, "usage: redeem prune run [--state-dir <path>] [--days <n>]")
+		return 2
+	}
+	fs := flag.NewFlagSet("prune run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	stateDir := fs.String("state-dir", config.DefaultStateDir(), "state directory")
+	days := fs.Int("days", 30, "retention days")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	runner := prune.NewRunner(*stateDir, *days, time.Now)
+	summary, err := runner.Run()
+	if err != nil {
+		fmt.Fprintf(stderr, "prune run failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "prune_summary events_pruned=%d snapshots_pruned=%d\n", summary.EventsPruned, summary.SnapshotsPruned)
 	return 0
 }
 

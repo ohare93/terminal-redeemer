@@ -138,3 +138,32 @@ func TestRestoreApplyPreview(t *testing.T) {
 		t.Fatalf("expected restore plan output, got %q", out.String())
 	}
 }
+
+func TestPruneRunCommand(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	t0 := time.Now().UTC().AddDate(0, 0, -40)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "old"}, StateHash: "sha256:old"}); err != nil {
+		t.Fatalf("append old event: %v", err)
+	}
+	_ = writer.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"prune", "run", "--state-dir", root, "--days", "30"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "prune_summary") {
+		t.Fatalf("expected prune summary output, got %q", out.String())
+	}
+}
