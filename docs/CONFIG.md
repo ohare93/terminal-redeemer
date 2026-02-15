@@ -57,7 +57,7 @@ Note: `capture.enabled` is not consumed by the CLI binary; scheduling enablement
 - `profile`: `default`
 - `capture.interval`: `60s`
 - `capture.snapshotEvery`: `100`
-- `capture.niriCommand`: `niri msg -j workspaces windows`
+- `capture.niriCommand`: `niri msg -j windows`
 - `retention.days`: `30`
 - `restore.terminal.command`: `kitty`
 - `restore.terminal.zellijAttachOrCreate`: `true`
@@ -84,7 +84,7 @@ profile: default
 capture:
   interval: 60s
   snapshotEvery: 100
-  niriCommand: niri msg -j workspaces windows
+  niriCommand: niri msg -j windows
 
 processMetadata:
   whitelist: []

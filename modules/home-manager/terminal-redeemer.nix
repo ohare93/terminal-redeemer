@@ -84,7 +84,7 @@ in {
 
       niriCommand = lib.mkOption {
         type = lib.types.str;
-        default = "niri msg -j workspaces windows";
+        default = "niri msg -j windows";
         description = "Command used to collect Niri JSON snapshots.";
       };
     };

@@ -53,7 +53,7 @@ go run ./cmd/redeem capture once \
 
 ```bash
 go run ./cmd/redeem capture once \
-  --niri-cmd 'niri msg -j workspaces windows' \
+  --niri-cmd 'niri msg -j windows' \
   --state-dir ~/.terminal-redeemer
 ```
 
@@ -118,3 +118,14 @@ Current checks:
 - `packages.<system>.terminal-redeemer`
 - `apps.<system>.redeem`
 - `homeManagerModules.terminal-redeemer`
+
+## Development
+
+This project uses `devbox` for local development scripts:
+
+```bash
+devbox run build
+devbox run test
+devbox run lint
+devbox run install-local
+```

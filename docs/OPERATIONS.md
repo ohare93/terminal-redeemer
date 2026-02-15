@@ -11,7 +11,7 @@
 ## Capture Troubleshooting
 
 - Run manual capture once:
-  - `redeem capture once --state-dir ~/.terminal-redeemer --niri-cmd 'niri msg -j workspaces windows'`
+  - `redeem capture once --state-dir ~/.terminal-redeemer --niri-cmd 'niri msg -j windows'`
 - Check output for `events_written=...`.
 - If command mode fails, run `redeem doctor` and check `niri_source`.
 - If fixture mode is intended, verify `REDEEM_NIRI_FIXTURE` points to readable valid JSON.

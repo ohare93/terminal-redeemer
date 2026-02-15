@@ -78,7 +78,7 @@ func Defaults() Config {
 		Capture: CaptureConfig{
 			Interval:      60 * time.Second,
 			SnapshotEvery: 100,
-			NiriCommand:   "niri msg -j workspaces windows",
+			NiriCommand:   "niri msg -j windows",
 		},
 		ProcessMetadata: ProcessMetadataConfig{
 			Whitelist:         []string{},

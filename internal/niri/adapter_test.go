@@ -37,3 +37,27 @@ func TestParseSnapshotFixture(t *testing.T) {
 		t.Fatalf("expected kitty pid 4242, got %d", kittyPID)
 	}
 }
+
+func TestParseSnapshotWindowsArray(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`[
+  {"id": 101, "app_id": "kitty", "title": "shell", "workspace_id": 2, "pid": 4242},
+  {"id": 102, "app_id": "firefox", "title": "docs", "workspace_id": 1, "pid": 5252}
+]`)
+
+	state, err := ParseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("parse snapshot windows array: %v", err)
+	}
+
+	if len(state.Workspaces) != 0 {
+		t.Fatalf("expected 0 workspaces for windows-only input, got %d", len(state.Workspaces))
+	}
+	if len(state.Windows) != 2 {
+		t.Fatalf("expected 2 windows, got %d", len(state.Windows))
+	}
+	if state.Windows[0].WorkspaceID == "" || state.Windows[1].WorkspaceID == "" {
+		t.Fatalf("expected workspace ids normalized to strings, got %#v", state.Windows)
+	}
+}

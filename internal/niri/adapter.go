@@ -20,16 +20,20 @@ type workspacePayload struct {
 
 type windowPayload struct {
 	ID          int    `json:"id"`
-	AppID       string `json:"app_id"`
+	AppID       any    `json:"app_id"`
 	Title       string `json:"title"`
-	WorkspaceID string `json:"workspace_id"`
+	WorkspaceID any    `json:"workspace_id"`
 	PID         int    `json:"pid"`
 }
 
 func ParseSnapshot(raw []byte) (model.State, error) {
 	var payload snapshotPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return model.State{}, fmt.Errorf("decode niri snapshot: %w", err)
+		var windowsOnly []windowPayload
+		if windowsErr := json.Unmarshal(raw, &windowsOnly); windowsErr != nil {
+			return model.State{}, fmt.Errorf("decode niri snapshot: %w", err)
+		}
+		payload = snapshotPayload{Windows: windowsOnly}
 	}
 
 	state := model.State{
@@ -46,14 +50,31 @@ func ParseSnapshot(raw []byte) (model.State, error) {
 	}
 
 	for _, window := range payload.Windows {
+		appID, _ := valueAsString(window.AppID)
+		workspaceID, _ := valueAsString(window.WorkspaceID)
 		state.Windows = append(state.Windows, model.Window{
-			Key:         fmt.Sprintf("w:%s:%d", window.AppID, window.ID),
-			AppID:       window.AppID,
-			WorkspaceID: window.WorkspaceID,
+			Key:         fmt.Sprintf("w:%s:%d", appID, window.ID),
+			AppID:       appID,
+			WorkspaceID: workspaceID,
 			PID:         window.PID,
 			Title:       window.Title,
 		})
 	}
 
 	return model.Normalize(state), nil
+}
+
+func valueAsString(v any) (string, bool) {
+	switch x := v.(type) {
+	case nil:
+		return "", false
+	case string:
+		return x, x != ""
+	case float64:
+		return fmt.Sprintf("%.0f", x), true
+	case int:
+		return fmt.Sprintf("%d", x), true
+	default:
+		return fmt.Sprint(x), true
+	}
 }

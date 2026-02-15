@@ -11,11 +11,19 @@
       "echo '[devbox] terminal-redeemer environment active'"
     ],
     "scripts": {
+      "build": [
+        "mkdir -p ./bin",
+        "go build -o ./bin/redeem ./cmd/redeem"
+      ],
       "test": [
         "go test ./..."
       ],
       "lint": [
         "golangci-lint run ./..."
+      ],
+      "install-local": [
+        "mkdir -p \"$HOME/.local/bin\"",
+        "go build -o \"$HOME/.local/bin/redeem\" ./cmd/redeem"
       ],
       "run": [
         "go run ./cmd/redeem --help"
