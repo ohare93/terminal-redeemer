@@ -21,7 +21,9 @@ func ListEvents(root string, from *time.Time, to *time.Time) ([]events.Event, er
 	if err != nil {
 		return nil, fmt.Errorf("open events file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	out := make([]events.Event, 0)
 	scanner := bufio.NewScanner(f)

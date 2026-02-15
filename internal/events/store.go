@@ -142,7 +142,9 @@ func (s *Store) ReadSince(cursor int64) ([]Event, int64, error) {
 	if err != nil {
 		return nil, cursor, fmt.Errorf("open events file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	if _, err := f.Seek(cursor, io.SeekStart); err != nil {
 		return nil, cursor, fmt.Errorf("seek to cursor: %w", err)

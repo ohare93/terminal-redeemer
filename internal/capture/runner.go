@@ -114,7 +114,9 @@ func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer writer.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
 
 	now := r.now().UTC()
 	stateHash, err := state.Hash()

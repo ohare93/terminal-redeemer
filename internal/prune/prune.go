@@ -61,7 +61,9 @@ func (r *Runner) pruneEvents(cutoff time.Time) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("open events: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	kept := make([]events.Event, 0)
 	var anchor *events.Event
@@ -180,7 +182,9 @@ func countValidEvents(path string) int {
 	if err != nil {
 		return 0
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	count := 0
 	scanner := bufio.NewScanner(f)

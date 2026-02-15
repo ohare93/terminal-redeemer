@@ -13,6 +13,7 @@ const (
 	StatusReady    Status = "ready"
 	StatusSkipped  Status = "skipped"
 	StatusDegraded Status = "degraded"
+	StatusFailed   Status = "failed"
 )
 
 type PlannerConfig struct {
@@ -33,6 +34,11 @@ func NewPlanner(config PlannerConfig) *Planner {
 	if strings.TrimSpace(config.Terminal.Command) == "" {
 		config.Terminal.Command = "kitty"
 	}
+	normalizedAllowlist := make(map[string]string, len(config.AppAllowlist))
+	for appID, command := range config.AppAllowlist {
+		normalizedAllowlist[normalizeAppID(appID)] = strings.TrimSpace(command)
+	}
+	config.AppAllowlist = normalizedAllowlist
 	return &Planner{config: config}
 }
 
@@ -43,6 +49,7 @@ type Plan struct {
 type Item struct {
 	WindowKey   string
 	WorkspaceID string
+	AppID       string
 	Status      Status
 	Reason      string
 	Command     string
@@ -51,7 +58,7 @@ type Item struct {
 func (p *Planner) Build(state model.State) Plan {
 	plan := Plan{Items: make([]Item, 0, len(state.Windows))}
 	for _, window := range state.Windows {
-		item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID}
+		var item Item
 		if isTerminal(window.AppID) {
 			item = p.planTerminal(window)
 		} else {
@@ -63,16 +70,40 @@ func (p *Planner) Build(state model.State) Plan {
 }
 
 func (p *Planner) planTerminal(window model.Window) Item {
-	item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID}
-	if window.Terminal == nil || strings.TrimSpace(window.Terminal.CWD) == "" {
+	item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID, AppID: window.AppID}
+	if window.Terminal == nil {
 		item.Status = StatusSkipped
 		item.Reason = "missing terminal metadata"
 		return item
 	}
 
-	command := fmt.Sprintf("%s --directory %q", p.config.Terminal.Command, window.Terminal.CWD)
-	if p.config.Terminal.ZellijAttachOrCreate && strings.TrimSpace(window.Terminal.SessionTag) != "" {
-		command = fmt.Sprintf("%s -e sh -lc %q", p.config.Terminal.Command, fmt.Sprintf("zellij attach %s || zellij -s %s", window.Terminal.SessionTag, window.Terminal.SessionTag))
+	cwd := strings.TrimSpace(window.Terminal.CWD)
+	sessionTag := strings.TrimSpace(window.Terminal.SessionTag)
+	if cwd == "" && sessionTag == "" {
+		item.Status = StatusSkipped
+		item.Reason = "missing terminal metadata"
+		return item
+	}
+
+	command := strings.TrimSpace(p.config.Terminal.Command)
+	if cwd != "" {
+		command = fmt.Sprintf("%s --directory %q", command, cwd)
+	}
+	if p.config.Terminal.ZellijAttachOrCreate && sessionTag != "" {
+		command = fmt.Sprintf("%s -e sh -lc %q", strings.TrimSpace(p.config.Terminal.Command), fmt.Sprintf("zellij attach %s || zellij -s %s", sessionTag, sessionTag))
+	}
+
+	if cwd == "" {
+		item.Status = StatusDegraded
+		item.Reason = "missing terminal cwd"
+		item.Command = command
+		return item
+	}
+	if p.config.Terminal.ZellijAttachOrCreate && sessionTag == "" {
+		item.Status = StatusDegraded
+		item.Reason = "missing terminal session tag"
+		item.Command = command
+		return item
 	}
 
 	item.Status = StatusReady
@@ -81,16 +112,25 @@ func (p *Planner) planTerminal(window model.Window) Item {
 }
 
 func (p *Planner) planApp(window model.Window) Item {
-	item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID}
-	command, ok := p.config.AppAllowlist[window.AppID]
+	item := Item{WindowKey: window.Key, WorkspaceID: window.WorkspaceID, AppID: window.AppID}
+	command, ok := p.config.AppAllowlist[normalizeAppID(window.AppID)]
 	if !ok {
 		item.Status = StatusSkipped
 		item.Reason = "app not allowlisted"
 		return item
 	}
+	if command == "" {
+		item.Status = StatusSkipped
+		item.Reason = "allowlist command is empty"
+		return item
+	}
 	item.Status = StatusReady
 	item.Command = command
 	return item
+}
+
+func normalizeAppID(appID string) string {
+	return strings.ToLower(strings.TrimSpace(appID))
 }
 
 func isTerminal(appID string) bool {

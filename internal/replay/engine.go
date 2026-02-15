@@ -51,7 +51,9 @@ func (e *Engine) At(at time.Time) (model.State, error) {
 	if err != nil {
 		return model.State{}, fmt.Errorf("open events file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	if _, err := f.Seek(cursor, io.SeekStart); err != nil {
 		return model.State{}, fmt.Errorf("seek events cursor: %w", err)

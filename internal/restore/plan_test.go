@@ -13,6 +13,7 @@ func TestPlanStatusClassification(t *testing.T) {
 
 	state := model.State{Windows: []model.Window{
 		{Key: "w-term-ready", AppID: "kitty", Terminal: &model.Terminal{CWD: "/tmp", SessionTag: "sess-a"}},
+		{Key: "w-term-degraded", AppID: "kitty", Terminal: &model.Terminal{CWD: "/tmp"}},
 		{Key: "w-term-missing", AppID: "kitty"},
 		{Key: "w-app-skipped", AppID: "firefox"},
 		{Key: "w-app-ready", AppID: "code"},
@@ -29,6 +30,9 @@ func TestPlanStatusClassification(t *testing.T) {
 	}
 	if statusOf(plan, "w-term-missing") != StatusSkipped {
 		t.Fatalf("expected w-term-missing to be skipped")
+	}
+	if statusOf(plan, "w-term-degraded") != StatusDegraded {
+		t.Fatalf("expected w-term-degraded to be degraded")
 	}
 	if statusOf(plan, "w-app-skipped") != StatusSkipped {
 		t.Fatalf("expected w-app-skipped to be skipped")
@@ -56,8 +60,8 @@ func TestTerminalRestoreSkipsMissingMetadata(t *testing.T) {
 func TestAppRestoreObeysAllowlistOnly(t *testing.T) {
 	t.Parallel()
 
-	state := model.State{Windows: []model.Window{{Key: "w-1", AppID: "firefox"}, {Key: "w-2", AppID: "code"}}}
-	planner := NewPlanner(PlannerConfig{AppAllowlist: map[string]string{"code": "code"}, Terminal: TerminalConfig{Command: "kitty"}})
+	state := model.State{Windows: []model.Window{{Key: "w-1", AppID: "firefox"}, {Key: "w-2", AppID: "Code"}}}
+	planner := NewPlanner(PlannerConfig{AppAllowlist: map[string]string{" code ": "code"}, Terminal: TerminalConfig{Command: "kitty"}})
 	plan := planner.Build(state)
 
 	if statusOf(plan, "w-1") != StatusSkipped {
@@ -68,21 +72,64 @@ func TestAppRestoreObeysAllowlistOnly(t *testing.T) {
 	}
 }
 
-func TestExecutorContinueOnFailureSummary(t *testing.T) {
+func TestTerminalRestoreMarksPartialMetadataAsDegraded(t *testing.T) {
+	t.Parallel()
+
+	state := model.State{Windows: []model.Window{
+		{Key: "w-cwd-only", AppID: "kitty", Terminal: &model.Terminal{CWD: "/tmp/project"}},
+		{Key: "w-session-only", AppID: "kitty", Terminal: &model.Terminal{SessionTag: "proj-a"}},
+	}}
+	planner := NewPlanner(PlannerConfig{Terminal: TerminalConfig{Command: "kitty", ZellijAttachOrCreate: true}})
+	plan := planner.Build(state)
+
+	if statusOf(plan, "w-cwd-only") != StatusDegraded {
+		t.Fatalf("expected cwd-only terminal to be degraded")
+	}
+	if reasonOf(plan, "w-cwd-only") != "missing terminal session tag" {
+		t.Fatalf("unexpected reason for cwd-only terminal: %q", reasonOf(plan, "w-cwd-only"))
+	}
+	if statusOf(plan, "w-session-only") != StatusDegraded {
+		t.Fatalf("expected session-only terminal to be degraded")
+	}
+	if reasonOf(plan, "w-session-only") != "missing terminal cwd" {
+		t.Fatalf("unexpected reason for session-only terminal: %q", reasonOf(plan, "w-session-only"))
+	}
+}
+
+func TestExecutorContinueOnFailureSummaryAndResults(t *testing.T) {
 	t.Parallel()
 
 	plan := Plan{Items: []Item{
 		{WindowKey: "w-1", Status: StatusReady, Command: "ok-1"},
 		{WindowKey: "w-2", Status: StatusReady, Command: "fail"},
 		{WindowKey: "w-3", Status: StatusSkipped},
-		{WindowKey: "w-4", Status: StatusReady, Command: "ok-2"},
+		{WindowKey: "w-4", Status: StatusDegraded, Reason: "missing terminal session tag"},
+		{WindowKey: "w-5", Status: StatusReady, Command: "ok-2"},
 	}}
 
 	executor := NewExecutor(stubRunner{failCommand: "fail"})
-	summary := executor.Execute(context.Background(), plan)
+	result := executor.Execute(context.Background(), plan)
 
-	if summary.Restored != 2 || summary.Skipped != 1 || summary.Failed != 1 {
-		t.Fatalf("unexpected summary: %+v", summary)
+	if result.Summary.Restored != 2 || result.Summary.Skipped != 2 || result.Summary.Failed != 1 {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+	if statusForResult(result.Items, "w-1") != StatusReady {
+		t.Fatalf("expected w-1 to be ready result")
+	}
+	if statusForResult(result.Items, "w-2") != StatusFailed {
+		t.Fatalf("expected w-2 to fail")
+	}
+	if errorForResult(result.Items, "w-2") != "boom" {
+		t.Fatalf("expected w-2 error to be boom, got %q", errorForResult(result.Items, "w-2"))
+	}
+	if statusForResult(result.Items, "w-3") != StatusSkipped {
+		t.Fatalf("expected w-3 skipped result")
+	}
+	if statusForResult(result.Items, "w-4") != StatusDegraded {
+		t.Fatalf("expected w-4 degraded result")
+	}
+	if reasonForResult(result.Items, "w-4") != "missing terminal session tag" {
+		t.Fatalf("expected w-4 degraded reason to propagate")
 	}
 }
 
@@ -90,6 +137,42 @@ func statusOf(plan Plan, key string) Status {
 	for _, item := range plan.Items {
 		if item.WindowKey == key {
 			return item.Status
+		}
+	}
+	return ""
+}
+
+func reasonOf(plan Plan, key string) string {
+	for _, item := range plan.Items {
+		if item.WindowKey == key {
+			return item.Reason
+		}
+	}
+	return ""
+}
+
+func statusForResult(results []ItemResult, key string) Status {
+	for _, result := range results {
+		if result.WindowKey == key {
+			return result.Status
+		}
+	}
+	return ""
+}
+
+func reasonForResult(results []ItemResult, key string) string {
+	for _, result := range results {
+		if result.WindowKey == key {
+			return result.Reason
+		}
+	}
+	return ""
+}
+
+func errorForResult(results []ItemResult, key string) string {
+	for _, result := range results {
+		if result.WindowKey == key {
+			return result.Error
 		}
 	}
 	return ""

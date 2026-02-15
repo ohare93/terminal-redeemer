@@ -22,7 +22,9 @@ func TestAgeBasedPruningEventsAndSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire writer: %v", err)
 	}
-	defer writer.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
 
 	snapStore, err := snapshots.NewStore(root)
 	if err != nil {
@@ -94,7 +96,9 @@ func TestNoDataLossForCurrentReplayWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire writer: %v", err)
 	}
-	defer writer.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
 
 	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
 	cutoffOlder := now.AddDate(0, 0, -50)

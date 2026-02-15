@@ -44,7 +44,9 @@ func TestReplayWithSnapshotAndTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire writer: %v", err)
 	}
-	defer writer.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
 
 	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
 	offsetA, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "a"}, StateHash: "sha256:a"})
@@ -87,7 +89,9 @@ func TestReplaySkipsCorruptedLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire writer: %v", err)
 	}
-	defer writer.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
 
 	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
 	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "a"}, StateHash: "sha256:a"}); err != nil {
@@ -132,7 +136,9 @@ func TestReplayTimestampBoundaryInclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire writer: %v", err)
 	}
-	defer writer.Close()
+	defer func() {
+		_ = writer.Close()
+	}()
 
 	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
 	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "a"}, StateHash: "sha256:a"}); err != nil {

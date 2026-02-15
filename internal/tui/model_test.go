@@ -36,9 +36,10 @@ func TestToggleByWorkspaceAndWindow(t *testing.T) {
 	t.Parallel()
 
 	plan := restore.Plan{Items: []restore.Item{
-		{WindowKey: "w-1", Status: restore.StatusReady, Command: "kitty", WorkspaceID: "ws-a"},
-		{WindowKey: "w-2", Status: restore.StatusReady, Command: "kitty", WorkspaceID: "ws-a"},
-		{WindowKey: "w-3", Status: restore.StatusReady, Command: "kitty", WorkspaceID: "ws-b"},
+		{WindowKey: "w-1", Status: restore.StatusReady, Command: "kitty", WorkspaceID: "ws-a", AppID: "kitty"},
+		{WindowKey: "w-2", Status: restore.StatusReady, Command: "kitty", WorkspaceID: "ws-a", AppID: "kitty"},
+		{WindowKey: "w-3", Status: restore.StatusReady, Command: "kitty", WorkspaceID: "ws-b", AppID: "kitty"},
+		{WindowKey: "w-4", Status: restore.StatusSkipped, Reason: "app not allowlisted", WorkspaceID: "ws-a", AppID: "firefox"},
 	}}
 
 	m := NewModel(plan, nil)
@@ -56,22 +57,72 @@ func TestToggleByWorkspaceAndWindow(t *testing.T) {
 	if m.IsSelected("w-3") {
 		t.Fatal("expected w-3 toggled off")
 	}
+
+	m.ToggleWorkspace("ws-a")
+	if !m.IsSelected("w-1") || !m.IsSelected("w-2") {
+		t.Fatal("expected ws-a ready windows to be toggled back on")
+	}
+	if m.IsSelected("w-4") {
+		t.Fatal("expected non-ready window to remain unselected")
+	}
+
+	m.ToggleApp("ws-a", "kitty")
+	if m.IsSelected("w-1") || m.IsSelected("w-2") {
+		t.Fatal("expected ws-a kitty windows toggled off by app")
+	}
+	m.ToggleWindow("w-1")
+
+	if got := m.WorkspaceSelectionState("ws-a"); got != SelectionPartial {
+		t.Fatalf("expected ws-a selection partial, got %v", got)
+	}
+	if got := m.AppSelectionState("ws-a", "kitty"); got != SelectionPartial {
+		t.Fatalf("expected ws-a/kitty selection partial, got %v", got)
+	}
+	if got := m.AppSelectionState("ws-a", "firefox"); got != SelectionUnavailable {
+		t.Fatalf("expected ws-a/firefox selection unavailable, got %v", got)
+	}
 }
 
 func TestActionPreviewGeneration(t *testing.T) {
 	t.Parallel()
 
 	plan := restore.Plan{Items: []restore.Item{
-		{WindowKey: "w-1", Status: restore.StatusReady, Command: "kitty --directory /tmp"},
-		{WindowKey: "w-2", Status: restore.StatusSkipped, Command: "ignored"},
+		{WindowKey: "w-1", Status: restore.StatusReady, Command: "kitty --directory /tmp", AppID: "kitty"},
+		{WindowKey: "w-2", Status: restore.StatusSkipped, Reason: "app not allowlisted", AppID: "firefox"},
 	}}
 
 	m := NewModel(plan, nil)
 	preview := m.PreviewLines()
-	if len(preview) != 1 {
-		t.Fatalf("expected single preview line, got %d", len(preview))
+	if len(preview) != 2 {
+		t.Fatalf("expected two preview lines, got %d", len(preview))
 	}
-	if preview[0] != "w-1: kitty --directory /tmp" {
+	if preview[0] != "w-1 ready: kitty --directory /tmp" {
 		t.Fatalf("unexpected preview line: %q", preview[0])
+	}
+	if preview[1] != "w-2 skipped: app not allowlisted" {
+		t.Fatalf("unexpected skipped preview line: %q", preview[1])
+	}
+}
+
+func TestActionPreviewTracksSelectionsAndDegradedFallbackReason(t *testing.T) {
+	t.Parallel()
+
+	plan := restore.Plan{Items: []restore.Item{
+		{WindowKey: "w-1", Status: restore.StatusReady, Command: "kitty --directory /tmp", WorkspaceID: "ws-1", AppID: "kitty"},
+		{WindowKey: "w-2", Status: restore.StatusDegraded, Reason: "", WorkspaceID: "ws-1", AppID: "kitty"},
+	}}
+
+	m := NewModel(plan, nil)
+	m.ToggleWindow("w-1")
+	preview := m.PreviewLines()
+
+	if len(preview) != 2 {
+		t.Fatalf("expected two preview lines, got %d", len(preview))
+	}
+	if preview[0] != "w-1 skipped: excluded in tui" {
+		t.Fatalf("unexpected ready->skipped preview line: %q", preview[0])
+	}
+	if preview[1] != "w-2 degraded: no reason" {
+		t.Fatalf("unexpected degraded fallback preview line: %q", preview[1])
 	}
 }
