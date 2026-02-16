@@ -99,3 +99,4 @@ Current checks:
 - `packages.<system>.terminal-redeemer`
 - `apps.<system>.redeem`
 - `homeManagerModules.terminal-redeemer`
+- `nixosModules.terminal-redeemer`

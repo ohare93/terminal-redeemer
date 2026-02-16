@@ -21,6 +21,9 @@ let
     };
     restore = {
       appAllowlist = cfg.restore.appAllowlist;
+      appMode = cfg.restore.appMode;
+      reconcileWorkspaceMoves = cfg.restore.reconcileWorkspaceMoves;
+      workspaceReconcileDelay = cfg.restore.workspaceReconcileDelay;
       terminal = {
         command = cfg.terminal.command;
         zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
@@ -125,6 +128,24 @@ in {
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = "App ID to spawn command mapping for restore.";
+    };
+
+    restore.appMode = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      description = "App ID to restore mode mapping (for example: per_window or oneshot).";
+    };
+
+    restore.reconcileWorkspaceMoves = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Reconcile Niri workspace moves after restore execution.";
+    };
+
+    restore.workspaceReconcileDelay = lib.mkOption {
+      type = lib.types.str;
+      default = "1200ms";
+      description = "Delay before workspace move reconciliation runs.";
     };
 
     terminal.command = lib.mkOption {

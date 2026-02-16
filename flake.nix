@@ -75,6 +75,11 @@
                     restore.appAllowlist = {
                       firefox = "firefox --new-window";
                     };
+                    restore.appMode = {
+                      firefox = "oneshot";
+                    };
+                    restore.reconcileWorkspaceMoves = false;
+                    restore.workspaceReconcileDelay = "3s";
                     terminal.command = "foot";
                     terminal.zellijAttachOrCreate = false;
                   };
@@ -98,6 +103,9 @@
           assert rendered.restore.terminal.command == "foot";
           assert rendered.restore.terminal.zellijAttachOrCreate == false;
           assert rendered.restore.appAllowlist.firefox == "firefox --new-window";
+          assert rendered.restore.appMode.firefox == "oneshot";
+          assert rendered.restore.reconcileWorkspaceMoves == false;
+          assert rendered.restore.workspaceReconcileDelay == "3s";
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" captureExec != null;
           assert builtins.match ".* capture once" captureExec != null;
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" pruneExec != null;
@@ -127,8 +135,42 @@
           assert !(cfg.systemd.user.services ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.timers ? terminal-redeemer-prune);
           hmCfg.activationPackage;
+
+        checks.nixos-module-eval =
+          let
+            nixosCfg = nixpkgs.lib.nixosSystem {
+              inherit system;
+              modules = [
+                home-manager.nixosModules.home-manager
+                self.nixosModules.terminal-redeemer
+                {
+                  system.stateVersion = "24.05";
+                  users.users.test = {
+                    isNormalUser = true;
+                    home = "/home/test";
+                  };
+                  programs.terminal-redeemer = {
+                    enable = true;
+                    users.test = {
+                      package = self.packages.${system}.terminal-redeemer;
+                      restore.appMode.firefox = "oneshot";
+                      restore.reconcileWorkspaceMoves = false;
+                      restore.workspaceReconcileDelay = "3s";
+                    };
+                  };
+                }
+              ];
+            };
+            hmUser = nixosCfg.config.home-manager.users.test;
+            rendered = hmUser.programs.terminal-redeemer.renderedConfig;
+          in
+          assert rendered.restore.appMode.firefox == "oneshot";
+          assert rendered.restore.reconcileWorkspaceMoves == false;
+          assert rendered.restore.workspaceReconcileDelay == "3s";
+          pkgs.runCommand "nixos-module-eval" { } "touch $out";
       })
     // {
       homeManagerModules.terminal-redeemer = import ./modules/home-manager/terminal-redeemer.nix;
+      nixosModules.terminal-redeemer = import ./modules/nixos/terminal-redeemer.nix;
     };
 }

@@ -8,6 +8,16 @@
   - `systemctl --user status terminal-redeemer-capture.service`
   - `systemctl --user status terminal-redeemer-capture.timer`
 
+## Service Setup (NixOS)
+
+- Import both modules in your NixOS flake/module list:
+  - `home-manager.nixosModules.home-manager`
+  - `terminal-redeemer.nixosModules.terminal-redeemer`
+- Enable and configure per-user settings under `programs.terminal-redeemer.users.<name>`.
+- The NixOS wrapper forwards each user block to Home Manager and writes:
+  - `~/.config/terminal-redeemer/config.yaml`
+  - user `systemd` capture/prune services and timers.
+
 ## Capture Troubleshooting
 
 - Run manual capture once:
