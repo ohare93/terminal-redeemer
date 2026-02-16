@@ -432,9 +432,15 @@ func TestRestoreApplyPreviewAndApplyParityForSkippedOnlyPlan(t *testing.T) {
 		t.Fatalf("append event: %v", err)
 	}
 
+	configPath := filepath.Join(root, "config.yaml")
+	configPayload := []byte("stateDir: " + root + "\nrestore:\n  appAllowlist: {}\n  terminal:\n    command: kitty\n    zellijAttachOrCreate: true\n")
+	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
 	var previewOut bytes.Buffer
 	var previewErr bytes.Buffer
-	previewCode := run([]string{"restore", "apply", "--state-dir", root, "--at", "2026-02-15T10:00:00Z"}, &previewOut, &previewErr)
+	previewCode := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z"}, &previewOut, &previewErr)
 	if previewCode != 0 {
 		t.Fatalf("expected preview code 0, got %d stderr=%q", previewCode, previewErr.String())
 	}
@@ -444,7 +450,7 @@ func TestRestoreApplyPreviewAndApplyParityForSkippedOnlyPlan(t *testing.T) {
 
 	var applyOut bytes.Buffer
 	var applyErr bytes.Buffer
-	applyCode := run([]string{"restore", "apply", "--state-dir", root, "--at", "2026-02-15T10:00:00Z", "--yes"}, &applyOut, &applyErr)
+	applyCode := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z", "--yes"}, &applyOut, &applyErr)
 	if applyCode != 0 {
 		t.Fatalf("expected apply code 0, got %d stderr=%q", applyCode, applyErr.String())
 	}
