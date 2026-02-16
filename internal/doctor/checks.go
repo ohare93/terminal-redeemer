@@ -252,6 +252,31 @@ func (c SnapshotsIntegrityCheck) Run(_ context.Context) Result {
 	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d snapshots)", checked)}
 }
 
+type LocalInstallCheck struct {
+	Path string
+	Stat func(name string) (os.FileInfo, error)
+}
+
+func (c LocalInstallCheck) Name() string {
+	return "local_install"
+}
+
+func (c LocalInstallCheck) Run(_ context.Context) Result {
+	stat := c.Stat
+	if stat == nil {
+		stat = os.Stat
+	}
+
+	path := c.Path
+	if path == "" {
+		return Result{Name: c.Name(), Status: StatusPass, Detail: "no local install path resolved"}
+	}
+	if _, err := stat(path); err != nil {
+		return Result{Name: c.Name(), Status: StatusPass, Detail: "no local install found"}
+	}
+	return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("%s exists and may shadow the Nix-managed version; run `devbox run uninstall-local` to remove it", path)}
+}
+
 func firstCommandToken(command string) (string, error) {
 	parts := strings.Fields(strings.TrimSpace(command))
 	if len(parts) == 0 {

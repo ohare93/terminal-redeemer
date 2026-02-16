@@ -17,6 +17,10 @@
 - The NixOS wrapper forwards each user block to Home Manager and writes:
   - `~/.config/terminal-redeemer/config.yaml`
   - user `systemd` capture/prune services and timers.
+- After switching to Nix-managed install, remove any local build:
+  - `devbox run uninstall-local`
+  - The CLI warns at startup if `~/.local/bin/redeem` exists and may shadow the Nix version.
+  - `redeem doctor` includes a `local_install` check for the same condition.
 
 ## Capture Troubleshooting
 
@@ -68,7 +72,7 @@ Prune retention behavior:
 - Output format:
   - `doctor_check name=<check> status=<pass|fail> detail=<text>`
   - `doctor_summary total=<n> passed=<n> failed=<n>`
-- Current checks: `state_dir_writable`, `config_load`, `niri_source`, `kitty_available`, `zellij_available`, `events_integrity`, `snapshots_integrity`.
+- Current checks: `state_dir_writable`, `config_load`, `niri_source`, `kitty_available`, `zellij_available`, `local_install`, `events_integrity`, `snapshots_integrity`.
 
 ## Integrity and Recovery
 

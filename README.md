@@ -91,6 +91,7 @@ Current checks:
 - `niri_source`
 - `kitty_available`
 - `zellij_available`
+- `local_install`
 - `events_integrity`
 - `snapshots_integrity`
 

@@ -25,6 +25,10 @@
         "mkdir -p \"$HOME/.local/bin\"",
         "go build -o \"$HOME/.local/bin/redeem\" ./cmd/redeem"
       ],
+      "uninstall-local": [
+        "rm -f \"$HOME/.local/bin/redeem\"",
+        "echo 'removed ~/.local/bin/redeem'"
+      ],
       "run": [
         "go run ./cmd/redeem --help"
       ]

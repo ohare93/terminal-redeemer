@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ func main() {
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) int {
+	warnLocalInstall(stderr)
+
 	globalFlags, remainingArgs, err := parseGlobalFlags(args)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "invalid global flags: %v\n", err)
@@ -95,6 +98,7 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 		},
 		doctor.CommandAvailableCheck{CheckName: "kitty_available", Command: resolvedConfig.Restore.Terminal.Command},
 		doctor.CommandAvailableCheck{CheckName: "zellij_available", Command: "zellij"},
+		doctor.LocalInstallCheck{Path: localInstallPath()},
 		doctor.EventsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 		doctor.SnapshotsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 	}
@@ -935,6 +939,24 @@ func printHelp(w io.Writer) {
 	writeln(w, "Flags:")
 	writeln(w, "  --config <path>  Path to YAML config file")
 	writeln(w, "  -h, --help  Show help")
+}
+
+func localInstallPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".local", "bin", "redeem")
+}
+
+func warnLocalInstall(stderr io.Writer) {
+	p := localInstallPath()
+	if p == "" {
+		return
+	}
+	if _, err := os.Stat(p); err == nil {
+		_, _ = fmt.Fprintf(stderr, "warning: %s exists and may shadow the Nix-managed version; run `devbox run uninstall-local` to remove it\n", p)
+	}
 }
 
 func writef(w io.Writer, format string, args ...any) {

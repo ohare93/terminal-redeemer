@@ -16,8 +16,8 @@ func TestHelpByDefault(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	var err bytes.Buffer
-	code := run(nil, &out, &err)
+	var errBuf bytes.Buffer
+	code := run(nil, &out, &errBuf)
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
@@ -25,8 +25,8 @@ func TestHelpByDefault(t *testing.T) {
 	if !strings.Contains(out.String(), "redeem - terminal session history and restore") {
 		t.Fatalf("expected help output, got %q", out.String())
 	}
-	if err.Len() != 0 {
-		t.Fatalf("expected empty stderr, got %q", err.String())
+	if stderrWithoutWarning(errBuf.String()) != "" {
+		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", errBuf.String())
 	}
 }
 
@@ -679,8 +679,8 @@ func TestGlobalConfigExplicitMissingFileErrors(t *testing.T) {
 	if !strings.Contains(out.String(), "doctor_summary total=") {
 		t.Fatalf("expected doctor summary, got %q", out.String())
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	if stderrWithoutWarning(stderr.String()) != "" {
+		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", stderr.String())
 	}
 }
 
@@ -705,6 +705,8 @@ func TestDoctorPassExitCode(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", pathDir)
+	// Set HOME to temp dir so localInstallPath() doesn't find a real ~/.local/bin/redeem.
+	t.Setenv("HOME", root)
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
@@ -712,11 +714,11 @@ func TestDoctorPassExitCode(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d output=%q", code, out.String())
 	}
-	if !strings.Contains(out.String(), "doctor_summary total=7 passed=7 failed=0") {
+	if !strings.Contains(out.String(), "doctor_summary total=8 passed=8 failed=0") {
 		t.Fatalf("unexpected doctor summary: %q", out.String())
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	if stderrWithoutWarning(stderr.String()) != "" {
+		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", stderr.String())
 	}
 }
 
@@ -832,4 +834,17 @@ func TestParseOptionalTimestampWhitespace(t *testing.T) {
 	if ts != nil {
 		t.Fatalf("expected nil timestamp for whitespace input, got %v", ts)
 	}
+}
+
+// stderrWithoutWarning strips the local-install warning line from stderr output
+// so tests are not affected by whether ~/.local/bin/redeem exists on the runner.
+func stderrWithoutWarning(s string) string {
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "warning:") && strings.Contains(line, ".local/bin/redeem") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

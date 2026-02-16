@@ -204,6 +204,41 @@ func TestEventsIntegrityCheck(t *testing.T) {
 	}
 }
 
+func TestLocalInstallCheckPassesWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	result := LocalInstallCheck{
+		Path: "/nonexistent/path/redeem",
+		Stat: func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+	}.Run(context.Background())
+	if result.Status != StatusPass {
+		t.Fatalf("expected pass, got %+v", result)
+	}
+}
+
+func TestLocalInstallCheckFailsWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	tmp := filepath.Join(t.TempDir(), "redeem")
+	if err := os.WriteFile(tmp, []byte("fake"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	result := LocalInstallCheck{Path: tmp}.Run(context.Background())
+	if result.Status != StatusFail {
+		t.Fatalf("expected fail, got %+v", result)
+	}
+}
+
+func TestLocalInstallCheckPassesWithEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	result := LocalInstallCheck{Path: ""}.Run(context.Background())
+	if result.Status != StatusPass {
+		t.Fatalf("expected pass for empty path, got %+v", result)
+	}
+}
+
 func TestSnapshotsIntegrityCheck(t *testing.T) {
 	t.Parallel()
 
