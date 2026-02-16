@@ -3,6 +3,7 @@ package restore
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jmo/terminal-redeemer/internal/model"
@@ -180,6 +181,31 @@ func TestPlannerInfersDenseWorkspaceIndexesFromNumericWindowWorkspaceIDs(t *test
 	}
 	if workspaceOf(plan, "w-3") != "2" {
 		t.Fatalf("expected workspace ref 2 for w-3, got %q", workspaceOf(plan, "w-3"))
+	}
+}
+
+func TestTerminalZellijCommandUsesAttachCreateAndFallbackShell(t *testing.T) {
+	t.Parallel()
+
+	state := model.State{Windows: []model.Window{
+		{Key: "w-1", AppID: "kitty", WorkspaceID: "2", Terminal: &model.Terminal{CWD: "/tmp/project", SessionTag: "excellent-sitar"}},
+	}}
+
+	planner := NewPlanner(PlannerConfig{Terminal: TerminalConfig{Command: "kitty", ZellijAttachOrCreate: true}})
+	plan := planner.Build(state)
+
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(plan.Items))
+	}
+	command := plan.Items[0].Command
+	if !strings.Contains(command, "zellij attach --create") {
+		t.Fatalf("expected attach --create in command, got %q", command)
+	}
+	if !strings.Contains(command, "env -u ZELLIJ") {
+		t.Fatalf("expected zellij-env scrub in command, got %q", command)
+	}
+	if !strings.Contains(command, "exec ${SHELL:-sh} -l") {
+		t.Fatalf("expected fallback interactive shell in command, got %q", command)
 	}
 }
 
