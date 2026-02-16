@@ -21,6 +21,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/diff"
 	"github.com/jmo/terminal-redeemer/internal/doctor"
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/niri"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/prune"
@@ -162,7 +163,11 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 		return 1
 	}
 
-	planner := restore.NewPlanner(restore.PlannerConfig{Terminal: restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate}, AppAllowlist: resolvedConfig.Restore.AppAllowlist})
+	planner := restore.NewPlanner(restore.PlannerConfig{
+		Terminal:     restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate},
+		AppAllowlist: resolvedConfig.Restore.AppAllowlist,
+		AppMode:      parseAppModes(resolvedConfig.Restore.AppMode),
+	})
 	plan := planner.Build(state)
 	if *dryRun {
 		printRestoreDryRun(stdout, plan)
@@ -176,8 +181,21 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 		return 0
 	}
 
+	beforeState := tryReadNiriWindowsState(context.Background())
+
 	executor := restore.NewExecutor(restore.ShellRunner{})
 	result := executor.Execute(context.Background(), plan)
+	if resolvedConfig.Restore.ReconcileWorkspaceMoves {
+		time.Sleep(resolvedConfig.Restore.WorkspaceReconcileDelay)
+		afterState := tryReadNiriWindowsState(context.Background())
+		if beforeState != nil && afterState != nil {
+			requests := restore.BuildMoveRequests(plan, *beforeState, *afterState)
+			moved := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
+			if len(requests) > 0 {
+				writef(stdout, "restore_workspace_moves moved=%d requested=%d\n", moved, len(requests))
+			}
+		}
+	}
 	printRestoreExecution(stdout, result)
 	return 0
 }
@@ -270,7 +288,11 @@ func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer
 		_, _ = fmt.Fprintf(stderr, "restore tui init failed: %v\n", err)
 		return 1
 	}
-	planner := restore.NewPlanner(restore.PlannerConfig{Terminal: restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate}, AppAllowlist: resolvedConfig.Restore.AppAllowlist})
+	planner := restore.NewPlanner(restore.PlannerConfig{
+		Terminal:     restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate},
+		AppAllowlist: resolvedConfig.Restore.AppAllowlist,
+		AppMode:      parseAppModes(resolvedConfig.Restore.AppMode),
+	})
 	planAt := func(ts time.Time) (restore.Plan, error) {
 		state, err := engine.At(ts)
 		if err != nil {
@@ -295,10 +317,48 @@ func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer
 		return 0
 	}
 
+	beforeState := tryReadNiriWindowsState(context.Background())
+
 	executor := restore.NewExecutor(restore.ShellRunner{})
 	result := executor.Execute(context.Background(), filteredPlan)
+	if resolvedConfig.Restore.ReconcileWorkspaceMoves {
+		time.Sleep(resolvedConfig.Restore.WorkspaceReconcileDelay)
+		afterState := tryReadNiriWindowsState(context.Background())
+		if beforeState != nil && afterState != nil {
+			requests := restore.BuildMoveRequests(filteredPlan, *beforeState, *afterState)
+			moved := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
+			if len(requests) > 0 {
+				writef(stdout, "restore_workspace_moves moved=%d requested=%d\n", moved, len(requests))
+			}
+		}
+	}
 	printRestoreExecution(stdout, result)
 	return 0
+}
+
+func tryReadNiriWindowsState(ctx context.Context) *model.State {
+	raw, err := niri.CommandSnapshotter{Command: "niri msg -j windows"}.Snapshot(ctx)
+	if err != nil {
+		return nil
+	}
+	state, err := niri.ParseSnapshot(raw)
+	if err != nil {
+		return nil
+	}
+	return &state
+}
+
+func parseAppModes(input map[string]string) map[string]restore.AppMode {
+	out := make(map[string]restore.AppMode, len(input))
+	for appID, rawMode := range input {
+		mode := strings.ToLower(strings.TrimSpace(rawMode))
+		if mode == string(restore.AppModeOneShot) {
+			out[appID] = restore.AppModeOneShot
+			continue
+		}
+		out[appID] = restore.AppModePerWindow
+	}
+	return out
 }
 
 func printRestoreExecution(stdout io.Writer, result restore.Result) {

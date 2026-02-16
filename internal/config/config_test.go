@@ -37,6 +37,12 @@ func TestLoadMissingDefaultPathUsesDefaults(t *testing.T) {
 	if cfg.Capture.Interval != 60*time.Second {
 		t.Fatalf("expected default interval 60s, got %s", cfg.Capture.Interval)
 	}
+	if !cfg.Restore.ReconcileWorkspaceMoves {
+		t.Fatalf("expected reconcile workspace moves default true")
+	}
+	if cfg.Restore.WorkspaceReconcileDelay <= 0 {
+		t.Fatalf("expected positive workspace reconcile delay, got %s", cfg.Restore.WorkspaceReconcileDelay)
+	}
 }
 
 func TestLoadMissingExplicitPathReturnsError(t *testing.T) {
@@ -67,6 +73,10 @@ retention:
 restore:
   appAllowlist:
     firefox: firefox --new-window
+  appMode:
+    firefox: oneshot
+  reconcileWorkspaceMoves: false
+  workspaceReconcileDelay: 3s
   terminal:
     command: foot
     zellijAttachOrCreate: false
@@ -115,5 +125,14 @@ restore:
 	}
 	if cfg.Restore.AppAllowlist["firefox"] != "firefox --new-window" {
 		t.Fatalf("unexpected app allowlist: %#v", cfg.Restore.AppAllowlist)
+	}
+	if cfg.Restore.AppMode["firefox"] != "oneshot" {
+		t.Fatalf("unexpected app mode: %#v", cfg.Restore.AppMode)
+	}
+	if cfg.Restore.ReconcileWorkspaceMoves {
+		t.Fatalf("expected reconcileWorkspaceMoves false, got true")
+	}
+	if cfg.Restore.WorkspaceReconcileDelay != 3*time.Second {
+		t.Fatalf("expected workspaceReconcileDelay 3s, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
 }

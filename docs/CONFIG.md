@@ -45,6 +45,9 @@ Retention:
 Restore:
 
 - `restore.appAllowlist`
+- `restore.appMode`
+- `restore.reconcileWorkspaceMoves`
+- `restore.workspaceReconcileDelay`
 - `restore.terminal.command`
 - `restore.terminal.zellijAttachOrCreate`
 
@@ -62,6 +65,9 @@ Note: `capture.enabled` is not consumed by the CLI binary; scheduling enablement
 - `restore.terminal.command`: `kitty`
 - `restore.terminal.zellijAttachOrCreate`: `true`
 - `restore.appAllowlist`: empty map
+- `restore.appMode`: empty map (default `per_window`; optional `oneshot` per app)
+- `restore.reconcileWorkspaceMoves`: `true`
+- `restore.workspaceReconcileDelay`: `1200ms`
 
 ## Env vars currently used by capture/doctor
 
@@ -97,6 +103,10 @@ retention:
 restore:
   appAllowlist:
     firefox: firefox --new-window
+  appMode:
+    firefox: oneshot
+  reconcileWorkspaceMoves: true
+  workspaceReconcileDelay: 1200ms
   terminal:
     command: kitty
     zellijAttachOrCreate: true

@@ -39,8 +39,11 @@ type RetentionConfig struct {
 }
 
 type RestoreConfig struct {
-	AppAllowlist map[string]string `yaml:"appAllowlist"`
-	Terminal     TerminalConfig    `yaml:"terminal"`
+	AppAllowlist             map[string]string `yaml:"appAllowlist"`
+	AppMode                  map[string]string `yaml:"appMode"`
+	ReconcileWorkspaceMoves  bool              `yaml:"reconcileWorkspaceMoves"`
+	WorkspaceReconcileDelay  time.Duration     `yaml:"workspaceReconcileDelay"`
+	Terminal                 TerminalConfig    `yaml:"terminal"`
 }
 
 type TerminalConfig struct {
@@ -87,7 +90,10 @@ func Defaults() Config {
 		},
 		Retention: RetentionConfig{Days: 30},
 		Restore: RestoreConfig{
-			AppAllowlist: map[string]string{},
+			AppAllowlist:            map[string]string{},
+			AppMode:                 map[string]string{},
+			ReconcileWorkspaceMoves: true,
+			WorkspaceReconcileDelay: 1200 * time.Millisecond,
 			Terminal: TerminalConfig{
 				Command:              "kitty",
 				ZellijAttachOrCreate: true,
@@ -121,6 +127,9 @@ func Load(path string, explicitPath bool) (Config, error) {
 
 	if cfg.Restore.AppAllowlist == nil {
 		cfg.Restore.AppAllowlist = map[string]string{}
+	}
+	if cfg.Restore.AppMode == nil {
+		cfg.Restore.AppMode = map[string]string{}
 	}
 	if cfg.ProcessMetadata.Whitelist == nil {
 		cfg.ProcessMetadata.Whitelist = []string{}

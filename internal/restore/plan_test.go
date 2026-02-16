@@ -72,6 +72,39 @@ func TestAppRestoreObeysAllowlistOnly(t *testing.T) {
 	}
 }
 
+func TestAppRestoreOneshotModeSchedulesSingleLaunch(t *testing.T) {
+	t.Parallel()
+
+	state := model.State{Windows: []model.Window{
+		{Key: "w-1", AppID: "firefox", WorkspaceID: "ws-2"},
+		{Key: "w-2", AppID: "firefox", WorkspaceID: "ws-6"},
+		{Key: "w-3", AppID: "firefox", WorkspaceID: "ws-11"},
+	}}
+	planner := NewPlanner(PlannerConfig{
+		AppAllowlist: map[string]string{"firefox": "firefox"},
+		AppMode:      map[string]AppMode{"firefox": AppModeOneShot},
+		Terminal:     TerminalConfig{Command: "kitty"},
+	})
+	plan := planner.Build(state)
+
+	readyCount := 0
+	skippedCount := 0
+	for _, item := range plan.Items {
+		if item.Status == StatusReady {
+			readyCount++
+		}
+		if item.Status == StatusSkipped {
+			skippedCount++
+			if item.Reason != "oneshot app already scheduled" {
+				t.Fatalf("unexpected skipped reason: %q", item.Reason)
+			}
+		}
+	}
+	if readyCount != 1 || skippedCount != 2 {
+		t.Fatalf("expected 1 ready and 2 skipped for oneshot app, got ready=%d skipped=%d", readyCount, skippedCount)
+	}
+}
+
 func TestTerminalRestoreMarksPartialMetadataAsDegraded(t *testing.T) {
 	t.Parallel()
 

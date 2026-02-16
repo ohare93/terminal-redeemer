@@ -18,8 +18,16 @@ const (
 
 type PlannerConfig struct {
 	AppAllowlist map[string]string
+	AppMode      map[string]AppMode
 	Terminal     TerminalConfig
 }
+
+type AppMode string
+
+const (
+	AppModePerWindow AppMode = "per_window"
+	AppModeOneShot   AppMode = "oneshot"
+)
 
 type TerminalConfig struct {
 	Command              string
@@ -39,6 +47,16 @@ func NewPlanner(config PlannerConfig) *Planner {
 		normalizedAllowlist[normalizeAppID(appID)] = strings.TrimSpace(command)
 	}
 	config.AppAllowlist = normalizedAllowlist
+	normalizedAppModes := make(map[string]AppMode, len(config.AppMode))
+	for appID, mode := range config.AppMode {
+		normalized := normalizeAppID(appID)
+		if mode == AppModeOneShot {
+			normalizedAppModes[normalized] = AppModeOneShot
+			continue
+		}
+		normalizedAppModes[normalized] = AppModePerWindow
+	}
+	config.AppMode = normalizedAppModes
 	return &Planner{config: config}
 }
 
@@ -57,16 +75,39 @@ type Item struct {
 
 func (p *Planner) Build(state model.State) Plan {
 	plan := Plan{Items: make([]Item, 0, len(state.Windows))}
+	oneshootSeen := make(map[string]bool)
 	for _, window := range state.Windows {
 		var item Item
 		if isTerminal(window.AppID) {
 			item = p.planTerminal(window)
 		} else {
 			item = p.planApp(window)
+			mode := p.appMode(window.AppID)
+			if mode == AppModeOneShot && item.Status == StatusReady {
+				appID := normalizeAppID(window.AppID)
+				if oneshootSeen[appID] {
+					item.Status = StatusSkipped
+					item.Reason = "oneshot app already scheduled"
+					item.Command = ""
+				} else {
+					oneshootSeen[appID] = true
+				}
+			}
 		}
 		plan.Items = append(plan.Items, item)
 	}
 	return plan
+}
+
+func (p *Planner) appMode(appID string) AppMode {
+	mode, ok := p.config.AppMode[normalizeAppID(appID)]
+	if !ok {
+		return AppModePerWindow
+	}
+	if mode == AppModeOneShot {
+		return AppModeOneShot
+	}
+	return AppModePerWindow
 }
 
 func (p *Planner) planTerminal(window model.Window) Item {
