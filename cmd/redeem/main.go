@@ -190,9 +190,12 @@ func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, s
 		afterState := tryReadNiriWindowsState(context.Background())
 		if beforeState != nil && afterState != nil {
 			requests := restore.BuildMoveRequests(plan, *beforeState, *afterState)
-			moved := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
+			report := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
 			if len(requests) > 0 {
-				writef(stdout, "restore_workspace_moves moved=%d requested=%d\n", moved, len(requests))
+				writef(stdout, "restore_workspace_moves moved=%d requested=%d failed=%d\n", report.Applied, len(requests), len(report.Failures))
+				for _, failure := range report.Failures {
+					writef(stdout, "restore_workspace_move_failed window_key=%s window_id=%d app_id=%s workspace=%s error=%q\n", failure.Request.WindowKey, failure.Request.WindowID, failure.Request.AppID, failure.Request.WorkspaceRef, failure.Err.Error())
+				}
 			}
 		}
 	}
@@ -326,9 +329,12 @@ func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer
 		afterState := tryReadNiriWindowsState(context.Background())
 		if beforeState != nil && afterState != nil {
 			requests := restore.BuildMoveRequests(filteredPlan, *beforeState, *afterState)
-			moved := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
+			report := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
 			if len(requests) > 0 {
-				writef(stdout, "restore_workspace_moves moved=%d requested=%d\n", moved, len(requests))
+				writef(stdout, "restore_workspace_moves moved=%d requested=%d failed=%d\n", report.Applied, len(requests), len(report.Failures))
+				for _, failure := range report.Failures {
+					writef(stdout, "restore_workspace_move_failed window_key=%s window_id=%d app_id=%s workspace=%s error=%q\n", failure.Request.WindowKey, failure.Request.WindowID, failure.Request.AppID, failure.Request.WorkspaceRef, failure.Err.Error())
+				}
 			}
 		}
 	}

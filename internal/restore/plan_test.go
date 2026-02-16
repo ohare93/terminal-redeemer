@@ -129,6 +129,60 @@ func TestTerminalRestoreMarksPartialMetadataAsDegraded(t *testing.T) {
 	}
 }
 
+func TestPlannerUsesWorkspaceNameThenIndexForWorkspaceReference(t *testing.T) {
+	t.Parallel()
+
+	state := model.State{
+		Workspaces: []model.Workspace{
+			{ID: "2", Index: 1, Name: ""},
+			{ID: "4", Index: 2, Name: "web"},
+		},
+		Windows: []model.Window{
+			{Key: "w-1", AppID: "code", WorkspaceID: "2"},
+			{Key: "w-2", AppID: "firefox", WorkspaceID: "4"},
+		},
+	}
+
+	planner := NewPlanner(PlannerConfig{
+		AppAllowlist: map[string]string{"code": "code", "firefox": "firefox"},
+		Terminal:     TerminalConfig{Command: "kitty"},
+	})
+	plan := planner.Build(state)
+
+	if workspaceOf(plan, "w-1") != "1" {
+		t.Fatalf("expected workspace ref 1 for w-1, got %q", workspaceOf(plan, "w-1"))
+	}
+	if workspaceOf(plan, "w-2") != "web" {
+		t.Fatalf("expected workspace ref web for w-2, got %q", workspaceOf(plan, "w-2"))
+	}
+}
+
+func TestPlannerInfersDenseWorkspaceIndexesFromNumericWindowWorkspaceIDs(t *testing.T) {
+	t.Parallel()
+
+	state := model.State{Windows: []model.Window{
+		{Key: "w-1", AppID: "code", WorkspaceID: "2"},
+		{Key: "w-2", AppID: "code", WorkspaceID: "4"},
+		{Key: "w-3", AppID: "code", WorkspaceID: "4"},
+	}}
+
+	planner := NewPlanner(PlannerConfig{
+		AppAllowlist: map[string]string{"code": "code"},
+		Terminal:     TerminalConfig{Command: "kitty"},
+	})
+	plan := planner.Build(state)
+
+	if workspaceOf(plan, "w-1") != "1" {
+		t.Fatalf("expected workspace ref 1 for w-1, got %q", workspaceOf(plan, "w-1"))
+	}
+	if workspaceOf(plan, "w-2") != "2" {
+		t.Fatalf("expected workspace ref 2 for w-2, got %q", workspaceOf(plan, "w-2"))
+	}
+	if workspaceOf(plan, "w-3") != "2" {
+		t.Fatalf("expected workspace ref 2 for w-3, got %q", workspaceOf(plan, "w-3"))
+	}
+}
+
 func TestExecutorContinueOnFailureSummaryAndResults(t *testing.T) {
 	t.Parallel()
 
@@ -179,6 +233,15 @@ func reasonOf(plan Plan, key string) string {
 	for _, item := range plan.Items {
 		if item.WindowKey == key {
 			return item.Reason
+		}
+	}
+	return ""
+}
+
+func workspaceOf(plan Plan, key string) string {
+	for _, item := range plan.Items {
+		if item.WindowKey == key {
+			return item.WorkspaceID
 		}
 	}
 	return ""

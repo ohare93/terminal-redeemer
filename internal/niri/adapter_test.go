@@ -61,3 +61,26 @@ func TestParseSnapshotWindowsArray(t *testing.T) {
 		t.Fatalf("expected workspace ids normalized to strings, got %#v", state.Windows)
 	}
 }
+
+func TestParseSnapshotWorkspaceIDsNormalizeFromNumbers(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+  "workspaces": [
+    {"id": 5, "idx": 2, "name": null},
+    {"id": 2, "idx": 1, "name": null}
+  ],
+  "windows": []
+}`)
+
+	state, err := ParseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("parse snapshot: %v", err)
+	}
+	if len(state.Workspaces) != 2 {
+		t.Fatalf("expected 2 workspaces, got %d", len(state.Workspaces))
+	}
+	if state.Workspaces[0].ID == "" || state.Workspaces[1].ID == "" {
+		t.Fatalf("expected normalized workspace IDs, got %#v", state.Workspaces)
+	}
+}

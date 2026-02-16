@@ -65,9 +65,21 @@ func TestApplyMoveRequestsContinuesOnFailure(t *testing.T) {
 	}
 
 	mover := &stubWindowMover{failOn: map[int]error{2: errors.New("boom")}}
-	applied := ApplyMoveRequests(context.Background(), mover, requests)
-	if applied != 2 {
-		t.Fatalf("expected 2 successful moves, got %d", applied)
+	report := ApplyMoveRequests(context.Background(), mover, requests)
+	if report.Applied != 2 {
+		t.Fatalf("expected 2 successful moves, got %d", report.Applied)
+	}
+	if report.Attempted != 3 {
+		t.Fatalf("expected 3 attempted moves, got %d", report.Attempted)
+	}
+	if len(report.Failures) != 1 {
+		t.Fatalf("expected one move failure, got %d", len(report.Failures))
+	}
+	if report.Failures[0].Request.WindowID != 2 {
+		t.Fatalf("expected failure for window 2, got %#v", report.Failures[0].Request)
+	}
+	if report.Failures[0].Err == nil || report.Failures[0].Err.Error() != "boom" {
+		t.Fatalf("expected failure error boom, got %v", report.Failures[0].Err)
 	}
 	if len(mover.calls) != 3 {
 		t.Fatalf("expected all move requests attempted, got %d", len(mover.calls))

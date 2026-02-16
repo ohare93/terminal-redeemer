@@ -15,7 +15,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
 )
 
-func TestCaptureOnceWritesOnChangeOnly(t *testing.T) {
+func TestCaptureOnceWritesStateFullEveryTime(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -58,8 +58,13 @@ func TestCaptureOnceWritesOnChangeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected one event after no-op second capture, got %d", len(got))
+	if len(got) != 2 {
+		t.Fatalf("expected two full-state events, got %d", len(got))
+	}
+	for i, event := range got {
+		if event.EventType != "state_full" {
+			t.Fatalf("event[%d] type = %q, want state_full", i, event.EventType)
+		}
 	}
 }
 

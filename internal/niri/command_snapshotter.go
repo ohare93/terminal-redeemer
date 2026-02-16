@@ -2,8 +2,10 @@ package niri
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 type CommandRunner interface {
@@ -31,5 +33,36 @@ func (s CommandSnapshotter) Snapshot(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("run niri snapshot command: %w", err)
 	}
-	return out, nil
+	if !isWindowsCommand(s.Command) {
+		return out, nil
+	}
+
+	workspaces, workspacesErr := runner.Run(ctx, "niri msg -j workspaces")
+	if workspacesErr != nil {
+		return out, nil
+	}
+	combined, combineErr := combineSnapshotPayloads(workspaces, out)
+	if combineErr != nil {
+		return out, nil
+	}
+	return combined, nil
+}
+
+func isWindowsCommand(command string) bool {
+	return strings.TrimSpace(command) == "niri msg -j windows"
+}
+
+func combineSnapshotPayloads(workspaces []byte, windows []byte) ([]byte, error) {
+	var workspacesPayload []any
+	if err := json.Unmarshal(workspaces, &workspacesPayload); err != nil {
+		return nil, err
+	}
+	var windowsPayload []any
+	if err := json.Unmarshal(windows, &windowsPayload); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"workspaces": workspacesPayload,
+		"windows":    windowsPayload,
+	})
 }

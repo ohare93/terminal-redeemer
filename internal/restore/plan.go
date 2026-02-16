@@ -2,6 +2,8 @@ package restore
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jmo/terminal-redeemer/internal/model"
@@ -75,16 +77,25 @@ type Item struct {
 
 func (p *Planner) Build(state model.State) Plan {
 	plan := Plan{Items: make([]Item, 0, len(state.Windows))}
+	workspaceRefs := workspaceRefsByID(state)
 	oneshootSeen := make(map[string]bool)
 	for _, window := range state.Windows {
+		resolvedWindow := window
+		if ref, ok := workspaceRefs[strings.TrimSpace(window.WorkspaceID)]; ok {
+			resolvedWindow.WorkspaceID = ref
+		}
+		if strings.TrimSpace(resolvedWindow.WorkspaceID) == "" {
+			resolvedWindow.WorkspaceID = window.WorkspaceID
+		}
+
 		var item Item
-		if isTerminal(window.AppID) {
-			item = p.planTerminal(window)
+		if isTerminal(resolvedWindow.AppID) {
+			item = p.planTerminal(resolvedWindow)
 		} else {
-			item = p.planApp(window)
-			mode := p.appMode(window.AppID)
+			item = p.planApp(resolvedWindow)
+			mode := p.appMode(resolvedWindow.AppID)
 			if mode == AppModeOneShot && item.Status == StatusReady {
-				appID := normalizeAppID(window.AppID)
+				appID := normalizeAppID(resolvedWindow.AppID)
 				if oneshootSeen[appID] {
 					item.Status = StatusSkipped
 					item.Reason = "oneshot app already scheduled"
@@ -97,6 +108,75 @@ func (p *Planner) Build(state model.State) Plan {
 		plan.Items = append(plan.Items, item)
 	}
 	return plan
+}
+
+func workspaceRefsByID(state model.State) map[string]string {
+	refs := make(map[string]string)
+	for _, workspace := range state.Workspaces {
+		id := strings.TrimSpace(workspace.ID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(workspace.Name)
+		if name != "" {
+			refs[id] = name
+			continue
+		}
+		if workspace.Index > 0 {
+			refs[id] = strconv.Itoa(workspace.Index)
+			continue
+		}
+		refs[id] = id
+	}
+
+	if len(refs) == 0 {
+		return inferWorkspaceRefsFromWindows(state)
+	}
+
+	for _, window := range state.Windows {
+		id := strings.TrimSpace(window.WorkspaceID)
+		if id == "" {
+			continue
+		}
+		if _, ok := refs[id]; !ok {
+			refs[id] = id
+		}
+	}
+
+	return refs
+}
+
+func inferWorkspaceRefsFromWindows(state model.State) map[string]string {
+	refs := make(map[string]string)
+	numeric := make([]int, 0)
+	numericToRaw := make(map[int]string)
+	for _, window := range state.Windows {
+		raw := strings.TrimSpace(window.WorkspaceID)
+		if raw == "" {
+			continue
+		}
+		if _, exists := refs[raw]; exists {
+			continue
+		}
+		id, err := strconv.Atoi(raw)
+		if err != nil {
+			refs[raw] = raw
+			continue
+		}
+		numeric = append(numeric, id)
+		numericToRaw[id] = raw
+	}
+
+	sort.Ints(numeric)
+	for i, id := range numeric {
+		raw := numericToRaw[id]
+		if _, exists := refs[raw]; exists {
+			continue
+		}
+		refs[raw] = strconv.Itoa(i + 1)
+	}
+
+	return refs
 }
 
 func (p *Planner) appMode(appID string) AppMode {

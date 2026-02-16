@@ -13,9 +13,9 @@ type snapshotPayload struct {
 }
 
 type workspacePayload struct {
-	ID    string `json:"id"`
+	ID    any    `json:"id"`
 	Index int    `json:"idx"`
-	Name  string `json:"name"`
+	Name  any    `json:"name"`
 }
 
 type windowPayload struct {
@@ -42,10 +42,12 @@ func ParseSnapshot(raw []byte) (model.State, error) {
 	}
 
 	for _, workspace := range payload.Workspaces {
+		workspaceID, _ := valueAsString(workspace.ID)
+		workspaceName, _ := valueAsString(workspace.Name)
 		state.Workspaces = append(state.Workspaces, model.Workspace{
-			ID:    workspace.ID,
+			ID:    workspaceID,
 			Index: workspace.Index,
-			Name:  workspace.Name,
+			Name:  workspaceName,
 		})
 	}
 

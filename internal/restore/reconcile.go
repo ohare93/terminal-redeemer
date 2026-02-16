@@ -20,6 +20,17 @@ type WindowMover interface {
 	MoveToWorkspace(ctx context.Context, windowID int, workspaceRef string) error
 }
 
+type MoveFailure struct {
+	Request MoveRequest
+	Err     error
+}
+
+type MoveReport struct {
+	Applied  int
+	Attempted int
+	Failures []MoveFailure
+}
+
 func BuildMoveRequests(plan Plan, before model.State, after model.State) []MoveRequest {
 	beforeKeys := make(map[string]struct{}, len(before.Windows))
 	for _, window := range before.Windows {
@@ -92,18 +103,19 @@ func BuildMoveRequests(plan Plan, before model.State, after model.State) []MoveR
 	return requests
 }
 
-func ApplyMoveRequests(ctx context.Context, mover WindowMover, requests []MoveRequest) int {
+func ApplyMoveRequests(ctx context.Context, mover WindowMover, requests []MoveRequest) MoveReport {
 	if mover == nil {
-		return 0
+		return MoveReport{}
 	}
-	applied := 0
+	report := MoveReport{Attempted: len(requests)}
 	for _, request := range requests {
 		if err := mover.MoveToWorkspace(ctx, request.WindowID, request.WorkspaceRef); err != nil {
+			report.Failures = append(report.Failures, MoveFailure{Request: request, Err: err})
 			continue
 		}
-		applied++
+		report.Applied++
 	}
-	return applied
+	return report
 }
 
 func windowNumericID(windowKey string) int {

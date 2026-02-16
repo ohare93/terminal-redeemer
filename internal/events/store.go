@@ -22,6 +22,7 @@ type Event struct {
 	EventType string         `json:"event_type"`
 	WindowKey string         `json:"window_key,omitempty"`
 	Patch     map[string]any `json:"patch,omitempty"`
+	State     map[string]any `json:"state,omitempty"`
 	Source    string         `json:"source,omitempty"`
 	StateHash string         `json:"state_hash"`
 }
@@ -41,6 +42,21 @@ func (e Event) Validate() error {
 	}
 	if strings.TrimSpace(e.EventType) == "" {
 		return errors.New("event_type is required")
+	}
+	switch e.EventType {
+	case "window_patch":
+		if strings.TrimSpace(e.WindowKey) == "" {
+			return errors.New("window_key is required for window_patch")
+		}
+		if e.Patch == nil {
+			return errors.New("patch is required for window_patch")
+		}
+	case "state_full":
+		if e.State == nil {
+			return errors.New("state is required for state_full")
+		}
+	default:
+		return fmt.Errorf("unsupported event_type: %s", e.EventType)
 	}
 	if strings.TrimSpace(e.StateHash) == "" {
 		return errors.New("state_hash is required")

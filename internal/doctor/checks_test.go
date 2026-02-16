@@ -177,7 +177,7 @@ func TestEventsIntegrityCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire writer: %v", err)
 	}
-	if _, err := writer.Append(events.Event{V: 1, TS: time.Now().UTC(), Host: "h", Profile: "p", EventType: "window_patch", StateHash: "sha256:x"}); err != nil {
+	if _, err := writer.Append(events.Event{V: 1, TS: time.Now().UTC(), Host: "h", Profile: "p", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "x"}, StateHash: "sha256:x"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if err := writer.Close(); err != nil {

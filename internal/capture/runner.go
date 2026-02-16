@@ -86,6 +86,67 @@ func NewRunner(config Config) *Runner {
 }
 
 func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
+	return r.captureStateFull(ctx)
+}
+
+func (r *Runner) captureStateFull(ctx context.Context) (Result, error) {
+	state, err := r.collector.Collect(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+
+	writer, err := r.eventStore.AcquireWriter()
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		_ = writer.Close()
+	}()
+
+	now := r.now().UTC()
+	stateHash, err := state.Hash()
+	if err != nil {
+		return Result{}, err
+	}
+
+	lastOffset, err := writer.Append(events.Event{
+		V:         1,
+		TS:        now,
+		Host:      r.host,
+		Profile:   r.profile,
+		EventType: "state_full",
+		State:     stateAsMap(state),
+		Source:    r.source,
+		StateHash: stateHash,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+
+	r.eventCount++
+	result := Result{EventsWritten: 1, StateHash: stateHash}
+	if snapshots.ShouldSnapshot(r.eventCount, r.snapshotEvery) {
+		snapshotPath, err := r.snapshotStore.Write(snapshots.Snapshot{
+			V:               1,
+			CreatedAt:       now,
+			Host:            r.host,
+			Profile:         r.profile,
+			LastEventOffset: lastOffset,
+			StateHash:       stateHash,
+			State:           stateAsMap(state),
+		})
+		if err != nil {
+			return Result{}, err
+		}
+		result.SnapshotPath = snapshotPath
+	}
+
+	r.lastState = state
+	r.hasLast = true
+	return result, nil
+}
+
+func (r *Runner) captureDiff(ctx context.Context) (Result, error) {
 	state, err := r.collector.Collect(ctx)
 	if err != nil {
 		return Result{}, err
@@ -174,7 +235,7 @@ func (r *Runner) CaptureRun(ctx context.Context, ticks <-chan time.Time) error {
 			if !ok {
 				return nil
 			}
-			if _, err := r.CaptureOnce(ctx); err != nil {
+			if _, err := r.captureDiff(ctx); err != nil {
 				_, _ = fmt.Fprintf(r.logger, "capture_once_error err=%q\n", err.Error())
 			}
 		}

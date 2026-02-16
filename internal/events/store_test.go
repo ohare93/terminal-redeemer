@@ -23,8 +23,8 @@ func TestStoreAppendAndReadInOrder(t *testing.T) {
 	})
 
 	events := []Event{
-		{V: 1, TS: time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC), Host: "host-a", Profile: "default", EventType: "window_patch", StateHash: "sha256:a"},
-		{V: 1, TS: time.Date(2026, 2, 15, 10, 0, 1, 0, time.UTC), Host: "host-a", Profile: "default", EventType: "window_patch", StateHash: "sha256:b"},
+		{V: 1, TS: time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "a"}, StateHash: "sha256:a"},
+		{V: 1, TS: time.Date(2026, 2, 15, 10, 0, 1, 0, time.UTC), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "b"}, StateHash: "sha256:b"},
 	}
 
 	for _, e := range events {
@@ -98,7 +98,7 @@ func TestStoreReplayCursorTracking(t *testing.T) {
 
 	base := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
 	for i := range 3 {
-		e := Event{V: 1, TS: base.Add(time.Duration(i) * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", StateHash: "sha256:seed"}
+		e := Event{V: 1, TS: base.Add(time.Duration(i) * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "seed"}, StateHash: "sha256:seed"}
 		if _, err := writer.Append(e); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
@@ -112,7 +112,7 @@ func TestStoreReplayCursorTracking(t *testing.T) {
 		t.Fatalf("expected 3 events, got %d", len(firstBatch))
 	}
 
-	if _, err := writer.Append(Event{V: 1, TS: base.Add(4 * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", StateHash: "sha256:new"}); err != nil {
+	if _, err := writer.Append(Event{V: 1, TS: base.Add(4 * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "new"}, StateHash: "sha256:new"}); err != nil {
 		t.Fatalf("append incremental: %v", err)
 	}
 

@@ -37,6 +37,8 @@ func TestEventSnapshotIntegrationDeterministic(t *testing.T) {
 			Host:      "host-a",
 			Profile:   "default",
 			EventType: "window_patch",
+			WindowKey: "w-1",
+			Patch:     map[string]any{"title": "a"},
 			StateHash: "sha256:abc",
 		})
 		if err != nil {

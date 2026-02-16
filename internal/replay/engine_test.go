@@ -169,3 +169,44 @@ func TestReplayTimestampBoundaryInclusive(t *testing.T) {
 		t.Fatalf("expected second event excluded before boundary, got %#v", stateBeforeSecond.Windows)
 	}
 }
+
+func TestReplayStateFullReplacesPriorWindows(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	eventStore, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new event store: %v", err)
+	}
+	writer, err := eventStore.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer func() {
+		_ = writer.Close()
+	}()
+
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-stale", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "stale"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append stale patch: %v", err)
+	}
+	if _, err := writer.Append(events.Event{V: 1, TS: t0.Add(1 * time.Second), Host: "host-a", Profile: "default", EventType: "state_full", State: map[string]any{"workspaces": []any{map[string]any{"id": "ws-2", "index": 2}}, "windows": []any{map[string]any{"key": "w-live", "app_id": "code", "workspace_id": "ws-2", "title": "live"}}}, StateHash: "sha256:b"}); err != nil {
+		t.Fatalf("append state_full: %v", err)
+	}
+
+	engine, err := NewEngine(root)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	state, err := engine.At(t0.Add(2 * time.Second))
+	if err != nil {
+		t.Fatalf("replay at: %v", err)
+	}
+	if len(state.Windows) != 1 {
+		t.Fatalf("expected one window after state replacement, got %#v", state.Windows)
+	}
+	if state.Windows[0].Key != "w-live" {
+		t.Fatalf("expected live window to remain, got %#v", state.Windows[0])
+	}
+}

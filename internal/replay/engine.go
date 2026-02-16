@@ -76,10 +76,16 @@ func (e *Engine) At(at time.Time) (model.State, error) {
 		if event.TS.After(at) {
 			continue
 		}
-		if event.EventType != "window_patch" {
-			continue
+		switch event.EventType {
+		case "window_patch":
+			applyWindowPatch(windowsByKey, event.WindowKey, event.Patch)
+		case "state_full":
+			state = decodeEventState(event.State)
+			windowsByKey = make(map[string]model.Window, len(state.Windows))
+			for _, window := range state.Windows {
+				windowsByKey[window.Key] = window
+			}
 		}
-		applyWindowPatch(windowsByKey, event.WindowKey, event.Patch)
 	}
 	if err := scanner.Err(); err != nil {
 		return model.State{}, fmt.Errorf("scan events: %w", err)
@@ -91,6 +97,21 @@ func (e *Engine) At(at time.Time) (model.State, error) {
 	}
 
 	return model.Normalize(state), nil
+}
+
+func decodeEventState(raw map[string]any) model.State {
+	if raw == nil {
+		return model.State{}
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return model.State{}
+	}
+	var state model.State
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return model.State{}
+	}
+	return state
 }
 
 func decodeSnapshotState(snapshot snapshots.Snapshot) model.State {
