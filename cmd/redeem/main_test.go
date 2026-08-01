@@ -26,7 +26,20 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 	"github.com/jmo/terminal-redeemer/internal/slicerpc"
 	"github.com/jmo/terminal-redeemer/internal/slicetui"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
+
+func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("", "terminal-redeemer-test-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", root)
+	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
+}
 
 func TestHelpByDefault(t *testing.T) {
 	t.Parallel()
@@ -1855,7 +1868,7 @@ func TestSliceModeCLIIsDisabledByDefaultAndInspectable(t *testing.T) {
 func TestSliceAttachCLIExactExit(t *testing.T) {
 	root := t.TempDir()
 	base := filepath.Join(root, "z")
-	version := filepath.Join(base, "0.43.1")
+	version := filepath.Join(base, zellijlive.SocketContractDir)
 	if err := os.MkdirAll(version, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1865,7 +1878,7 @@ func TestSliceAttachCLIExactExit(t *testing.T) {
 	}
 	defer listener.Close()
 	command := filepath.Join(root, "zellij")
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.43.1'; exit 0; fi\nsleep 0.3\nexit 0\n"
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.3'; exit 0; fi\nsleep 0.3\nexit 0\n"
 	if err := os.WriteFile(command, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

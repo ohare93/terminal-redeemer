@@ -46,7 +46,7 @@ go tool cover -func=/tmp/host-leech.cover
 | Controller model | Long generated lifecycle histories compared with an independent oracle, including restart, cleanup, cap, handoff, and recovery witnesses. |
 | Native fuzz | Hostile wire, persisted state, argv/environment, journal, transport, and bounded-decoder inputs. |
 | Packaged subprocess/crash | Real process, socket, fsync, cancellation, response-loss, restart, and replay boundaries. |
-| Locked components | Production Niri IPC unit tests plus the actual locked Niri 25.11 executable/version gate (including the `niri 25.11 (Nixpkgs)` output); live nested-Niri operator proof; Zellij 0.43.1 executable attach proof. |
+| Locked components | Production Niri IPC unit tests plus the actual locked exact-commit executable/version gate; live nested-Niri operator proof; Zellij 0.44.3 executable attach proof using `contract_version_1` socket/cache paths. |
 | Bounded soak | Thousands of deterministic churn events, state/effect caps, durable reconstruction, and resource leak checks. |
 | Physical smoke | Credentials, real machines, visible placement/reflow/focus, and activation decisions; never replaced by repository evidence. |
 
@@ -81,7 +81,7 @@ than substituting `go run` or ambient executables:
 
 ```console
 REDEEM_BIN=/absolute/path/to/packaged/redeem \
-ZELLIJ_BIN=/absolute/path/to/zellij-0.43.1 \
+ZELLIJ_BIN=/absolute/path/to/zellij-0.44.3 \
   go test -count=1 -v ./internal/subprocessacceptance
 ```
 
@@ -138,10 +138,10 @@ The live Niri proof remains distinct. From a disposable parent Wayland session,
 run the locked development shell with every script binding explicit:
 
 ```console
-nix develop .#niri-spike --command env NIRI_BIN=niri KITTY_BIN=kitty PYTHON_BIN=python3 NIRI_PROBE="$PWD/scripts/spikes/niri-direct-ipc-probe.py" EXPECTED_NIRI_VERSION=25.11 bash scripts/spikes/niri-direct-ipc.sh
+nix develop .#niri-spike --command env NIRI_BIN=niri KITTY_BIN=kitty PYTHON_BIN=python3 NIRI_PROBE="$PWD/scripts/spikes/niri-direct-ipc-probe.py" EXPECTED_NIRI_VERSION='26.04' bash scripts/spikes/niri-direct-ipc.sh
 ```
 
-The script independently rejects any Niri version other than 25.11. The visible
+The script requires exact packaged output `niri 26.04 (Nixpkgs)`. The visible
 operator checks remain as described in
 [ADR 0004](../adr/0004-single-monitor-niri-spatial-mapping-policy.md). Then use
 the physical checklist and upgrade/rollback sequence in

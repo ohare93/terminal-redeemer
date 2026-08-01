@@ -1,7 +1,7 @@
 # Spike 0001: exact live-only Zellij attachment
 
 - **Status:** Passed
-- **Pinned contract:** Zellij 0.43.1 from this repository's locked nixpkgs input
+- **Pinned contract:** Zellij 0.44.3 from this repository's locked nixpkgs input
 - **Executable proof:** `scripts/spikes/zellij-live-only-attachment.sh`
 
 ## Decision
@@ -14,7 +14,7 @@ A symbolic link is not suitable. Zellij enumerates the socket directory and acce
 
 ## Proven behavior
 
-The executable harness proves against Zellij 0.43.1 that:
+The executable harness proves against Zellij 0.44.3 that:
 
 - a hard-linked exact socket appears as the same socket inode and supports an interactive client;
 - a symbolic-link socket is ignored by `list-sessions`;
@@ -48,12 +48,12 @@ Other active sessions remain visible as conflicts/incompatible resources rather 
 
 ### Filesystem layout
 
-For an attachment token `TOKEN`, version `0.43.1`, and session `SESSION`:
+For an attachment token `TOKEN`, socket/cache contract directory `contract_version_1`, and session `SESSION`:
 
 ```text
-REAL_BASE/0.43.1/SESSION                  # server-owned Unix socket
-PRIVATE_ROOT/att-TOKEN/0.43.1/SESSION    # hard link to the exact socket
-SHIM_CACHE/zellij/0.43.1/session_info/   # empty; no resurrection layouts
+REAL_BASE/contract_version_1/SESSION                  # server-owned Unix socket
+PRIVATE_ROOT/att-TOKEN/contract_version_1/SESSION    # hard link to the exact socket
+SHIM_CACHE/zellij/contract_version_1/session_info/   # empty; no resurrection layouts
 ```
 
 Requirements:
@@ -120,7 +120,7 @@ The production packaged wrapper includes only the Zellij executable at runtime; 
 
 - Hard links require the private root and real socket to be on the same filesystem.
 - A SIGKILL can leave a stale private directory; bounded owner/prefix-checked GC is required.
-- Zellij embeds its version in the socket path, so host server and wrapper client versions must match exactly.
+- Zellij 0.44.3 uses `contract_version_1` in socket and resurrection-cache paths; Terminal Redeemer still requires the exact 0.44.3 executable on both sides.
 - The Unix socket path limit constrains runtime-root and session-name lengths.
 - The empty shim cache must never be reused to start a server, or it could acquire resurrection layouts.
 - Session death after the hard link is created still causes a client failure, but cannot select or resurrect another session; controller retry policy handles that failure.

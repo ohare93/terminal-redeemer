@@ -18,7 +18,8 @@ import (
 	"syscall"
 )
 
-const PinnedVersion = "0.43.1"
+const PinnedVersion = "0.44.3"
+const SocketContractDir = "contract_version_1"
 const MaxSocketPathBytes = 107
 const MaxCatalogBytes = 1 << 20
 const MaxCatalogEntries = 4096
@@ -58,12 +59,12 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 		}
 		base = filepath.Join(runtime, "zellij")
 	}
-	versionDir := filepath.Join(base, PinnedVersion)
+	contractDir := filepath.Join(base, SocketContractDir)
 	if err := verifyOwnedDirectory(base, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("validate Zellij socket base: %w", err)
 	}
-	if err := verifyOwnedDirectory(versionDir, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Catalog{}, fmt.Errorf("validate Zellij version socket directory: %w", err)
+	if err := verifyOwnedDirectory(contractDir, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Catalog{}, fmt.Errorf("validate Zellij contract socket directory: %w", err)
 	}
 	versionOut, err := runBounded(ctx, command, []string{"--version"}, nil)
 	if err != nil || strings.TrimSpace(string(versionOut)) != "zellij "+PinnedVersion {
@@ -87,10 +88,10 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	if err := verifyOwnedDirectory(base, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("validate Zellij socket base: %w", err)
 	}
-	if err := verifyOwnedDirectory(versionDir, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Catalog{}, fmt.Errorf("validate Zellij version socket directory: %w", err)
+	if err := verifyOwnedDirectory(contractDir, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Catalog{}, fmt.Errorf("validate Zellij contract socket directory: %w", err)
 	}
-	entries, readErr := readDir(versionDir)
+	entries, readErr := readDir(contractDir)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("read Zellij sockets: %w", readErr)
 	}
@@ -104,11 +105,11 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !SafeSessionName(name) || len(filepath.Join(versionDir, name)) > MaxSocketPathBytes {
+		if !SafeSessionName(name) || len(filepath.Join(contractDir, name)) > MaxSocketPathBytes {
 			byName[name] = Session{Name: name, Status: StatusSocketInvalid}
 			continue
 		}
-		info, err := os.Lstat(filepath.Join(versionDir, name))
+		info, err := os.Lstat(filepath.Join(contractDir, name))
 		if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 {
 			byName[name] = Session{Name: name, Status: StatusSocketInvalid}
 			continue
@@ -142,7 +143,7 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 			cacheHome = filepath.Join(home, ".cache")
 		}
 	}
-	deadDir := filepath.Join(cacheHome, "zellij", PinnedVersion, "session_info")
+	deadDir := filepath.Join(cacheHome, "zellij", SocketContractDir, "session_info")
 	deadEntries, deadReadErr := readDir(deadDir)
 	if deadReadErr != nil && !errors.Is(deadReadErr, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("read Zellij resurrection catalog: %w", deadReadErr)

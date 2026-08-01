@@ -1,7 +1,7 @@
 # Spike 0002: Niri direct IPC inventory and safe MVP mutations
 
-- **Status:** Passed
-- **Pinned contract:** Niri 25.11 and Kitty 0.45.0 from this repository's locked nixpkgs input
+- **Status:** Automated compatibility verified; live nested re-smoke pending
+- **Pinned contract:** Niri 26.04 from the locked Nixpkgs input
 - **Live nested proof:** `scripts/spikes/niri-direct-ipc.sh`
 - **Direct socket probe:** `scripts/spikes/niri-direct-ipc-probe.py`
 
@@ -11,15 +11,21 @@ Terminal Redeemer can consume Niri directly over its Unix socket and safely impl
 
 The host-side inventory should use Niri's event-stream initial replay as the workspace/window snapshot barrier, query Outputs on a separate connection, validate all cross-references, and publish only complete joined observations as authoritative revisions.
 
-MVP mutations can target workspace and window runtime IDs for workspace creation, workspace movement, tiled/floating state, and proportional size. Exact existing-column reorder has no ID-targeted action in Niri 25.11 and remains a stretch-only focus-dance operation.
+MVP mutations can target workspace and window runtime IDs for workspace creation, workspace movement, tiled/floating state, and proportional size. Exact existing-column reorder has no ID-targeted action in Niri 26.04 and remains a stretch-only focus-dance operation.
 
-## Executed proof
+## Compatibility evidence
+
+The pinned Niri 26.04 `niri-ipc` source retains the request, response, event,
+workspace, window, output, and action structures below, and production fixtures
+exercise those serialized forms. The nested two-instance rerun on this exact
+release remains part of the operator smoke and was deliberately not run during
+the non-activating compatibility update.
 
 The live harness starts two bounded nested Niri instances under the current Wayland session. The first instance launches a pinned Kitty window and exercises inventory and mutations; the second proves source-instance rotation after compositor restart. Neither instance uses `--session`, changes the parent Niri configuration, or mutates parent workspaces.
 
-The proof established:
+The original live proof plus the exact-release source and fixture evidence establish:
 
-- Niri 25.11 accepts direct newline-delimited JSON over `NIRI_SOCKET`.
+- The pinned `niri-ipc` protocol remains direct newline-delimited JSON over `NIRI_SOCKET`; the exact-release nested runtime re-smoke is still pending.
 - `"EventStream"` first returns `{"Ok":"Handled"}`.
 - The initial replay includes `WorkspacesChanged` and `WindowsChanged` and ends at `ConfigLoaded`.
 - Outputs require a separate `"Outputs"` request.
@@ -152,7 +158,7 @@ Niri's proportion value is a percentage number, not a fraction: `45.0` means 45%
 
 Niri reports exact one-based `(column, tile)` position in `Window.layout.pos_in_scrolling_layout`, so Terminal Redeemer can observe initial order and drift.
 
-`MoveColumnToIndex` contains only an index and always targets the focused column. There is no window/column ID argument in Niri 25.11. Exact live reorder would require:
+`MoveColumnToIndex` contains only an index and always targets the focused column. There is no window/column ID argument in Niri 26.04. Exact live reorder would require:
 
 1. record current focus;
 2. focus the target window by ID;
@@ -197,8 +203,10 @@ Production tests in `internal/niriipc` verify strict production-client reply
 handling, replay barriers, validation failures, bounded input, version parsing,
 and exact action encoding without maintaining a synthetic Niri state oracle.
 The hermetic matrix runs the production version gate against the actual locked
-Niri binary and accepts its `niri 25.11 (Nixpkgs)` form only when the exact
-version token is `25.11`. Run:
+Niri binary and requires the complete output `niri 26.04 (Nixpkgs)` exactly. The pinned
+upstream IPC
+types retain the EventStream, Outputs, ConfigLoaded, workspace/window/output,
+and ID-targeted action structures used by production. Run:
 
 ```bash
 go test ./internal/niriipc
@@ -210,11 +218,11 @@ compositor mutation behavior. From an existing disposable parent Wayland
 session, run exactly:
 
 ```console
-nix develop .#niri-spike --command env NIRI_BIN=niri KITTY_BIN=kitty PYTHON_BIN=python3 NIRI_PROBE="$PWD/scripts/spikes/niri-direct-ipc-probe.py" EXPECTED_NIRI_VERSION=25.11 bash scripts/spikes/niri-direct-ipc.sh
+nix develop .#niri-spike --command env NIRI_BIN=niri KITTY_BIN=kitty PYTHON_BIN=python3 NIRI_PROBE="$PWD/scripts/spikes/niri-direct-ipc-probe.py" EXPECTED_NIRI_VERSION='26.04' bash scripts/spikes/niri-direct-ipc.sh
 ```
 
 The locked shell supplies Niri, Kitty, and Python without restoring a package or
-app output. The script itself verifies Niri 25.11 before starting its bounded
+app output. The script itself verifies exact output `niri 26.04 (Nixpkgs)` before starting its bounded
 nested instances.
 
 ## Residual risks
@@ -228,4 +236,4 @@ nested instances.
 
 ## Result
 
-Direct Niri IPC and the targeted MVP spatial mutations are viable. The spike unblocks the domain, protocol, inventory, spatial-policy, controller, and routed-launch tasks with the contracts above.
+Direct Niri IPC and the targeted MVP spatial mutations remain viable from the automated exact-commit evidence. The exact-commit nested runtime re-smoke remains an operator gate.

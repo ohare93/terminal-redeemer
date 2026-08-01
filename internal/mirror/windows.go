@@ -45,7 +45,7 @@ func PlanLaunch(window Window, cfg LaunchConfig) (LaunchPlan, error) {
 		return LaunchPlan{}, fmt.Errorf("invalid mirror mode %q (expected attach or watch)", cfg.Mode)
 	}
 	if cfg.Mode == "watch" {
-		return LaunchPlan{}, fmt.Errorf("mirror watch is unsupported by pinned Zellij 0.43.1")
+		return LaunchPlan{}, fmt.Errorf("mirror watch is unsupported by pinned Zellij 0.44.3")
 	}
 	session := SessionName(window)
 	if session == "" {

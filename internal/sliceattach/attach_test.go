@@ -26,7 +26,7 @@ func shortLiveSocket(t *testing.T, session string) (string, net.Listener) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	base := filepath.Join(root, "z")
-	version := filepath.Join(base, zellijlive.PinnedVersion)
+	version := filepath.Join(base, zellijlive.SocketContractDir)
 	if err := os.MkdirAll(version, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -40,17 +40,7 @@ func shortLiveSocket(t *testing.T, session string) (string, net.Listener) {
 
 func liveSocket(t *testing.T, session string) (string, net.Listener) {
 	t.Helper()
-	base := filepath.Join(t.TempDir(), "z")
-	version := filepath.Join(base, zellijlive.PinnedVersion)
-	if err := os.MkdirAll(version, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	listener, err := net.Listen("unix", filepath.Join(version, session))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { listener.Close() })
-	return base, listener
+	return shortLiveSocket(t, session)
 }
 func TestExactAttachHardLinksScrubsAndDetaches(t *testing.T) {
 	base, _ := liveSocket(t, "exact")
@@ -70,8 +60,8 @@ func TestExactAttachHardLinksScrubsAndDetaches(t *testing.T) {
 		}
 		gotArgs = append([]string(nil), args...)
 		gotEnv = append([]string(nil), env...)
-		linked := filepath.Join(private, "att-token-1", zellijlive.PinnedVersion, "exact")
-		real := filepath.Join(base, zellijlive.PinnedVersion, "exact")
+		linked := filepath.Join(private, "att-token-1", zellijlive.SocketContractDir, "exact")
+		real := filepath.Join(base, zellijlive.SocketContractDir, "exact")
 		a, _ := os.Stat(linked)
 		b, _ := os.Stat(real)
 		if !os.SameFile(a, b) {
@@ -105,10 +95,10 @@ func TestPreparedExactSocketReplayRetainsJournaledInodeAcrossSameNameReplacement
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	base := filepath.Join(root, "z")
-	if err := os.MkdirAll(filepath.Join(base, zellijlive.PinnedVersion), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(base, zellijlive.SocketContractDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	original, err := net.Listen("unix", filepath.Join(base, zellijlive.PinnedVersion, "exact"))
+	original, err := net.Listen("unix", filepath.Join(base, zellijlive.SocketContractDir, "exact"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +114,7 @@ func TestPreparedExactSocketReplayRetainsJournaledInodeAcrossSameNameReplacement
 	if err := original.Close(); err != nil {
 		t.Fatal(err)
 	}
-	realPath := filepath.Join(base, zellijlive.PinnedVersion, "exact")
+	realPath := filepath.Join(base, zellijlive.SocketContractDir, "exact")
 	if err := os.Remove(realPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
@@ -133,11 +123,11 @@ func TestPreparedExactSocketReplayRetainsJournaledInodeAcrossSameNameReplacement
 		t.Fatal(err)
 	}
 	defer replacement.Close()
-	replacementInfo, err := os.Lstat(filepath.Join(base, zellijlive.PinnedVersion, "exact"))
+	replacementInfo, err := os.Lstat(filepath.Join(base, zellijlive.SocketContractDir, "exact"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.SameFile(replacementInfo, mustStat(t, filepath.Join(prepared.Path, zellijlive.PinnedVersion, "exact"))) {
+	if os.SameFile(replacementInfo, mustStat(t, filepath.Join(prepared.Path, zellijlive.SocketContractDir, "exact"))) {
 		t.Fatal("test replacement unexpectedly reused the prepared inode")
 	}
 	adopted, outcome := PreparePlannedExactSocket(base, private, "exact", "token", os.Getuid(), prepared)
@@ -147,7 +137,7 @@ func TestPreparedExactSocketReplayRetainsJournaledInodeAcrossSameNameReplacement
 	if outcome := RemovePreparedExactSocket(prepared, "exact", os.Getuid()); outcome.Status != "" {
 		t.Fatalf("cleanup=%#v", outcome)
 	}
-	conn, err := net.DialTimeout("unix", filepath.Join(base, zellijlive.PinnedVersion, "exact"), 100*time.Millisecond)
+	conn, err := net.DialTimeout("unix", filepath.Join(base, zellijlive.SocketContractDir, "exact"), 100*time.Millisecond)
 	if err != nil {
 		t.Fatalf("cleanup destroyed replacement host socket: %v", err)
 	}
@@ -201,7 +191,7 @@ func TestPreparedWrapperOwnsNamespaceUntilPinnedClientExit(t *testing.T) {
 	if !strings.Contains(joined, "ZELLIJ_SOCKET_DIR="+prepared.Path) || !strings.Contains(joined, "XDG_CACHE_HOME="+filepath.Join(base, "host-cache")) {
 		t.Fatalf("isolated env=%q", gotEnv)
 	}
-	conn, err := net.DialTimeout("unix", filepath.Join(base, zellijlive.PinnedVersion, "exact"), 100*time.Millisecond)
+	conn, err := net.DialTimeout("unix", filepath.Join(base, zellijlive.SocketContractDir, "exact"), 100*time.Millisecond)
 	if err != nil {
 		t.Fatalf("helper cleanup destroyed host session: %v", err)
 	}
@@ -344,7 +334,7 @@ func TestAttachRejectsPathBudgetAndNonemptyCache(t *testing.T) {
 	}
 	base2, _ := liveSocket(t, "exact")
 	cache := filepath.Join(base2, "cache")
-	dead := filepath.Join(cache, "zellij", zellijlive.PinnedVersion, "session_info")
+	dead := filepath.Join(cache, "zellij", zellijlive.SocketContractDir, "session_info")
 	if err := os.MkdirAll(dead, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -416,8 +406,13 @@ func TestAttachIOHelperProcess(t *testing.T) {
 }
 
 func TestAttachMapsProvablyStaleSocketToUnavailable(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "z")
-	version := filepath.Join(base, zellijlive.PinnedVersion)
+	root, err := os.MkdirTemp("/tmp", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	base := filepath.Join(root, "z")
+	version := filepath.Join(base, zellijlive.SocketContractDir)
 	if err := os.MkdirAll(version, 0o700); err != nil {
 		t.Fatal(err)
 	}

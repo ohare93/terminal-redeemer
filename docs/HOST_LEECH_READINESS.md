@@ -6,7 +6,7 @@ The host/leech terminal-slice MVP is opt in and disabled by default. Installing
 the package does not activate the controller, routed launch mode, or Niri
 bindings.
 
-Use the v1.1.0 machine-readable artifacts in
+Use the v1.2.0 machine-readable artifacts in
 [`contracts/host-leech-slices/v1`](../contracts/host-leech-slices/v1/) for the
 consumer surface. The const-rich JSON Schema owns strict structure and exact
 semantic values; runtime-coupled Go tests own protocol constants, pinned
@@ -29,9 +29,18 @@ The detailed behavior is intentionally not repeated here:
   state, and incident guidance.
 
 The accepted v1 limitations remain one active output per machine, approximate
-proportional placement, report-only live order drift, Niri 25.11, Zellij
-0.43.1, shared minimum-client-grid reflow, and no automatic local fallback
-after an ambiguous remote launch.
+proportional placement, report-only live order drift, Niri 26.04, Zellij
+0.44.3, shared
+minimum-client-grid reflow, and no automatic local fallback after an ambiguous
+remote launch.
+
+Contract 1.2.0 updates the exact runtime compatibility pair and Zellij's
+`contract_version_1` socket/cache layout. Inventory schema 1, RPC schema 1,
+controller schema 2, artifact path `v1`, option names, defaults, and persisted
+authority formats are unchanged. Consumers need only update the Terminal
+Redeemer pin/NAR metadata; no new mono-nix option or authority migration is
+required. Quiesce in-flight projection helpers before replacing 1.1.0 because
+prepared 0.43.1 socket namespaces are not adopted by the 0.44.3 binary.
 
 ## Contract and repository verification
 
@@ -191,7 +200,7 @@ private state, environment values, titles, or argv dumps.
 
 | Area | Required observation |
 | --- | --- |
-| Compatibility | Both machines use one package revision; inventory/RPC schema 1, controller schema 2, Niri 25.11, and Zellij 0.43.1 pass. |
+| Compatibility | Both machines use one package revision; inventory/RPC schema 1, controller schema 2, Niri 26.04, and Zellij 0.44.3 pass. |
 | Local boundary | Mode-off and unselected `Mod+Return` remain ordinary local launch. |
 | Workspace selection | Selected current and newly opened eligible sources project once; unselection touches no unrelated window. |
 | All-eligible fanout | With `all-enable`, every current eligible source projects exactly once and each later eligible source projects once without another selection action; `all-disable` removes only that reason and preserves independent workspace/pickup projections and the unrelated sentinel. |
@@ -217,7 +226,7 @@ smoke pass.
 
 Legacy one-shot `mirror snapshot/list/open/status/close` remains independent.
 Interactive attach still scrubs nested Zellij state, detaches without killing
-remote work, and provides the manual recovery path. Pinned Zellij 0.43.1 has no
+remote work, and provides the manual recovery path. Pinned Zellij 0.44.3 has no
 watch command; watch remains explicitly unsupported. Legacy clipboard behavior
 is separate and slice clipboard remains off.
 

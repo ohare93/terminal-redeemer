@@ -5,7 +5,7 @@ set -euo pipefail
 niri_bin=${NIRI_BIN:-niri}
 kitty_bin=${KITTY_BIN:-kitty}
 python_bin=${PYTHON_BIN:-python3}
-expected_version=${EXPECTED_NIRI_VERSION:-25.11}
+expected_version=${EXPECTED_NIRI_VERSION:-26.04}
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 probe=${NIRI_PROBE:-$script_dir/niri-direct-ipc-probe.py}
 
@@ -15,10 +15,7 @@ fail() {
 }
 
 version_output=$($niri_bin --version)
-case "$version_output" in
-  "niri $expected_version"|"niri $expected_version "*) ;;
-  *) fail "expected Niri $expected_version, got: $version_output" ;;
-esac
+[[ $version_output == "niri $expected_version (Nixpkgs)" ]] || fail "expected Niri $expected_version (Nixpkgs), got: $version_output"
 
 [[ -n ${WAYLAND_DISPLAY:-} || -n ${WAYLAND_SOCKET:-} ]] || fail "a parent Wayland session is required for the nested Niri spike"
 root=$(mktemp -d "${TMPDIR:-/tmp}/terminal-redeemer-niri-spike.XXXXXX")

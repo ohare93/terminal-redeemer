@@ -6,7 +6,7 @@
 
 ## Context
 
-[ADR 0002](0002-host-leech-terminal-slice-domain-and-lifecycle.md) establishes semantic spatial projection. [ADR 0003](0003-terminal-slice-workspace-sharing-and-persistence.md) establishes canonical static-workspace identity, exact source identity, atomic controller authority, and safe failure semantics. The passing [Niri direct-IPC spike](../spikes/0002-niri-direct-ipc.md) proves the exact inventory and mutation shapes available in pinned Niri 25.11.
+[ADR 0002](0002-host-leech-terminal-slice-domain-and-lifecycle.md) establishes semantic spatial projection. [ADR 0003](0003-terminal-slice-workspace-sharing-and-persistence.md) establishes canonical static-workspace identity, exact source identity, atomic controller authority, and safe failure semantics. The passing [Niri direct-IPC spike](../spikes/0002-niri-direct-ipc.md) proves the exact inventory and mutation shapes available in pinned Niri 26.04.
 
 This ADR fixes the deterministic spatial policy for one host output and one leech output. It also introduces the pure `internal/slicelayout` proposal model used by reconciliation; the policy model itself performs no machine enablement.
 
@@ -136,7 +136,7 @@ Spatial placement failure is never evidence that a source disappeared and never 
 
 Before enabling the feature, run the locked spike and a bounded controller smoke in disposable named workspaces on one physical/nested output per machine:
 
-1. Verify packaged Niri prints exactly `niri 25.11`; build `checks.x86_64-linux.host-leech-hermetic-matrix` for the locked version and production Go IPC checks, then use the documented spike script for a live existing-Wayland smoke.
+1. Verify packaged Niri prints exactly `niri 26.04 (Nixpkgs)`; build `checks.x86_64-linux.host-leech-hermetic-matrix` for the locked version and production Go IPC checks, then use the documented spike script for a live existing-Wayland smoke.
 2. Capture complete host and leech observations and confirm exactly one active output on each, valid logical dimensions/scale, and no canonical workspace collision.
 3. Request a missing hostile-but-valid static workspace name; inspect the exact ID-targeted `SetWorkspaceName`, unchanged focus, exact-name verification, and replacement trailing empty workspace.
 4. Project one owned tiled terminal, then one owned floating terminal. Verify exact workspace IDs, `focus:false`, mode, width and height after each action. Keep an unrelated sentinel window focused and prove it never moves or closes.

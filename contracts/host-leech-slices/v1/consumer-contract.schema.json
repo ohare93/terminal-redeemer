@@ -30,7 +30,7 @@
       "const": "terminal-redeemer.host-leech-slices"
     },
     "contract_version": {
-      "const": "1.1.0"
+      "const": "1.2.0"
     },
     "protocol": {
       "type": "object",
@@ -72,10 +72,10 @@
       ],
       "properties": {
         "niri_version": {
-          "const": "25.11"
+          "const": "26.04"
         },
         "zellij_version": {
-          "const": "0.43.1"
+          "const": "0.44.3"
         },
         "topology": {
           "const": "one_active_output_per_machine"

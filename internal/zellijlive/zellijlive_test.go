@@ -47,7 +47,7 @@ func TestProcObserverUsesExactProcessEvidenceNotTitle(t *testing.T) {
 func TestCommandCatalogClassifiesActiveDeadPrefixAndNeverAttaches(t *testing.T) {
 	root := shortSocketTempDir(t)
 	base := filepath.Join(root, "sockets")
-	versionDir := filepath.Join(base, PinnedVersion)
+	versionDir := filepath.Join(base, SocketContractDir)
 	if err := os.MkdirAll(versionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestCommandCatalogClassifiesActiveDeadPrefixAndNeverAttaches(t *testing.T) 
 	}
 	defer listener.Close()
 	cache := filepath.Join(root, "cache")
-	if err := os.MkdirAll(filepath.Join(cache, "zellij", PinnedVersion, "session_info", "dead"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(cache, "zellij", SocketContractDir, "session_info", "dead"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(root, "args.log")
@@ -104,7 +104,7 @@ func TestSafeSessionNameAndIdentity(t *testing.T) {
 func TestCommandCatalogRejectsDuplicateListing(t *testing.T) {
 	root := shortSocketTempDir(t)
 	base := filepath.Join(root, "sockets")
-	versionDir := filepath.Join(base, PinnedVersion)
+	versionDir := filepath.Join(base, SocketContractDir)
 	if err := os.MkdirAll(versionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -248,11 +248,11 @@ func TestExactProcessAndVersionBasenamesRejectNearMatches(t *testing.T) {
 		t.Fatalf("zellij-helper accepted: %v", got)
 	}
 	base := filepath.Join(t.TempDir(), "sockets")
-	if err := os.MkdirAll(filepath.Join(base, PinnedVersion), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	script := filepath.Join(t.TempDir(), "zellij")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.43.10'; else exit 0; fi\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.30'; else exit 0; fi\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := (CommandCataloger{Command: script, SocketBase: base, CacheHome: t.TempDir(), BootID: "boot", UID: os.Getuid()}).Observe(context.Background()); err == nil {
@@ -268,7 +268,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 		}
 		defer os.RemoveAll(root)
 		base := filepath.Join(root, "sockets")
-		versionDir := filepath.Join(base, PinnedVersion)
+		versionDir := filepath.Join(base, SocketContractDir)
 		if err := os.MkdirAll(versionDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -288,7 +288,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 	t.Run("successful empty listing", func(t *testing.T) {
 		root := t.TempDir()
 		base := filepath.Join(root, "sockets")
-		if err := os.MkdirAll(filepath.Join(base, PinnedVersion), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		script := filepath.Join(root, "zellij")
@@ -303,7 +303,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 	t.Run("singleton list without socket", func(t *testing.T) {
 		root := t.TempDir()
 		base := filepath.Join(root, "sockets")
-		if err := os.MkdirAll(filepath.Join(base, PinnedVersion), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		script := filepath.Join(root, "zellij")
@@ -324,7 +324,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 		}
 		root := t.TempDir()
 		base := filepath.Join(root, "sockets")
-		if err := os.MkdirAll(filepath.Join(base, PinnedVersion), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		script := filepath.Join(root, "zellij")
@@ -435,7 +435,7 @@ func TestCommandCatalogPropagatesDeadSessionCatalogReadFailures(t *testing.T) {
 		t.Helper()
 		root := t.TempDir()
 		base := filepath.Join(root, "sockets")
-		if err := os.MkdirAll(filepath.Join(base, PinnedVersion), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		cache := filepath.Join(root, "cache")
@@ -447,7 +447,7 @@ func TestCommandCatalogPropagatesDeadSessionCatalogReadFailures(t *testing.T) {
 	}
 	t.Run("session_info is not a directory", func(t *testing.T) {
 		base, cache, script := setup(t)
-		deadDir := filepath.Join(cache, "zellij", PinnedVersion, "session_info")
+		deadDir := filepath.Join(cache, "zellij", SocketContractDir, "session_info")
 		if err := os.MkdirAll(filepath.Dir(deadDir), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -460,7 +460,7 @@ func TestCommandCatalogPropagatesDeadSessionCatalogReadFailures(t *testing.T) {
 	})
 	t.Run("injected read failure", func(t *testing.T) {
 		base, cache, script := setup(t)
-		deadDir := filepath.Join(cache, "zellij", PinnedVersion, "session_info")
+		deadDir := filepath.Join(cache, "zellij", SocketContractDir, "session_info")
 		cataloger := CommandCataloger{Command: script, SocketBase: base, CacheHome: cache, BootID: "boot", UID: os.Getuid()}
 		cataloger.readDir = func(path string) ([]os.DirEntry, error) {
 			if path == deadDir {

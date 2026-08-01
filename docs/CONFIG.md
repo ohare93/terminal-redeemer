@@ -54,10 +54,10 @@ slice:
   transportCommand: ssh         # Nix module renders OpenSSH store path
   transportOptions: []          # operator-owned; auth/host keys are not managed
   rpcCommand: [redeem, slice, rpc]
-  zellijCommand: zellij         # exact 0.43.1 required
-  niriCommand: niri             # exact 25.11 compatibility check
+  zellijCommand: zellij         # exact 0.44.3 required
+  niriCommand: niri             # exact 26.04 compatibility check
   systemctlCommand: systemctl
-  expectedNiriVersion: "25.11"
+  expectedNiriVersion: "26.04"
   requestTimeout: 15s
   keepaliveInterval: 15s
   keepaliveCount: 3
@@ -171,7 +171,7 @@ Config loading rejects invalid mirror modes, empty required commands/app ID, neg
 
 All mirror keys above, `restore.onStartup`, `slice.leechMode.enable`, the read-only `slice.launchCommand`, read-only `slice.closeFocusedCommand`, read-only `slice.manageCommand`, read-only `slice.niriIntegrationFragment`, and controller options are typed under `programs.terminal-redeemer`. `slice.launchCommand` is exact packaged argv for Super+Enter; `slice.closeFocusedCommand` is exact packaged argv for Super+W; `slice.manageCommand` opens the live manager in packaged Kitty for a consumer-chosen binding. The generated KDL fragment still contains only launch and focused close and is never installed or merged automatically. The NixOS wrapper forwards typed per-user startup policy and other per-user settings to the Home Manager module; it deliberately does not invent a system-level GUI restore service. `extraConfig` remains available for additional raw YAML, but typed options should be preferred.
 
-The machine-readable v1.1.0 technical contract, schema, and binding template live under [`contracts/host-leech-slices/v1/`](../contracts/host-leech-slices/v1/). Its deployment and rollback guidance is [HOST_LEECH_READINESS.md](HOST_LEECH_READINESS.md). The contract records disabled Leech/controller defaults, clipboard off, host-location authority, timing defaults, inventory/RPC schema 1, controller state/control schema 2, Niri 25.11, and Zellij 0.43.1; tests compare those fields to `config.Defaults`, module evaluation, and packaged artifact bytes.
+The machine-readable v1.2.0 technical contract, schema, and binding template live under [`contracts/host-leech-slices/v1/`](../contracts/host-leech-slices/v1/). Its deployment and rollback guidance is [HOST_LEECH_READINESS.md](HOST_LEECH_READINESS.md). The contract records disabled Leech/controller defaults, clipboard off, host-location authority, timing defaults, inventory/RPC schema 1, controller state/control schema 2, Niri 26.04, and Zellij 0.44.3; tests compare those fields to `config.Defaults`, module evaluation, and packaged artifact bytes.
 
 Example (after disabling all host-local startup restorers):
 

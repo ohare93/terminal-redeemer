@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/niriipc"
 	"github.com/jmo/terminal-redeemer/internal/slicecontroller"
 	"gopkg.in/yaml.v3"
 )
@@ -196,7 +197,7 @@ func Defaults() Config {
 			ZellijCommand:        DefaultZellijExecutable,
 			NiriCommand:          DefaultNiriExecutable,
 			SystemctlCommand:     DefaultSystemctlExecutable,
-			ExpectedNiriVersion:  "25.11",
+			ExpectedNiriVersion:  niriipc.SupportedVersion,
 			RequestTimeout:       15 * time.Second,
 			KeepaliveInterval:    15 * time.Second,
 			KeepaliveCount:       3,
@@ -367,8 +368,8 @@ func validateSlice(cfg SliceConfig) error {
 	if err := slicecontroller.ValidateProjectionTransportOptions(cfg.TransportOptions); err != nil {
 		return fmt.Errorf("slice.transportOptions: %w", err)
 	}
-	if cfg.ExpectedNiriVersion != "25.11" {
-		return fmt.Errorf("slice.expectedNiriVersion must be 25.11")
+	if cfg.ExpectedNiriVersion != niriipc.SupportedVersion {
+		return fmt.Errorf("slice.expectedNiriVersion must be %s", niriipc.SupportedVersion)
 	}
 	if cfg.RequestTimeout <= 0 || cfg.KeepaliveInterval <= 0 || cfg.RetryInitialBackoff <= 0 || cfg.RetryMaxBackoff <= 0 {
 		return fmt.Errorf("slice timeout, keepalive, and retry durations must be positive")

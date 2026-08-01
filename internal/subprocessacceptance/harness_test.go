@@ -32,6 +32,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/slicecontroller"
 	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 	"github.com/jmo/terminal-redeemer/internal/slicerpc"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 	"golang.org/x/sys/unix"
 )
 
@@ -76,7 +77,7 @@ func TestMain(m *testing.M) {
 	switch filepath.Base(os.Args[0]) {
 	case "niri":
 		if len(os.Args) == 2 && os.Args[1] == "--version" {
-			fmt.Println("niri 25.11")
+			fmt.Println(niriipc.SupportedVersionOutput)
 			os.Exit(0)
 		}
 		fmt.Fprintln(os.Stderr, "controlled niri accepts only --version")
@@ -1088,7 +1089,7 @@ func TestPinnedOwnedProcessAbsentExitedAndZombie(t *testing.T) {
 // long-lived packaged controller/helper process trees.
 func TestHermeticTwoNodePackagedSubprocessLifecycle(t *testing.T) {
 	redeem, zellij := requiredBinary(t, "REDEEM_BIN"), requiredBinary(t, "ZELLIJ_BIN")
-	if out, err := exec.Command(zellij, "--version").CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "zellij 0.43.1" {
+	if out, err := exec.Command(zellij, "--version").CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "zellij 0.44.3" {
 		t.Fatalf("pinned Zellij unavailable: %v %q", err, out)
 	}
 	root, err := os.MkdirTemp("/tmp", "trh-")
@@ -1149,7 +1150,7 @@ func TestHermeticTwoNodePackagedSubprocessLifecycle(t *testing.T) {
 	writeConfig(t, leech.config, leech.state, redeem, zellij, filepath.Join(bin, "kitty"), filepath.Join(bin, "niri"), filepath.Join(bin, "systemctl"), filepath.Join(bin, "ssh"), true)
 	hostEnv := topo.HostEnv
 	leechEnv := nodeEnv(leech, leechNiri.path, "")
-	// Zellij 0.43.1 exits non-zero for an empty list.  Keep one real, headless
+	// Zellij 0.44.3 exits non-zero for an empty list. Keep one real, headless
 	// seed session so the production catalog boundary can make a complete
 	// observation without inventing a fake Zellij result.
 	zellijCreate := exec.Command(zellij, "attach", "--create-background", "harness-seed")
@@ -1641,7 +1642,7 @@ func newNode(t *testing.T, root, name string) node {
 	n.state = filepath.Join(n.root, "state")
 	n.runtime = filepath.Join(n.root, "run")
 	n.cache = filepath.Join(n.root, "cache")
-	for _, p := range []string{n.root, n.home, n.state, n.runtime, n.cache, filepath.Join(n.runtime, "z"), filepath.Join(n.runtime, "z", "0.43.1")} {
+	for _, p := range []string{n.root, n.home, n.state, n.runtime, n.cache, filepath.Join(n.runtime, "z"), filepath.Join(n.runtime, "z", zellijlive.SocketContractDir)} {
 		mustMkdir(t, p)
 	}
 	return n
@@ -1658,7 +1659,7 @@ func writeConfig(t *testing.T, path, state, redeem, zellij, kitty, niri, systemc
 	if ssh == "" {
 		ssh = filepath.Join(filepath.Dir(niri), "ssh")
 	}
-	content := fmt.Sprintf("stateDir: %q\nslice:\n  leechModeEnabled: false\n  sourceHost: %q\n  selfCommand: %q\n  kittyCommand: %q\n  transportCommand: %q\n  rpcCommand: [%q, slice, rpc]\n  zellijCommand: %q\n  niriCommand: %q\n  systemctlCommand: %q\n  attachPrivateRoot: %q\n  attachShimCache: %q\n  expectedNiriVersion: \"25.11\"\n  requestTimeout: 90s\n  keepaliveInterval: 1s\n  keepaliveCount: 1\n  retryMaxAttempts: 2\n  retryInitialBackoff: 2s\n  retryMaxBackoff: 2s\n  graphicalContextKeys: [NIRI_SOCKET, WAYLAND_DISPLAY, XDG_RUNTIME_DIR]\n  clipboard: {enabled: false}\n  controller:\n    enabled: %t\n    hostID: host\n    leechID: leech\n    pollInterval: 500ms\n    controlTimeout: 10s\n    retryWindow: 15s\n    sourceGoneGrace: 300ms\n    sourceGoneConfirmations: 2\n    authorityMode: host_location\n    leechWriteAuthorized: false\n", state, map[bool]string{true: "host.test", false: ""}[controller], redeem, kitty, ssh, redeem, zellij, niri, systemctl, filepath.Join(filepath.Dir(state), "a"), filepath.Join(filepath.Dir(state), "c"), controller)
+	content := fmt.Sprintf("stateDir: %q\nslice:\n  leechModeEnabled: false\n  sourceHost: %q\n  selfCommand: %q\n  kittyCommand: %q\n  transportCommand: %q\n  rpcCommand: [%q, slice, rpc]\n  zellijCommand: %q\n  niriCommand: %q\n  systemctlCommand: %q\n  attachPrivateRoot: %q\n  attachShimCache: %q\n  expectedNiriVersion: %q\n  requestTimeout: 90s\n  keepaliveInterval: 1s\n  keepaliveCount: 1\n  retryMaxAttempts: 2\n  retryInitialBackoff: 2s\n  retryMaxBackoff: 2s\n  graphicalContextKeys: [NIRI_SOCKET, WAYLAND_DISPLAY, XDG_RUNTIME_DIR]\n  clipboard: {enabled: false}\n  controller:\n    enabled: %t\n    hostID: host\n    leechID: leech\n    pollInterval: 500ms\n    controlTimeout: 10s\n    retryWindow: 15s\n    sourceGoneGrace: 300ms\n    sourceGoneConfirmations: 2\n    authorityMode: host_location\n    leechWriteAuthorized: false\n", state, map[bool]string{true: "host.test", false: ""}[controller], redeem, kitty, ssh, redeem, zellij, niri, systemctl, filepath.Join(filepath.Dir(state), "a"), filepath.Join(filepath.Dir(state), "c"), niriipc.SupportedVersion, controller)
 	mustWrite(t, path, []byte(content))
 }
 func requiredBinary(t *testing.T, key string) string {

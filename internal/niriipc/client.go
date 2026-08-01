@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	DefaultMaxLineBytes   = 4 << 20
-	DefaultMaxReplayBytes = 16 << 20
-	DefaultTimeout        = 5 * time.Second
+	SupportedVersion       = "26.04"
+	SupportedVersionOutput = "niri 26.04 (Nixpkgs)"
+	DefaultMaxLineBytes    = 4 << 20
+	DefaultMaxReplayBytes  = 16 << 20
+	DefaultTimeout         = 5 * time.Second
 )
 
 type Client struct {
@@ -32,18 +34,16 @@ type Client struct {
 }
 
 func VerifyVersion(ctx context.Context, command, expected string) error {
-	if strings.TrimSpace(command) == "" || expected != "25.11" {
-		return errors.New("pinned Niri executable and expected version 25.11 are required")
+	if strings.TrimSpace(command) == "" || expected != SupportedVersion {
+		return fmt.Errorf("pinned Niri executable and expected version %s are required", SupportedVersion)
 	}
 	var output versionOutput
 	cmd := exec.CommandContext(ctx, command, "--version")
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	err := cmd.Run()
-	version := strings.TrimSpace(output.String())
-	prefix := "niri " + expected
-	if err != nil || (version != prefix && !strings.HasPrefix(version, prefix+" ")) {
-		return errors.New("pinned Niri 25.11 is unavailable")
+	if version := strings.TrimSpace(output.String()); err != nil || version != SupportedVersionOutput {
+		return fmt.Errorf("pinned Niri %s is unavailable", SupportedVersion)
 	}
 	return nil
 }

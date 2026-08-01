@@ -52,7 +52,7 @@ redeem slice inventory init
 redeem slice inventory snapshot --accept-schema-version 1
 ```
 
-Initialization durably writes an enrollment marker before current authority and refuses to overwrite existing, corrupt, or missing-after-use state under `stateDir/slice/source-inventory/`. Deleting only `current.json` never makes the namespace fresh again. Snapshot collection uses the direct `NIRI_SOCKET` event replay through an explicit `ConfigLoaded.failed:false`, a separate Outputs query, current-user Kitty process evidence, and pinned Zellij 0.43.1 live sockets. It never attaches, creates, resurrects, or terminates a session.
+Initialization durably writes an enrollment marker before current authority and refuses to overwrite existing, corrupt, or missing-after-use state under `stateDir/slice/source-inventory/`. Deleting only `current.json` never makes the namespace fresh again. Snapshot collection uses the direct `NIRI_SOCKET` event replay through an explicit `ConfigLoaded.failed:false`, a separate Outputs query, current-user Kitty process evidence, and pinned Zellij 0.44.3 live sockets. It never attaches, creates, resurrects, or terminates a session.
 
 Every successfully completed authoritative poll advances revision state and refreshes `observed_at`, even when its semantic inventory hash is unchanged. An exact replay of the same committed revision remains an idempotent duplicate. A `degraded` response retains prior authority and revision when available and must never be treated as source disappearance or permission to close a projection. Inspect `observation.degraded_reasons` rather than raw private errors.
 
@@ -60,7 +60,7 @@ The inventory protocol does not start a reconciliation service or modify host/le
 
 ## Packaged slice RPC and attachment
 
-The Home Manager module renders store paths for `redeem`, Kitty, OpenSSH, Zellij 0.43.1, Niri 25.11, and `systemctl`. Slice execution uses direct argv throughout: it never invokes `sh -lc`, a login shell, or an interactive profile. Niri inventory/actions remain official newline-delimited direct socket IPC; the packaged Niri executable is used only for the exact `niri 25.11` compatibility gate.
+The Home Manager module renders store paths for `redeem`, Kitty, OpenSSH, Zellij 0.44.3, Niri 26.04, and `systemctl`. Slice execution uses direct argv throughout: it never invokes `sh -lc`, a login shell, or an interactive profile. Niri inventory/actions remain official newline-delimited direct socket IPC; the packaged Niri executable is used only for the exact `niri 26.04 (Nixpkgs)` compatibility gate.
 
 A source-side noninteractive probe sends exactly one bounded request on stdin:
 
@@ -163,7 +163,7 @@ Never compensate for `pending`, `disconnected`, cancellation, or an unavailable 
 
 Before any binding rollout, perform a disposable two-machine smoke: verify mode-off and unselected local launch; selected first success; exact source handoff before the next inventory poll; response loss after host creation; repeated/reordered response; delayed projection; controller restart; bounded exhaustion; explicit same-token reconnect; cancellation; host absence; no local process after remote intent; exact workspace placement without focus change; projection close preserving the host session; and rejection of dead/cache-only or prefix sessions. Keep a sentinel unrelated window and confirm no close/move/focus action targets it.
 
-Pinned Zellij 0.43.1 does not support watch. `mirror open --mode watch` returns an explicit unsupported error without constructing or running a command. Legacy attach and mirror snapshot/list/open/status/close remain separate.
+Pinned Zellij 0.44.3 does not support watch. `mirror open --mode watch` returns an explicit unsupported error without constructing or running a command. Legacy attach and mirror snapshot/list/open/status/close remain separate.
 
 The repository-wide [host/leech hermetic acceptance matrix](testing/host-leech-hermetic-matrix.md) maps every safety contract to named tests and runs in the Nix sandbox without a live desktop or network. Its separately listed operator smoke is a deployment gate, not a substitute for the hermetic checks. The complete consumer-facing smoke checklist and rollback evidence requirements are in [HOST_LEECH_READINESS.md](HOST_LEECH_READINESS.md). Keep automated repository validation isolated from live sessions, credentials, socket values, and machine activation.
 

@@ -59,11 +59,11 @@ func exactSocketPaths(realSocketBase, privateRoot, session, token string) (strin
 		return "", "", "", Outcome{Status: StatusInvalid, Code: "invalid_arguments"}
 	}
 	attachmentRoot := filepath.Join(privateRoot, "att-"+token)
-	privateSocket := filepath.Join(attachmentRoot, zellijlive.PinnedVersion, session)
+	privateSocket := filepath.Join(attachmentRoot, zellijlive.SocketContractDir, session)
 	if len([]byte(privateSocket)) > zellijlive.MaxSocketPathBytes {
 		return "", "", "", Outcome{Status: StatusInvalid, Code: "socket_path_too_long"}
 	}
-	return filepath.Join(realSocketBase, zellijlive.PinnedVersion, session), attachmentRoot, privateSocket, Outcome{}
+	return filepath.Join(realSocketBase, zellijlive.SocketContractDir, session), attachmentRoot, privateSocket, Outcome{}
 }
 
 // PlanExactSocket records the exact live socket inode and deterministic private
@@ -115,7 +115,7 @@ func ValidatePreparedExactSocket(identity ExactSocketIdentity, session string, u
 		return ExactSocketIdentity{}, Outcome{Status: StatusSetupFailed, Code: "attachment_directory_failed"}
 	}
 	entries, err := os.ReadDir(identity.Path)
-	if err != nil || len(entries) != 2 || entries[0].Name() != ".owned-v1" || entries[1].Name() != zellijlive.PinnedVersion {
+	if err != nil || len(entries) != 2 || entries[0].Name() != ".owned-v1" || entries[1].Name() != zellijlive.SocketContractDir {
 		return ExactSocketIdentity{}, Outcome{Status: StatusSetupFailed, Code: "attachment_directory_failed"}
 	}
 	markerPath := filepath.Join(identity.Path, ".owned-v1")
@@ -127,15 +127,15 @@ func ValidatePreparedExactSocket(identity ExactSocketIdentity, session string, u
 	if err != nil || !markerOK || (identity.MarkerDevice != 0 && (identity.MarkerDevice != uint64(markerStat.Dev) || identity.MarkerInode != uint64(markerStat.Ino))) {
 		return ExactSocketIdentity{}, Outcome{Status: StatusSetupFailed, Code: "attachment_marker_failed"}
 	}
-	versionPath := filepath.Join(identity.Path, zellijlive.PinnedVersion)
-	if err := verifyPrivateDirectory(versionPath, uid); err != nil {
+	contractPath := filepath.Join(identity.Path, zellijlive.SocketContractDir)
+	if err := verifyPrivateDirectory(contractPath, uid); err != nil {
 		return ExactSocketIdentity{}, Outcome{Status: StatusSetupFailed, Code: "attachment_directory_failed"}
 	}
-	versionEntries, err := os.ReadDir(versionPath)
-	if err != nil || len(versionEntries) != 1 || versionEntries[0].Name() != session {
+	contractEntries, err := os.ReadDir(contractPath)
+	if err != nil || len(contractEntries) != 1 || contractEntries[0].Name() != session {
 		return ExactSocketIdentity{}, Outcome{Status: StatusSetupFailed, Code: "session_link_verify_failed"}
 	}
-	socketInfo, err := os.Lstat(filepath.Join(versionPath, session))
+	socketInfo, err := os.Lstat(filepath.Join(contractPath, session))
 	socketStat, socketOK := infoSys(socketInfo)
 	if err != nil || !socketOK || socketInfo.Mode()&os.ModeSocket == 0 || socketInfo.Mode()&os.ModeSymlink != 0 || int(socketStat.Uid) != uid || uint64(socketStat.Dev) != identity.SocketDevice || uint64(socketStat.Ino) != identity.SocketInode {
 		return ExactSocketIdentity{}, Outcome{Status: StatusSetupFailed, Code: "session_link_verify_failed"}
@@ -370,7 +370,7 @@ func (w Wrapper) Attach(ctx context.Context) Outcome {
 		return setup
 	}
 	defer os.RemoveAll(attachmentRoot)
-	real := filepath.Join(w.RealSocketBase, zellijlive.PinnedVersion, w.Session)
+	real := filepath.Join(w.RealSocketBase, zellijlive.SocketContractDir, w.Session)
 	if err := ensureEmptyCache(w.ShimCache, uid); err != nil {
 		return Outcome{Status: StatusSetupFailed, Code: "shim_cache_failed"}
 	}
@@ -453,7 +453,7 @@ func (w Wrapper) validate() error {
 	if !zellijlive.SafeSessionName(w.Session) || !zellijlive.SafeSessionName(w.Token) || (w.ReadyToken != "" && !zellijlive.SafeSessionName(w.ReadyToken)) {
 		return errors.New("unsafe session or token")
 	}
-	if len(filepath.Join(w.PrivateRoot, "att-"+w.Token, zellijlive.PinnedVersion, w.Session)) > zellijlive.MaxSocketPathBytes {
+	if len(filepath.Join(w.PrivateRoot, "att-"+w.Token, zellijlive.SocketContractDir, w.Session)) > zellijlive.MaxSocketPathBytes {
 		return errors.New("socket path exceeds budget")
 	}
 	for _, path := range []string{w.RealSocketBase, w.PrivateRoot, w.ShimCache} {
@@ -706,11 +706,11 @@ func ensureEmptyCache(root string, uid int) error {
 	if err != nil {
 		return err
 	}
-	version, err := secureChild(zellij, zellijlive.PinnedVersion, uid)
+	contract, err := secureChild(zellij, zellijlive.SocketContractDir, uid)
 	if err != nil {
 		return err
 	}
-	path, err := secureChild(version, "session_info", uid)
+	path, err := secureChild(contract, "session_info", uid)
 	if err != nil {
 		return err
 	}

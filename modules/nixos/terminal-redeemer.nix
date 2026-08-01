@@ -1,4 +1,4 @@
-{ config, lib, options, ... }:
+{ config, lib, options, terminalRedeemerHomeManagerModule ? import ../home-manager/terminal-redeemer.nix, ... }:
 let
   cfg = config.programs.terminal-redeemer;
   hmAvailable = lib.hasAttrByPath [ "home-manager" "users" ] options;
@@ -47,7 +47,7 @@ in {
 
   config = lib.mkMerge [
     (lib.mkIf (cfg.enable && hmAvailable) {
-      home-manager.sharedModules = [ (import ../home-manager/terminal-redeemer.nix) ];
+      home-manager.sharedModules = [ terminalRedeemerHomeManagerModule ];
       home-manager.users = lib.mapAttrs (username: userCfg: {
         home.username = lib.mkDefault username;
         home.homeDirectory = lib.mkDefault (config.users.users.${username}.home or "/home/${username}");

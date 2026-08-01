@@ -137,7 +137,7 @@ Prior-boot resume and live host-leech projection are separate domains:
 
 Neither domain is fallback behavior for the other. Live projection never resurrects prior-boot state, and resume does not supply connection recovery or local fallback for a live projection.
 
-The proven legacy behavior preserved during migration is one-shot **interactive attach** to an exact live session. Pinned Zellij 0.43.1 has no supported `watch` subcommand. Read-only/watch projection is unsupported, and the implemented legacy command now rejects `--mode watch` before acquiring a snapshot or constructing an attachment command.
+The proven legacy behavior preserved during migration is one-shot **interactive attach** to an exact live session. Pinned Zellij 0.44.3 has no supported `watch` subcommand. Read-only/watch projection is unsupported, and the implemented legacy command now rejects `--mode watch` before acquiring a snapshot or constructing an attachment command.
 
 ## Failure behavior
 
@@ -197,7 +197,7 @@ Rejected for MVP. Pinned Niri lacks an ID-targeted existing-column move, making 
 
 ### Claim Zellij watch as the projection mechanism
 
-Rejected. Pinned Zellij 0.43.1 has no supported `watch` subcommand, and the executable attachment proof establishes interactive attach only.
+Rejected. Pinned Zellij 0.44.3 has no supported `watch` subcommand, and the executable attachment proof establishes interactive attach only.
 
 ## Compatibility and sequencing
 
@@ -211,9 +211,9 @@ This appendix records the spike evidence that constrained the decision. The spik
 
 ### A.1 Exact live-only Zellij attachment
 
-[Spike 0001](../spikes/0001-zellij-live-only-attachment.md) passed against repository-pinned Zellij 0.43.1 using [`scripts/spikes/zellij-live-only-attachment.sh`](../../scripts/spikes/zellij-live-only-attachment.sh).
+[Spike 0001](../spikes/0001-zellij-live-only-attachment.md) passed against repository-pinned Zellij 0.44.3 using [`scripts/spikes/zellij-live-only-attachment.sh`](../../scripts/spikes/zellij-live-only-attachment.sh).
 
-The executable proof establishes that an exact interactive attachment requires a private, per-attachment socket directory on the same filesystem; a hard link to the exact live socket with device/inode verification; an isolated empty cache; scrubbed nested-Zellij environment variables; and explicit `options --on-force-close detach`. It demonstrates that:
+The executable proof establishes that Zellij 0.44.3 discovers live sockets and resurrection metadata under `contract_version_1`, and that an exact interactive attachment requires a private, per-attachment socket directory on the same filesystem; a hard link to the exact live socket with device/inode verification; an isolated empty cache; scrubbed nested-Zellij environment variables; and explicit `options --on-force-close detach`. It demonstrates that:
 
 - a symlink is ignored because the enumerated entry is not itself a socket;
 - the empty cache blocks resurrection while the normal cache can resurrect the dead control fixture;
@@ -232,11 +232,11 @@ Residual limitations retained from the proof are:
 - the isolated shim cache must never be used to start a server; and
 - session death after link creation can still fail attachment, although it cannot select or resurrect another session.
 
-This is evidence for one-shot **interactive attach only**. It does not test concurrent-client minimum-grid behavior, which is an accepted product constraint rather than a spike-proven result. It does not prove read-only behavior, and pinned Zellij 0.43.1 has no supported `watch` subcommand.
+This is evidence for one-shot **interactive attach only**. It does not test concurrent-client minimum-grid behavior, which is an accepted product constraint rather than a spike-proven result. It does not prove read-only behavior, and pinned Zellij 0.44.3 has no supported `watch` subcommand.
 
 ### A.2 Niri inventory and safe spatial mutations
 
-[Spike 0002](../spikes/0002-niri-direct-ipc.md) passed against repository-pinned Niri 25.11 and Kitty 0.45.0 using [`scripts/spikes/niri-direct-ipc.sh`](../../scripts/spikes/niri-direct-ipc.sh) and [`scripts/spikes/niri-direct-ipc-probe.py`](../../scripts/spikes/niri-direct-ipc-probe.py); production IPC behavior is covered in `internal/niriipc`.
+[Spike 0002](../spikes/0002-niri-direct-ipc.md) passed against repository-pinned Niri 26.04 and Kitty 0.45.0 using [`scripts/spikes/niri-direct-ipc.sh`](../../scripts/spikes/niri-direct-ipc.sh) and [`scripts/spikes/niri-direct-ipc-probe.py`](../../scripts/spikes/niri-direct-ipc-probe.py); production IPC behavior is covered in `internal/niriipc`.
 
 The executable proof establishes that:
 

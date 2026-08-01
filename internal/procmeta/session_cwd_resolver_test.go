@@ -12,7 +12,7 @@ func TestZellijSessionCWDResolverResolve(t *testing.T) {
 
 	root := t.TempDir()
 	writeProcResolverEntry(t, root, 200922, 200880, "zellij", "/home/jmo", "zellij --layout minimal")
-	writeProcResolverEntry(t, root, 6219, 1, "zellij", "/home/jmo", "zellij --server /run/user/1000/zellij/0.43.1/sensible-bee")
+	writeProcResolverEntry(t, root, 6219, 1, "zellij", "/home/jmo", "zellij --server /run/user/1000/zellij/contract_version_1/sensible-bee")
 	writeProcResolverEntry(t, root, 6244, 6219, "zsh", "/home/jmo/Development/active/tools/terminal-redeemer", "zsh")
 
 	resolver := NewZellijSessionCWDResolver(root)

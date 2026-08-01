@@ -98,8 +98,8 @@ func TestConsumerContractRuntimeValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if contract.ContractVersion != "1.1.0" {
-		t.Fatalf("contract version=%q, want 1.1.0", contract.ContractVersion)
+	if contract.ContractVersion != "1.2.0" {
+		t.Fatalf("contract version=%q, want 1.2.0", contract.ContractVersion)
 	}
 	if got, want := contract.Protocol.InventorySchemaVersions, []int{int(sliceprotocol.SchemaVersion)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("inventory schema versions=%v, want runtime %v", got, want)

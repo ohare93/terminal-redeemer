@@ -1,4 +1,4 @@
-// Terminal Redeemer host/leech slice contract v1.1.0.
+// Terminal Redeemer host/leech slice contract v1.2.0.
 // Packaged in source-template and generated store-pinned forms.
 // This repository and its module do not install these bindings.
 binds {

@@ -65,10 +65,10 @@ if [[ "${RUN_LOCKED_NIRI_VERSION_CHECK:-0}" == 1 ]]; then
   : "${NIRI_BIN:?set by the locked flake check}"
   : "${EXPECTED_NIRI_VERSION:?set by the locked flake check}"
   niri_version_output=$($NIRI_BIN --version)
-  case "$niri_version_output" in
-    "niri $EXPECTED_NIRI_VERSION"|"niri $EXPECTED_NIRI_VERSION "*) ;;
-    *) printf 'locked Niri version mismatch: %s\n' "$niri_version_output" >&2; exit 1 ;;
-  esac
+  [[ $niri_version_output == "niri $EXPECTED_NIRI_VERSION (Nixpkgs)" ]] || {
+    printf 'locked Niri version mismatch: %s\n' "$niri_version_output" >&2
+    exit 1
+  }
 fi
 
 if [[ "${RUN_LOCKED_ZELLIJ_SPIKE:-0}" == 1 ]]; then

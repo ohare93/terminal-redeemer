@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -244,7 +245,7 @@ func (t DirectHostTransaction) EnsureSession(ctx context.Context, r TokenRecord)
 	if socketRoot == "" {
 		socketRoot = filepath.Join(t.Environment["XDG_RUNTIME_DIR"], "zellij")
 	}
-	effective := filepath.Join(socketRoot, zellijlive.PinnedVersion, r.SessionName)
+	effective := filepath.Join(socketRoot, zellijlive.SocketContractDir, r.SessionName)
 	if !filepath.IsAbs(socketRoot) || len([]byte(effective)) > zellijlive.MaxSocketPathBytes {
 		return false, errors.New("effective Zellij socket path exceeds pinned limit")
 	}
@@ -255,7 +256,7 @@ func (t DirectHostTransaction) EnsureSession(ctx context.Context, r TokenRecord)
 	env := append(append([]string(nil), base...), "XDG_CACHE_HOME="+catalog)
 	run := t.runner()
 	version, started, err := run(ctx, t.ZellijCommand, []string{"--version"}, env)
-	if err != nil || strings.TrimSpace(string(version)) != "zellij 0.43.1" {
+	if err != nil || strings.TrimSpace(string(version)) != "zellij "+zellijlive.PinnedVersion {
 		return started, errors.New("pinned Zellij unavailable")
 	}
 	listed, listStarted, listErr := run(ctx, t.ZellijCommand, []string{"list-sessions", "--short"}, env)
@@ -296,7 +297,7 @@ func (t DirectHostTransaction) socketRoot() string {
 }
 func hostAttachToken(session string) string {
 	sum := sha256.Sum256([]byte("terminal-redeemer/host-exact-attach/v1\x00" + session))
-	return "h" + hex.EncodeToString(sum[:10])
+	return "h" + base64.RawURLEncoding.EncodeToString(sum[:10])
 }
 func socketIdentityFromRecord(r TokenRecord) sliceattach.ExactSocketIdentity {
 	return sliceattach.ExactSocketIdentity{

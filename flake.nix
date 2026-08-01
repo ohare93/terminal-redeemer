@@ -15,6 +15,9 @@
       let
         pkgs = import nixpkgs { inherit system; };
       in {
+        packages.niri = pkgs.niri;
+        packages.zellij = pkgs.zellij;
+
         packages.terminal-redeemer = pkgs.buildGoModule {
           pname = "terminal-redeemer";
           version = "0.1.0";
@@ -38,7 +41,7 @@
           };
         };
 
-        packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.1.0" { } ''
+        packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.2.0" { } ''
           mkdir -p "$out/share/terminal-redeemer/host-leech-slices/v1"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.json"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.schema.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.schema.json"
@@ -194,8 +197,9 @@
           assert rendered.slice.selfCommand == pkgs.lib.getExe self.packages.${system}.terminal-redeemer;
           assert rendered.slice.kittyCommand == pkgs.lib.getExe pkgs.kitty;
           assert rendered.slice.transportCommand == pkgs.lib.getExe pkgs.openssh;
-          assert rendered.slice.zellijCommand == pkgs.lib.getExe pkgs.zellij;
-          assert rendered.slice.niriCommand == pkgs.lib.getExe pkgs.niri;
+          assert rendered.slice.expectedNiriVersion == "26.04";
+          assert rendered.slice.niriCommand == pkgs.lib.getExe self.packages.${system}.niri;
+          assert rendered.slice.zellijCommand == pkgs.lib.getExe self.packages.${system}.zellij;
           assert rendered.slice.systemctlCommand == pkgs.lib.getExe' pkgs.systemd "systemctl";
           assert rendered.slice.rpcCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "slice" "rpc" ];
           assert rendered.slice.clipboard.enabled == false;
@@ -245,7 +249,12 @@
           assert captureTimer.Install.WantedBy == [ "graphical-session.target" ];
           assert cfg.systemd.user.timers.terminal-redeemer-prune.Timer.OnCalendar == "hourly";
           assert cfg.systemd.user.timers.terminal-redeemer-prune.Timer.Persistent;
-          hmCfg.activationPackage;
+          pkgs.runCommand "terminal-redeemer-hm-module-eval" { } ''
+            test -d ${hmCfg.activationPackage}
+            test "$(${rendered.slice.niriCommand} --version)" = "niri ${rendered.slice.expectedNiriVersion} (Nixpkgs)"
+            test "$(${rendered.slice.zellijCommand} --version)" = "zellij 0.44.3"
+            touch "$out"
+          '';
 
         checks.hm-module-rejects-leech-location =
           let
@@ -343,7 +352,7 @@
             export ZELLIJ_BIN=${pkgs.lib.getExe pkgs.zellij}
             export SCRIPT_BIN=${pkgs.lib.getExe' pkgs.util-linux "script"}
             export TIMEOUT_BIN=${pkgs.lib.getExe' pkgs.coreutils "timeout"}
-            export EXPECTED_ZELLIJ_VERSION=0.43.1
+            export EXPECTED_ZELLIJ_VERSION=0.44.3
             ${pkgs.bash}/bin/bash ${./scripts/spikes/zellij-live-only-attachment.sh}
             touch "$out"
           '';
@@ -352,7 +361,9 @@
           assert self.lib.sliceConsumerContract.inventorySchemaVersion == 1;
           assert self.lib.sliceConsumerContract.rpcSchemaVersion == 1;
           assert self.lib.sliceConsumerContract.controllerSchemaVersion == 2;
-          assert self.lib.sliceConsumerContract.contractVersion == "1.1.0";
+          assert self.lib.sliceConsumerContract.contractVersion == "1.2.0";
+          assert self.lib.sliceConsumerContract.niriVersion == "26.04";
+          assert self.lib.sliceConsumerContract.zellijVersion == "0.44.3";
           assert self.lib.sliceConsumerContract.allEligibleIncludesUnnamed;
           assert !self.lib.sliceConsumerContract.allEligibleRoutesLaunches;
           assert self.lib.sliceConsumerContract.authorityMode == "host_location";
@@ -440,12 +451,12 @@
             export TERMINAL_REDEEMER_SOAK_ITERATIONS=2000
             export RUN_LOCKED_NIRI_VERSION_CHECK=1
             export NIRI_BIN=${pkgs.lib.getExe pkgs.niri}
-            export EXPECTED_NIRI_VERSION=25.11
+            export EXPECTED_NIRI_VERSION='26.04'
             export RUN_LOCKED_ZELLIJ_SPIKE=1
             export ZELLIJ_BIN=${pkgs.lib.getExe pkgs.zellij}
             export SCRIPT_BIN=${pkgs.lib.getExe' pkgs.util-linux "script"}
             export TIMEOUT_BIN=${pkgs.lib.getExe' pkgs.coreutils "timeout"}
-            export EXPECTED_ZELLIJ_VERSION=0.43.1
+            export EXPECTED_ZELLIJ_VERSION=0.44.3
             ${pkgs.bash}/bin/bash scripts/tests/host-leech-hermetic-matrix.sh
             runHook postCheck
           '';
@@ -519,12 +530,25 @@
           assert rendered.restore.workspaceReconcileDelay == "3s";
           assert rendered.mirror.sourceHost == "source.example";
           assert rendered.mirror.defaultMode == "watch";
+          assert rendered.slice.niriCommand == pkgs.lib.getExe self.packages.${system}.niri;
+          assert rendered.slice.zellijCommand == pkgs.lib.getExe self.packages.${system}.zellij;
           assert hmUser.systemd.user.services ? terminal-redeemer-resume;
-          pkgs.runCommand "nixos-module-eval" { } "touch $out";
+          pkgs.runCommand "nixos-module-eval" { } ''
+            test "$(${rendered.slice.niriCommand} --version)" = "niri ${rendered.slice.expectedNiriVersion} (Nixpkgs)"
+            test "$(${rendered.slice.zellijCommand} --version)" = "zellij 0.44.3"
+            touch "$out"
+          '';
       })
     // {
-      homeManagerModules.terminal-redeemer = import ./modules/home-manager/terminal-redeemer.nix;
-      nixosModules.terminal-redeemer = import ./modules/nixos/terminal-redeemer.nix;
+      homeManagerModules.terminal-redeemer = { pkgs, ... }: {
+        _module.args.terminalRedeemerNiri = self.packages.${pkgs.stdenv.hostPlatform.system}.niri;
+        _module.args.terminalRedeemerZellij = self.packages.${pkgs.stdenv.hostPlatform.system}.zellij;
+        imports = [ ./modules/home-manager/terminal-redeemer.nix ];
+      };
+      nixosModules.terminal-redeemer = { ... }: {
+        _module.args.terminalRedeemerHomeManagerModule = self.homeManagerModules.terminal-redeemer;
+        imports = [ ./modules/nixos/terminal-redeemer.nix ];
+      };
       lib.sliceConsumerContract = {
         schemaVersion = 1;
         inventorySchemaVersion = 1;
@@ -533,7 +557,9 @@
         authorityMode = "host_location";
         leechWriteAuthorized = false;
         contractId = "terminal-redeemer.host-leech-slices";
-        contractVersion = "1.1.0";
+        contractVersion = "1.2.0";
+        niriVersion = "26.04";
+        zellijVersion = "0.44.3";
         allEligibleIncludesUnnamed = true;
         allEligibleRoutesLaunches = false;
         leechModeEnabledByDefault = false;

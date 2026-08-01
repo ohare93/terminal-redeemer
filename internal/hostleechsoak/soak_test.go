@@ -853,7 +853,7 @@ func (s *soak) exerciseHandoffCompaction() {
 
 func (s *soak) exercisePreparedNamespace(i int) {
 	base := filepath.Join(s.root, "real-sockets")
-	version := filepath.Join(base, zellijlive.PinnedVersion)
+	version := filepath.Join(base, zellijlive.SocketContractDir)
 	if err := os.MkdirAll(version, 0o700); err != nil {
 		s.t.Fatal(err)
 	}

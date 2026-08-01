@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract_id": "terminal-redeemer.host-leech-slices",
-  "contract_version": "1.1.0",
+  "contract_version": "1.2.0",
   "protocol": {
     "inventory_schema_versions": [1],
     "rpc_schema_versions": [1],
@@ -9,8 +9,8 @@
     "workspace_normalization": "unicode-nfkc-fold-v1"
   },
   "compatibility": {
-    "niri_version": "25.11",
-    "zellij_version": "0.43.1",
+    "niri_version": "26.04",
+    "zellij_version": "0.44.3",
     "topology": "one_active_output_per_machine"
   },
   "defaults": {

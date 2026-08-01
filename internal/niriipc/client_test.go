@@ -297,13 +297,18 @@ func TestVerifyVersionRequiresExactPinnedOutput(t *testing.T) {
 		}
 		return path
 	}
-	for _, output := range []string{"niri 25.11", "niri 25.11 (Nixpkgs)"} {
-		if err := VerifyVersion(context.Background(), write("good-"+strings.ReplaceAll(output, " ", "-"), output), "25.11"); err != nil {
-			t.Fatalf("rejected production-compatible output %q: %v", output, err)
-		}
+	good := SupportedVersionOutput
+	if err := VerifyVersion(context.Background(), write("good", good), SupportedVersion); err != nil {
+		t.Fatalf("rejected supported output %q: %v", good, err)
 	}
-	for _, output := range []string{"niri 25.11.1", "niri 25.1", "niri 25.11evil", "evil niri 25.11", "prefixed-niri 25.11"} {
-		if err := VerifyVersion(context.Background(), write(strings.ReplaceAll(output, " ", "-"), output), "25.11"); err == nil {
+	for _, output := range []string{
+		"niri " + SupportedVersion,
+		"niri 26.04.1",
+		"niri 26.4",
+		"niri 26.04evil",
+		"evil " + good,
+	} {
+		if err := VerifyVersion(context.Background(), write(strings.ReplaceAll(output, " ", "-"), output), SupportedVersion); err == nil {
 			t.Fatalf("accepted %q", output)
 		}
 	}

@@ -1,6 +1,7 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, terminalRedeemerNiri ? pkgs.niri, terminalRedeemerZellij ? pkgs.zellij, ... }:
 let
   cfg = config.programs.terminal-redeemer;
+  supportedNiriVersion = "26.04";
   settingsFormat = pkgs.formats.yaml { };
   renderedConfig = {
     stateDir = cfg.stateDir;
@@ -45,7 +46,7 @@ let
       zellijCommand = cfg.slice.zellijCommand;
       niriCommand = cfg.slice.niriCommand;
       systemctlCommand = cfg.slice.systemctlCommand;
-      expectedNiriVersion = "25.11";
+      expectedNiriVersion = supportedNiriVersion;
       requestTimeout = cfg.slice.requestTimeout;
       keepaliveInterval = cfg.slice.keepaliveInterval;
       keepaliveCount = cfg.slice.keepaliveCount;
@@ -108,7 +109,7 @@ let
     "-e" cfg.slice.selfCommand "--config" configPath "slice" "manage"
   ];
   sliceNiriIntegrationFragment = ''
-    // Terminal Redeemer host/leech consumer contract v1.1.0.
+    // Terminal Redeemer host/leech consumer contract v1.2.0.
     // Opt-in template only; this module does not install these bindings.
     binds {
         Mod+Return { spawn "${lib.getExe cfg.package}" "slice" "launch"; }
@@ -287,8 +288,8 @@ in {
       transportCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.openssh; defaultText = lib.literalExpression "lib.getExe pkgs.openssh"; description = "Packaged SSH transport executable. Authentication and host keys remain operator-owned."; };
       transportOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "Validated operator-owned SSH argv; no host-key or authentication defaults are weakened by the module."; };
       rpcCommand = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ (lib.getExe cfg.package) "slice" "rpc" ]; defaultText = lib.literalExpression ''[ (lib.getExe cfg.package) "slice" "rpc" ]''; description = "Fixed shell-inert remote RPC command argv."; };
-      zellijCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.zellij; defaultText = lib.literalExpression "lib.getExe pkgs.zellij"; description = "Pinned Zellij 0.43.1 executable for exact live-only attachment."; };
-      niriCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.niri; defaultText = lib.literalExpression "lib.getExe pkgs.niri"; description = "Pinned Niri 25.11 executable used only for compatibility checks; IPC is direct."; };
+      zellijCommand = lib.mkOption { type = lib.types.str; default = lib.getExe terminalRedeemerZellij; defaultText = lib.literalExpression "lib.getExe terminalRedeemerZellij"; description = "Pinned Zellij 0.44.3 executable for exact live-only attachment."; };
+      niriCommand = lib.mkOption { type = lib.types.str; default = lib.getExe terminalRedeemerNiri; defaultText = lib.literalExpression "lib.getExe terminalRedeemerNiri"; description = "Pinned Niri 26.04 executable used only for compatibility checks; IPC is direct."; };
       systemctlCommand = lib.mkOption { type = lib.types.str; default = lib.getExe' pkgs.systemd "systemctl"; defaultText = lib.literalExpression ''lib.getExe' pkgs.systemd "systemctl"''; description = "Packaged systemctl used to read only allowlisted graphical user-manager environment keys."; };
       requestTimeout = lib.mkOption { type = lib.types.str; default = "15s"; description = "Positive bound for one RPC request."; };
       keepaliveInterval = lib.mkOption { type = lib.types.str; default = "15s"; description = "Positive SSH transport keepalive interval."; };

@@ -367,7 +367,7 @@ func TestFreshExactSessionCollisionAndLongSocketPathFailBeforeCreate(t *testing.
 	tx := DirectHostTransaction{SelfCommand: "/redeem", ZellijCommand: "/zellij", KittyCommand: "/kitty", Environment: map[string]string{"NIRI_SOCKET": "/run/niri", "WAYLAND_DISPLAY": "w", "XDG_RUNTIME_DIR": "/run/u"}, CreationCacheRoot: filepath.Join(root, "create"), ShimCache: filepath.Join(root, "shim"), Run: func(_ context.Context, _ string, args, _ []string) ([]byte, bool, error) {
 		calls = append(calls, append([]string(nil), args...))
 		if args[0] == "--version" {
-			return []byte("zellij 0.43.1"), true, nil
+			return []byte("zellij 0.44.3"), true, nil
 		}
 		return []byte(record.SessionName + "\n"), true, nil
 	}}
@@ -389,13 +389,22 @@ func TestFreshExactSessionCollisionAndLongSocketPathFailBeforeCreate(t *testing.
 	}
 }
 
+func TestHostAttachTokenFitsZellijContractSocketPath(t *testing.T) {
+	session := StableSessionName("token")
+	token := hostAttachToken(session)
+	path := filepath.Join("/run/user/1000/zellij", ".trh", "att-"+token, zellijlive.SocketContractDir, session)
+	if len(token) != 15 || len(path) > zellijlive.MaxSocketPathBytes {
+		t.Fatalf("token=%q path bytes=%d", token, len(path))
+	}
+}
+
 func TestDirectHostTransactionNeverRepeatsUncertainCreateOrKittyStart(t *testing.T) {
 	root := t.TempDir()
 	calls := 0
 	tx := DirectHostTransaction{SelfCommand: "/redeem", ZellijCommand: "/zellij", KittyCommand: "/kitty", Environment: map[string]string{"NIRI_SOCKET": "/run/niri", "WAYLAND_DISPLAY": "w", "XDG_RUNTIME_DIR": "/run/u"}, CreationCacheRoot: filepath.Join(root, "create"), ShimCache: filepath.Join(root, "shim"), Niri: &staticNiri{state: namedState()}, Run: func(_ context.Context, _ string, args, _ []string) ([]byte, bool, error) {
 		calls++
 		if args[0] == "--version" {
-			return []byte("zellij 0.43.1"), true, nil
+			return []byte("zellij 0.44.3"), true, nil
 		}
 		return []byte("No active zellij sessions found"), true, errors.New("none")
 	}, StartKitty: func(context.Context, string, []string, []string) (int, bool, error) {
@@ -426,13 +435,13 @@ func TestDirectHostTransactionSourceProofBeforeDelayedHelperConnectRetainsNamesp
 	exitClient := make(chan struct{})
 	helperDone := make(chan sliceattach.Outcome, 1)
 	helperArgs := make(chan []string, 1)
-	root, err := os.MkdirTemp("/tmp", "tr-rpc-")
+	root, err := os.MkdirTemp("/tmp", "r")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	socketBase := filepath.Join(root, "z")
-	versionDir := filepath.Join(socketBase, zellijlive.PinnedVersion)
+	versionDir := filepath.Join(socketBase, zellijlive.SocketContractDir)
 	if err := os.MkdirAll(versionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +457,7 @@ func TestDirectHostTransactionSourceProofBeforeDelayedHelperConnectRetainsNamesp
 		commands = append(commands, append([]string{command}, args...))
 		envs = append(envs, append([]string(nil), env...))
 		if reflect.DeepEqual(args, []string{"--version"}) {
-			return []byte("zellij 0.43.1\n"), true, nil
+			return []byte("zellij 0.44.3\n"), true, nil
 		}
 		if reflect.DeepEqual(args, []string{"list-sessions", "--short"}) {
 			if created {
@@ -488,7 +497,7 @@ func TestDirectHostTransactionSourceProofBeforeDelayedHelperConnectRetainsNamesp
 				Run: func(_ context.Context, command string, args, env []string, _ io.Reader, _, _ io.Writer) error {
 					helperArgs <- append([]string{command}, args...)
 					<-connectNow // source-shaped process proof exists before this first lookup
-					conn, dialErr := net.DialTimeout("unix", filepath.Join(helperIdentity.Path, zellijlive.PinnedVersion, helperSession), 100*time.Millisecond)
+					conn, dialErr := net.DialTimeout("unix", filepath.Join(helperIdentity.Path, zellijlive.SocketContractDir, helperSession), 100*time.Millisecond)
 					if dialErr == nil {
 						_ = conn.Close()
 					}
@@ -588,13 +597,13 @@ func TestDirectHostTransactionSourceProofBeforeDelayedHelperConnectRetainsNamesp
 }
 
 func TestDirectHostTransactionExactSocketDisappearanceRetainsIsolatedNamespaceWithoutPrefixFallback(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "tr-rpc-")
+	root, err := os.MkdirTemp("/tmp", "r")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	socketBase := filepath.Join(root, "z")
-	versionDir := filepath.Join(socketBase, zellijlive.PinnedVersion)
+	versionDir := filepath.Join(socketBase, zellijlive.SocketContractDir)
 	if err := os.MkdirAll(versionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -636,14 +645,14 @@ func TestDirectHostTransactionExactSocketDisappearanceRetainsIsolatedNamespaceWi
 			if err := exact.Close(); err != nil {
 				t.Fatal(err)
 			}
-			entries, err := os.ReadDir(filepath.Join(record.PreparedSocketPath, zellijlive.PinnedVersion))
+			entries, err := os.ReadDir(filepath.Join(record.PreparedSocketPath, zellijlive.SocketContractDir))
 			if err != nil || len(entries) != 1 || entries[0].Name() != record.SessionName {
 				t.Fatalf("isolated entries=%v err=%v", entries, err)
 			}
-			if _, err := os.Stat(filepath.Join(record.PreparedSocketPath, zellijlive.PinnedVersion, siblingName)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(filepath.Join(record.PreparedSocketPath, zellijlive.SocketContractDir, siblingName)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("prefix sibling leaked into exact namespace: %v", err)
 			}
-			conn, err := net.DialTimeout("unix", filepath.Join(record.PreparedSocketPath, zellijlive.PinnedVersion, record.SessionName), 20*time.Millisecond)
+			conn, err := net.DialTimeout("unix", filepath.Join(record.PreparedSocketPath, zellijlive.SocketContractDir, record.SessionName), 20*time.Millisecond)
 			if err == nil {
 				_ = conn.Close()
 				t.Fatal("dead exact socket remained attachable")
@@ -674,7 +683,7 @@ func TestDirectHostTransactionExactSocketDisappearanceRetainsIsolatedNamespaceWi
 	if _, err := os.Lstat(record.PreparedSocketPath); err != nil {
 		t.Fatalf("unproven exact namespace was removed: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(record.PreparedSocketPath, zellijlive.PinnedVersion, siblingName)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(record.PreparedSocketPath, zellijlive.SocketContractDir, siblingName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("prefix sibling appeared in retained namespace: %v", err)
 	}
 }

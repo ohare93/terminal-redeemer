@@ -68,7 +68,7 @@ Breaking field or enum changes require a new integer schema version. The legacy 
 }
 ```
 
-A complete observation is built from Niri's local direct Unix-socket event replay through successful `ConfigLoaded`, a separate Outputs request, bounded process evidence, and a pinned Zellij 0.43.1 live-socket catalog. `live_session_ids` is a required (possibly empty), sorted, duplicate-free list of every directly verified active session in that catalog, including live headless sessions that are not eligible window-bound sources. Every eligible source session must occur in the list. Catalog-only changes participate in the semantic hash. All workspace/window/output references and the one-active-output MVP topology validate before publication. A join or catalog failure degrades the whole attempt and retains prior authority; it never publishes a partial or empty live list as absence.
+A complete observation is built from Niri's local direct Unix-socket event replay through successful `ConfigLoaded`, a separate Outputs request, bounded process evidence, and a pinned Zellij 0.44.3 live-socket catalog. `live_session_ids` is a required (possibly empty), sorted, duplicate-free list of every directly verified active session in that catalog, including live headless sessions that are not eligible window-bound sources. Every eligible source session must occur in the list. Catalog-only changes participate in the semantic hash. All workspace/window/output references and the one-active-output MVP topology validate before publication. A join or catalog failure degrades the whole attempt and retains prior authority; it never publishes a partial or empty live list as absence.
 
 `attempted_at` is the completed attempt time. Every successfully completed authoritative poll advances revision and refreshes `observed_at`, even when no semantic inventory changed.
 
@@ -192,7 +192,7 @@ The transport runs packaged SSH directly with fixed, validated, shell-inert RPC 
 
 ## Exact attachment boundary
 
-`redeem slice attach` implements the passed Zellij 0.43.1 live-only spike contract. It accepts one safe exact session and attachment token, checks the exact executable version and current-user Unix socket, then creates a dedicated, durably marked mode-0700 same-filesystem root and a separately marked `att-*` tree containing a verified hard link to only that socket. It uses an empty shim cache, scrubs all nested-Zellij variables, and executes with the caller's stdin, stdout, stderr, foreground terminal, and cancellation context:
+`redeem slice attach` implements the passed Zellij 0.44.3 live-only spike contract. Live sockets and resurrection metadata are under the upstream client/server compatibility directory `contract_version_1`, not the binary version. The wrapper accepts one safe exact session and attachment token, checks the exact executable version and current-user Unix socket, then creates a dedicated, durably marked mode-0700 same-filesystem root and a separately marked `att-*` tree containing a verified hard link to only that socket. It uses an empty shim cache, scrubs all nested-Zellij variables, and executes with the caller's stdin, stdout, stderr, foreground terminal, and cancellation context:
 
 ```text
 zellij attach SESSION options --on-force-close detach
@@ -228,7 +228,7 @@ All-eligible projection desire includes eligible unnamed-workspace sources. Thos
 
 The v1 controller consumes host-authoritative `internal/slicelayout` proposals. Origins are persisted before effects, every local leech action fresh-reloads controller authority and re-proves the exact mapped epoch/window/PID/app/configured-executable/full-argv ownership immediately before mutation, and local actions use exact direct Niri IDs and verification. Host workspace, tiled/floating state, proportional width, and proportional height converge the owned leech projection; order drift is recorded only. Routed-launch handoff persists an existing token/status/identity monotonically: identities cannot be erased and pending may resolve once to launched or failed but terminal outcomes cannot regress. It performs no new host creation itself; the routed launch command below owns creation and hands the committed identity into this boundary.
 
-Pinned Zellij 0.43.1 has no `watch` command. Legacy `mirror open --mode watch` now returns an explicit unsupported result before acquiring a snapshot or constructing a command; existing attach, snapshot, list, open, status, and close behavior otherwise remains separate.
+Pinned Zellij 0.44.3 has no `watch` command. Legacy `mirror open --mode watch` now returns an explicit unsupported result before acquiring a snapshot or constructing a command; existing attach, snapshot, list, open, status, and close behavior otherwise remains separate.
 
 ## Routed Leech launch boundary
 

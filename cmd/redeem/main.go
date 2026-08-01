@@ -1333,7 +1333,7 @@ type versionedNiriObserver struct {
 
 func (observer versionedNiriObserver) Snapshot(ctx context.Context) (niriipc.State, error) {
 	if observer.command != "" {
-		if err := niriipc.VerifyVersion(ctx, observer.command, "25.11"); err != nil {
+		if err := niriipc.VerifyVersion(ctx, observer.command, niriipc.SupportedVersion); err != nil {
 			return niriipc.State{}, err
 		}
 	}
@@ -1598,7 +1598,7 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 		return 2
 	}
 	if *mode == "watch" {
-		_, _ = fmt.Fprintln(stderr, "mirror watch is unsupported by pinned Zellij 0.43.1; no watch command was executed")
+		_, _ = fmt.Fprintf(stderr, "mirror watch is unsupported by pinned Zellij %s; no watch command was executed\n", zellijlive.PinnedVersion)
 		return 2
 	}
 	if *openDelay < 0 {
