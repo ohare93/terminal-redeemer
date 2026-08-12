@@ -30,3 +30,8 @@ Replace the no-flag numeric selection branch of `mirror open` with a small Bubbl
 ## Implementation Notes
 
 Relevant paths: `cmd/redeem/main.go` (`runMirrorOpen`), `cmd/redeem/main_test.go`, `internal/mirror/remote.go`, `internal/mirror/snapshot.go`, and the existing rendering/viewport examples in `internal/tui` and `internal/slicetui`. Introduce only the smallest picker package or injected chooser seam needed to keep terminal interaction out of CLI logic and tests. This task precedes the semantic styling/documentation task.
+
+
+## Blocked
+
+Superseded before implementation by the user-approved Ponytail merge: interaction, rendering, semantic palette, NO_COLOR, tests, and documentation should ship as one task to avoid duplicate render and validation passes.

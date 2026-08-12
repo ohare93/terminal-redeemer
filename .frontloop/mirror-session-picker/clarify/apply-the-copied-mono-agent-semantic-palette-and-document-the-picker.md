@@ -27,3 +27,8 @@ Give the picker the same semantic colour vocabulary and current dark values used
 ## Implementation Notes
 
 Depends on the grouped picker task. Source palette reference reviewed during planning: Pi built-in `dark.json` uses accent `#8abeb7`, success `#b5bd68`, text `#d4d4d4`, muted `#808080`, dim `#666666`, warning `#ffff00`, error `#cc6666`, and selectedBg `#3a3a4a`. Keep the copied mapping local and compact so replacing it with shared theme resolution later is straightforward only when actually requested.
+
+
+## Blocked
+
+Superseded before implementation by the user-approved Ponytail merge: palette, NO_COLOR, and README changes belong in the same picker task and should not force a second rendering/test pass.
