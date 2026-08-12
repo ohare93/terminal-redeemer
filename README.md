@@ -73,7 +73,9 @@ redeem mirror close --host workstation.example --dry-run
 redeem mirror close --host workstation.example
 ```
 
-`open` accepts exactly one selection strategy: `--all`, repeatable `--session`, `--select N`, or its interactive prompt. It preserves source order, host, title, session, and CWD in the launch plan. Interactive `attach` remains supported. Pinned Zellij 0.44.3 has no `watch` command, so `--mode watch` returns an explicit unsupported result without constructing a command. The legacy attach command clears nested-Zellij environment variables.
+`open` accepts exactly one selection strategy: `--all`, repeatable `--session`, `--select N`, or its interactive picker. The picker groups sessions under their Niri workspace (with an `(unnamed)` fallback) while preserving discovery order. Use Up/Down or j/k to move, type to filter by session, title, workspace, or CWD, Backspace to edit the filter, Space to check multiple sessions, and Ctrl+A to toggle all sessions in the current filter. Enter opens checked sessions in discovery order, or the focused session when none are checked. Esc first clears a non-empty filter and then cancels; Ctrl+C also cancels. `NO_COLOR` disables picker colours without changing its markers or layout.
+
+The noninteractive `--all`, repeatable `--session`, and `--select N` flags are unchanged. `open` preserves source order, host, title, session, and CWD in the launch plan. Interactive `attach` remains supported. Pinned Zellij 0.44.3 has no `watch` command, so `--mode watch` returns an explicit unsupported result without constructing a command. The legacy attach command clears nested-Zellij environment variables.
 
 Mirrored Kitty windows map Ctrl+V to `redeem mirror paste-image`. Supported local image clipboard data is written to a unique temporary path, copied to the same path on the source with SCP, and that path is injected through the window's private Kitty control socket. Non-image or unreadable clipboard data forwards Ctrl+V unchanged. Use `mirror.clipboard.enabled: false` or `open --no-clipboard` to disable this mapping.
 

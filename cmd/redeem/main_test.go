@@ -18,6 +18,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/mirror"
 	"github.com/jmo/terminal-redeemer/internal/niriipc"
 	"github.com/jmo/terminal-redeemer/internal/replay"
 	"github.com/jmo/terminal-redeemer/internal/resume"
@@ -977,6 +978,91 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	stderr.Reset()
 	if code := run([]string{"mirror", "open", "--mode", "watch"}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "unsupported by pinned Zellij") {
 		t.Fatalf("watch code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestMirrorOpenInteractivePickerIntegrationAndCancellation(t *testing.T) {
+	original := chooseMirrorSessions
+	defer func() { chooseMirrorSessions = original }()
+
+	snapshotPath := filepath.Join(t.TempDir(), "snapshot.json")
+	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"first","workspace_name":"Dev","zellij_session":"alpha","terminal":{"cwd":"/tmp/a","zellij_session":"alpha"}},{"order":1,"source_window_id":2,"app_id":"kitty","title":"second","workspace_name":"Chat","zellij_session":"beta","terminal":{"cwd":"/tmp/b","zellij_session":"beta"}}]}`
+	if err := os.WriteFile(snapshotPath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	chooseMirrorSessions = func(windows []mirror.Window) ([]mirror.Window, bool, error) {
+		called = true
+		if len(windows) != 2 || mirror.SessionName(windows[0]) != "alpha" || windows[0].WorkspaceName != "Dev" {
+			t.Fatalf("picker received unexpected discovery: %#v", windows)
+		}
+		return []mirror.Window{windows[1]}, false, nil
+	}
+	var out, stderr bytes.Buffer
+	code := run([]string{"mirror", "open", "--snapshot-file", snapshotPath, "--dry-run", "--no-clipboard"}, &out, &stderr)
+	if code != 0 || !called || !strings.Contains(out.String(), "second") || strings.Contains(out.String(), "first") {
+		t.Fatalf("code=%d called=%t out=%q stderr=%q", code, called, out.String(), stderr.String())
+	}
+
+	chooseMirrorSessions = func([]mirror.Window) ([]mirror.Window, bool, error) {
+		return nil, true, nil
+	}
+	out.Reset()
+	stderr.Reset()
+	code = run([]string{"mirror", "open", "--snapshot-file", snapshotPath}, &out, &stderr)
+	if code != 0 || out.Len() != 0 || stderrWithoutWarning(stderr.String()) != "" {
+		t.Fatalf("cancel code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	}
+}
+
+func TestMirrorOpenNoninteractiveFlagsBypassPickerAndPreserveOrdering(t *testing.T) {
+	original := chooseMirrorSessions
+	defer func() { chooseMirrorSessions = original }()
+	chooseMirrorSessions = func([]mirror.Window) ([]mirror.Window, bool, error) {
+		t.Fatal("noninteractive selection invoked picker")
+		return nil, false, nil
+	}
+
+	snapshotPath := filepath.Join(t.TempDir(), "snapshot.json")
+	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"first","zellij_session":"alpha","terminal":{"cwd":"/tmp/a","zellij_session":"alpha"}},{"order":1,"source_window_id":2,"app_id":"kitty","title":"second","zellij_session":"beta","terminal":{"cwd":"/tmp/b","zellij_session":"beta"}}]}`
+	if err := os.WriteFile(snapshotPath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	base := []string{"mirror", "open", "--snapshot-file", snapshotPath, "--dry-run", "--no-clipboard"}
+	tests := []struct {
+		name      string
+		flags     []string
+		want      []string
+		dontWant  []string
+		wantOrder bool
+	}{
+		{name: "all", flags: []string{"--all"}, want: []string{"first", "second"}, wantOrder: true},
+		{name: "repeatable session", flags: []string{"--session", "beta", "--session", "alpha"}, want: []string{"first", "second"}, wantOrder: true},
+		{name: "select", flags: []string{"--select", "2"}, want: []string{"second"}, dontWant: []string{"first"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			code := run(append(append([]string(nil), base...), tc.flags...), &out, &stderr)
+			if code != 0 {
+				t.Fatalf("code=%d stderr=%q", code, stderr.String())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("output missing %q: %s", want, out.String())
+				}
+			}
+			for _, unwanted := range tc.dontWant {
+				if strings.Contains(out.String(), unwanted) {
+					t.Fatalf("output unexpectedly contains %q: %s", unwanted, out.String())
+				}
+			}
+			if tc.wantOrder && strings.Index(out.String(), "first") > strings.Index(out.String(), "second") {
+				t.Fatalf("launch ordering changed: %s", out.String())
+			}
+		})
 	}
 }
 

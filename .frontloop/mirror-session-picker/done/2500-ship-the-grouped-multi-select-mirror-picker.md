@@ -33,3 +33,20 @@ Replace `mirror open`'s raw numeric prompt with one cohesive Bubble Tea picker c
 ## Implementation Notes
 
 Relevant paths: `cmd/redeem/main.go` (`runMirrorOpen`), `cmd/redeem/main_test.go`, `internal/mirror/remote.go`, `internal/mirror/snapshot.go`, `README.md`, and existing display-cell/viewport patterns in `internal/slicetui` and `internal/tui`. Add only the smallest picker package and chooser injection seam needed to keep terminal interaction testable. This task supersedes both clarify tasks in this epic; they were moved out of ready before implementation following the Grok 4.5 Ponytail review.
+
+
+## Completion Summary
+
+- Replaced the numeric stdin prompt with a grouped Bubble Tea multi-select picker and clean cancellation path.
+- Added discovery-order selection, workspace grouping, case-insensitive filtering, keyboard controls, responsive ANSI/display-cell-safe rendering, Pi dark semantic colours, and NO_COLOR support.
+- Preserved and tested --all, repeatable --session, and --select behavior and ordering; documented picker controls.
+- Independently verified focused picker/CLI tests and the full Go suite: 803 tests passed across 37 packages.
+
+### Files Changed
+
+- README.md
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- internal/mirrortui/app.go
+- internal/mirrortui/model.go
+- internal/mirrortui/model_test.go

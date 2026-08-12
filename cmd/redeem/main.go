@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -31,6 +30,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/doctor"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
+	"github.com/jmo/terminal-redeemer/internal/mirrortui"
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/niri"
 	"github.com/jmo/terminal-redeemer/internal/niriipc"
@@ -1572,6 +1572,8 @@ func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer
 	return 0
 }
 
+var chooseMirrorSessions = mirrortui.Run
+
 func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mirror open", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1631,20 +1633,10 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 			selected = windows[*selectIndex-1 : *selectIndex]
 		}
 	default:
-		for i, window := range windows {
-			_, _ = fmt.Fprintf(stdout, "%d\t%s\t%s\n", i+1, mirror.SessionName(window), window.Title)
-		}
-		_, _ = fmt.Fprint(stdout, "select session> ")
-		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
-		if readErr != nil {
-			err = fmt.Errorf("interactive selection failed: %w", readErr)
-		} else {
-			choice, parseErr := strconv.Atoi(strings.TrimSpace(line))
-			if parseErr != nil || choice < 1 || choice > len(windows) {
-				err = fmt.Errorf("invalid selection %q", strings.TrimSpace(line))
-			} else {
-				selected = windows[choice-1 : choice]
-			}
+		var cancelled bool
+		selected, cancelled, err = chooseMirrorSessions(windows)
+		if cancelled {
+			return 0
 		}
 	}
 	if err != nil {
