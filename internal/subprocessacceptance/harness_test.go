@@ -374,7 +374,7 @@ func runCrashRPCHelper() int {
 		}, nil
 	}
 	packagedSnapshot := func(ctx context.Context) (sliceprotocol.Envelope, error) {
-		cmd := exec.CommandContext(ctx, topo.Redeem, "--config", topo.HostConfig, "slice", "inventory", "snapshot", "--state-dir", topo.HostState, "--accept-schema-version", "1")
+		cmd := exec.CommandContext(ctx, topo.Redeem, "--config", topo.HostConfig, "slice", "inventory", "snapshot", "--state-dir", topo.HostState, "--accept-schema-version", "2")
 		cmd.Env = append([]string(nil), topo.HostEnv...)
 		payload, err := cmd.CombinedOutput()
 		if err != nil {
@@ -1164,7 +1164,7 @@ func TestHermeticTwoNodePackagedSubprocessLifecycle(t *testing.T) {
 
 	runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "init", "--state-dir", host.state)
 	runFailContains(t, redeem, host.config, hostEnv, "already initialized", "slice", "inventory", "init", "--state-dir", host.state)
-	snap := runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--niri-socket", hostNiri.path, "--niri-command", filepath.Join(bin, "niri"), "--zellij-command", zellij, "--zellij-socket-dir", filepath.Join(host.runtime, "z"), "--zellij-cache-home", host.cache, "--timeout", "10s", "--accept-schema-version", "1")
+	snap := runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--niri-socket", hostNiri.path, "--niri-command", filepath.Join(bin, "niri"), "--zellij-command", zellij, "--zellij-socket-dir", filepath.Join(host.runtime, "z"), "--zellij-cache-home", host.cache, "--timeout", "10s", "--accept-schema-version", "2")
 	var initialEnvelope struct {
 		Observation struct {
 			Quality string `json:"quality"`
@@ -1610,7 +1610,7 @@ func TestHermeticTwoNodePackagedSubprocessLifecycle(t *testing.T) {
 	if err := hostNiri.restart(); err != nil {
 		t.Fatal(err)
 	}
-	snap2 := runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--niri-socket", hostNiri.path, "--niri-command", filepath.Join(bin, "niri"), "--zellij-command", zellij, "--zellij-socket-dir", filepath.Join(host.runtime, "z"), "--zellij-cache-home", host.cache, "--timeout", "10s", "--accept-schema-version", "1")
+	snap2 := runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--niri-socket", hostNiri.path, "--niri-command", filepath.Join(bin, "niri"), "--zellij-command", zellij, "--zellij-socket-dir", filepath.Join(host.runtime, "z"), "--zellij-cache-home", host.cache, "--timeout", "10s", "--accept-schema-version", "2")
 	var second struct {
 		Authoritative *struct {
 			SourceEpoch string `json:"source_epoch"`

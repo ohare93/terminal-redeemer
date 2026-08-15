@@ -310,7 +310,7 @@ func assertCrashCardinality(t *testing.T, label, root, redeem, zellij string, ho
 	if len(tokens) != baseline.tokenFiles+1 {
 		t.Fatalf("%s token files=%d want=%d", label, len(tokens), baseline.tokenFiles+1)
 	}
-	snapshot := runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--accept-schema-version", "1")
+	snapshot := runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--accept-schema-version", "2")
 	var envelope sliceprotocol.Envelope
 	if err := json.Unmarshal(snapshot, &envelope); err != nil || envelope.Observation.Quality != sliceprotocol.QualityComplete || envelope.Authoritative == nil {
 		t.Fatalf("%s complete authority unavailable: err=%v snapshot=%s", label, err, snapshot)
@@ -413,7 +413,7 @@ func TestRoutedLaunchPackagedProcessCrashMatrix(t *testing.T) {
 	}
 	inventoryDeadline := time.Now().Add(15 * time.Second)
 	for authority.Authoritative == nil {
-		snapshot = runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--niri-socket", niri.path, "--niri-command", filepath.Join(bin, "niri"), "--zellij-command", zellij, "--zellij-socket-dir", filepath.Join(host.runtime, "z"), "--zellij-cache-home", host.cache, "--timeout", "10s", "--accept-schema-version", "1")
+		snapshot = runOK(t, redeem, host.config, hostEnv, "slice", "inventory", "snapshot", "--state-dir", host.state, "--niri-socket", niri.path, "--niri-command", filepath.Join(bin, "niri"), "--zellij-command", zellij, "--zellij-socket-dir", filepath.Join(host.runtime, "z"), "--zellij-cache-home", host.cache, "--timeout", "10s", "--accept-schema-version", "2")
 		authority = struct {
 			SourceHostID  string `json:"source_host_id"`
 			Authoritative *struct {
