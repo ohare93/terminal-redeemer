@@ -28,3 +28,15 @@ Rework the picker’s presentation so project/directory and cleaned activity are
 ## Implementation Notes
 
 Primary paths: internal/mirrortui/model.go and internal/mirrortui/model_test.go. Current data already includes Title, Terminal.CWD, WorkspaceName, IsFocused, and ZellijSession. Keep title cleanup conservative, such as stripping only an exact leading session plus known separator.
+
+
+## Completion Summary
+
+- Reworked wide picker rows around project/directory, activity, and session columns with responsive headings and concise status/actions.
+- Added conservative activity cleanup, tail-preserving path truncation, focused-source indication, and sole unnamed-group suppression.
+- Added regression coverage for wide/narrow, focused/checked, empty/filter-empty, activity cleanup, and path truncation states; package and repository tests pass.
+
+### Files Changed
+
+- internal/mirrortui/model.go
+- internal/mirrortui/model_test.go
