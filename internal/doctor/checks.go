@@ -36,58 +36,6 @@ func (c ConfigLoadCheck) Run(_ context.Context) Result {
 	return Result{Name: c.Name(), Status: StatusPass, Detail: "valid"}
 }
 
-type NiriSourceCheck struct {
-	FixturePath string
-	Command     string
-	ReadFile    func(name string) ([]byte, error)
-	LookPath    func(file string) (string, error)
-	Parse       func(raw []byte) error
-}
-
-func (c NiriSourceCheck) Name() string {
-	return "niri_source"
-}
-
-func (c NiriSourceCheck) Run(_ context.Context) Result {
-	readFile := c.ReadFile
-	if readFile == nil {
-		readFile = os.ReadFile
-	}
-	lookPath := c.LookPath
-	if lookPath == nil {
-		lookPath = exec.LookPath
-	}
-	parse := c.Parse
-	if parse == nil {
-		parse = func(raw []byte) error {
-			_, err := niri.ParseSnapshot(raw)
-			return err
-		}
-	}
-
-	fixture := strings.TrimSpace(c.FixturePath)
-	if fixture != "" {
-		payload, err := readFile(fixture)
-		if err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("fixture unreadable: %v", err)}
-		}
-		if err := parse(payload); err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("fixture invalid: %v", err)}
-		}
-		return Result{Name: c.Name(), Status: StatusPass, Detail: "fixture readable and valid"}
-	}
-
-	binary, err := firstCommandToken(c.Command)
-	if err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: err.Error()}
-	}
-	if _, err := lookPath(binary); err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("command unavailable: %s", binary)}
-	}
-
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("command available: %s", binary)}
-}
-
 type CommandAvailableCheck struct {
 	CheckName string
 	Command   string

@@ -3,7 +3,6 @@ package capture
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -187,26 +186,5 @@ func TestConcurrentCaptureCannotPublishAnOlderPendingObservationAfterANewerOne(t
 	collector.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("collector calls=%d, want 2 (blocked capture must not collect)", calls)
-	}
-}
-
-func TestCaptureRunContinuesAfterRecoverableError(t *testing.T) {
-	root := t.TempDir()
-	collector := &sequenceCollector{states: []model.State{capturedState("unused"), capturedState("success")}, errs: []error{errors.New("temporary"), nil}}
-	var log strings.Builder
-	runner, store := newTestRunner(t, root, "boot-a", collector, time.Now)
-	runner.logger = &log
-	ticks := make(chan time.Time, 2)
-	ticks <- time.Now()
-	ticks <- time.Now()
-	close(ticks)
-	if err := runner.CaptureRun(context.Background(), ticks); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(log.String(), "capture_once_error") {
-		t.Fatalf("missing recoverable error log: %q", log.String())
-	}
-	if _, err := store.Read("boot-a", "host", "default"); err != nil {
-		t.Fatalf("later capture did not succeed: %v", err)
 	}
 }

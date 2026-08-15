@@ -34,7 +34,6 @@ let
       launcherCommand = cfg.mirror.launcherCommand;
       selfCommand = cfg.mirror.selfCommand;
       appID = cfg.mirror.appID;
-      defaultMode = cfg.mirror.defaultMode;
       openDelay = cfg.mirror.openDelay;
       niriCommand = cfg.mirror.niriCommand;
       clipboard = {
@@ -47,7 +46,7 @@ let
         mimeTypes = cfg.mirror.clipboard.mimeTypes;
       };
     };
-  } // cfg.extraConfig;
+  };
   settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" renderedConfig;
   configPath = "${config.xdg.configHome}/terminal-redeemer/config.yaml";
   captureExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} capture once";
@@ -92,7 +91,7 @@ in {
     host = lib.mkOption {
       type = lib.types.str;
       default = "local";
-      description = "Host partition key for event storage.";
+      description = "Host partition key for rolling boot checkpoints.";
     };
 
     profile = lib.mkOption {
@@ -181,7 +180,6 @@ in {
       launcherCommand = lib.mkOption { type = lib.types.str; default = "kitty"; description = "Kitty-compatible local launcher executable."; };
       selfCommand = lib.mkOption { type = lib.types.str; default = "redeem"; description = "Redeem executable used in Kitty clipboard mappings."; };
       appID = lib.mkOption { type = lib.types.str; default = "terminal-redeemer-mirror"; description = "App ID/class marking Terminal Redeemer-owned mirror windows."; };
-      defaultMode = lib.mkOption { type = lib.types.enum [ "attach" "watch" ]; default = "attach"; description = "Default Zellij mirror mode."; };
       openDelay = lib.mkOption { type = lib.types.str; default = "150ms"; description = "Delay between local window launches."; };
       niriCommand = lib.mkOption { type = lib.types.str; default = "niri"; description = "Niri executable for owned-window operations."; };
       clipboard = {
@@ -193,12 +191,6 @@ in {
         tempDir = lib.mkOption { type = lib.types.str; default = "/tmp"; description = "Absolute temporary path shared with the source host."; };
         mimeTypes = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "image/png" "image/jpeg" "image/webp" "image/gif" ]; description = "Preferred supported clipboard image MIME types."; };
       };
-    };
-
-    extraConfig = lib.mkOption {
-      type = lib.types.attrs;
-      default = { };
-      description = "Additional raw config merged into rendered YAML.";
     };
 
     renderedConfig = lib.mkOption {

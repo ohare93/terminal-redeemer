@@ -52,6 +52,18 @@
           ];
         };
 
+        checks.packaged-cli = pkgs.runCommand "terminal-redeemer-packaged-cli" { } ''
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem --help > root-help
+          grep -q "Refresh this boot's rolling terminal checkpoint" root-help
+          grep -q "Restore exact prior-boot terminal placement" root-help
+          grep -q "Create, browse, and reopen remote terminal sessions" root-help
+          grep -q "Read-only capture/resume/mirror diagnostics" root-help
+
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror new --help > /dev/null 2> mirror-new-help
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror open --help > /dev/null 2> mirror-open-help
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem resume --help > /dev/null 2> resume-help
+          touch "$out"
+        '';
 
         checks.hm-module-eval =
           let
@@ -88,7 +100,6 @@
                       launcherCommand = "custom-kitty";
                       selfCommand = "/run/current-system/sw/bin/redeem";
                       appID = "redeem-owned";
-                      defaultMode = "watch";
                       openDelay = "25ms";
                       niriCommand = "custom-niri";
                       clipboard = {
@@ -141,7 +152,6 @@
           assert rendered.mirror.sshOptions == [ "-p" "2222" ];
           assert rendered.mirror.snapshotCommand == [ "remote-redeem" "mirror" "snapshot" ];
           assert rendered.mirror.appID == "redeem-owned";
-          assert rendered.mirror.defaultMode == "watch";
           assert rendered.mirror.openDelay == "25ms";
           assert rendered.mirror.clipboard.scpOptions == [ "-P" "2222" ];
           assert rendered.mirror.clipboard.mimeTypes == [ "image/webp" ];
@@ -231,7 +241,6 @@
                       resume.onStartup = true;
                       resume.terminalCommand = "foot";
                       mirror.sourceHost = "source.example";
-                      mirror.defaultMode = "watch";
                     };
                   };
                 }
@@ -243,7 +252,9 @@
           assert rendered.resume.onStartup;
           assert rendered.resume.terminalCommand == "foot";
           assert rendered.mirror.sourceHost == "source.example";
-          assert rendered.mirror.defaultMode == "watch";
+          assert pkgs.lib.hasInfix ''Mod+Return { spawn "kitty"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"mirror" "new" "--host" "source.example"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"mirror" "open" "--host" "source.example"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert hmUser.systemd.user.services ? terminal-redeemer-resume;
           pkgs.runCommand "nixos-module-eval" { } ''
             touch "$out"

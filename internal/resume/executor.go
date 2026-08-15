@@ -374,8 +374,7 @@ func processExitReason(prefix string, err error) string {
 }
 
 // KittyLaunchSpec deliberately uses no shell and preserves Kitty's normal app
-// ID. Zellij receives attach-only argv; historical attach-or-create settings
-// are not consulted by resume.
+// ID. Zellij receives attach-only argv; resume never creates a missing session.
 func KittyLaunchSpec(command string, item Item) LaunchSpec {
 	args := make([]string, 0, 6)
 	if cwd := strings.TrimSpace(item.CWD); cwd != "" {

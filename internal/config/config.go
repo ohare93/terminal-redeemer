@@ -55,7 +55,6 @@ type MirrorConfig struct {
 	LauncherCommand string                `yaml:"launcherCommand"`
 	SelfCommand     string                `yaml:"selfCommand"`
 	AppID           string                `yaml:"appID"`
-	DefaultMode     string                `yaml:"defaultMode"`
 	OpenDelay       time.Duration         `yaml:"openDelay"`
 	NiriCommand     string                `yaml:"niriCommand"`
 	Clipboard       MirrorClipboardConfig `yaml:"clipboard"`
@@ -123,7 +122,6 @@ func Defaults() Config {
 			LauncherCommand: "kitty",
 			SelfCommand:     "redeem",
 			AppID:           "terminal-redeemer-mirror",
-			DefaultMode:     "attach",
 			OpenDelay:       150 * time.Millisecond,
 			NiriCommand:     "niri",
 			Clipboard: MirrorClipboardConfig{
@@ -205,9 +203,6 @@ func Validate(cfg Config) error {
 	default:
 		return fmt.Errorf("resume.unresolvedWorkspace must be current, skip, or fail")
 	}
-	if cfg.Mirror.DefaultMode != "attach" && cfg.Mirror.DefaultMode != "watch" {
-		return fmt.Errorf("mirror.defaultMode must be attach or watch")
-	}
 	if strings.TrimSpace(cfg.Mirror.SSHCommand) == "" {
 		return fmt.Errorf("mirror.sshCommand must not be empty")
 	}
@@ -224,8 +219,8 @@ func Validate(cfg Config) error {
 		return fmt.Errorf("mirror.openDelay must not be negative")
 	}
 	if cfg.Mirror.Clipboard.Enabled {
-		if strings.TrimSpace(cfg.Mirror.Clipboard.Command) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.SCPCommand) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.KittyCommand) == "" {
-			return fmt.Errorf("enabled mirror.clipboard commands must not be empty")
+		if strings.TrimSpace(cfg.Mirror.SelfCommand) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.Command) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.SCPCommand) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.KittyCommand) == "" {
+			return fmt.Errorf("enabled mirror clipboard commands must not be empty")
 		}
 		if !filepath.IsAbs(cfg.Mirror.Clipboard.TempDir) {
 			return fmt.Errorf("mirror.clipboard.tempDir must be absolute")

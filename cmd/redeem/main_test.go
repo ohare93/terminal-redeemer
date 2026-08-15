@@ -36,11 +36,33 @@ func TestHelpByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if !strings.Contains(out.String(), "redeem - terminal placement resume and remote sessions") || !strings.Contains(out.String(), "Snapshot, discover, and mirror live terminal sessions") {
-		t.Fatalf("expected discoverable mirror help output, got %q", out.String())
+	for _, want := range []string{
+		"Refresh this boot's rolling terminal checkpoint",
+		"Restore exact prior-boot terminal placement",
+		"Create, browse, and reopen remote terminal sessions",
+		"Read-only capture/resume/mirror diagnostics",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help output missing %q: %q", want, out.String())
+		}
 	}
 	if stderrWithoutWarning(errBuf.String()) != "" {
 		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", errBuf.String())
+	}
+}
+
+func TestHelpDoesNotRequireValidRuntimeConfig(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "invalid.yaml")
+	if err := os.WriteFile(path, []byte("unknownField: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := run([]string{"--config", path, "--help"}, &out, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Create, browse, and reopen remote terminal sessions") {
+		t.Fatalf("unexpected help: %q", out.String())
 	}
 }
 
@@ -59,21 +81,6 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestRemovedProductCommandsAreUnknown(t *testing.T) {
-	t.Parallel()
-	for _, command := range []string{"slice", "history", "restore"} {
-		command := command
-		t.Run(command, func(t *testing.T) {
-			var out bytes.Buffer
-			var err bytes.Buffer
-			code := run([]string{command, "--help"}, &out, &err)
-			if code != 2 || !strings.Contains(err.String(), "unknown command: "+command) {
-				t.Fatalf("code=%d stderr=%q", code, err.String())
-			}
-		})
-	}
-}
-
 func TestSubcommandHelpExitCodes(t *testing.T) {
 	t.Parallel()
 
@@ -82,7 +89,6 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		args []string
 	}{
 		{name: "capture once", args: []string{"capture", "once", "--help"}},
-		{name: "capture run", args: []string{"capture", "run", "--help"}},
 		{name: "mirror snapshot", args: []string{"mirror", "snapshot", "--help"}},
 		{name: "mirror list", args: []string{"mirror", "list", "--help"}},
 		{name: "mirror open", args: []string{"mirror", "open", "--help"}},
@@ -122,7 +128,6 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 		want string
 	}{
 		{name: "capture once unknown flag", args: []string{"capture", "once", "--no-such-flag"}, want: "flag provided but not defined"},
-		{name: "capture run unknown flag", args: []string{"capture", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "resume invalid timeout", args: []string{"resume", "--timeout", "0s"}, want: "--timeout and --poll-interval must be positive"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
@@ -489,7 +494,7 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	}
 	var out bytes.Buffer
 	var stderr bytes.Buffer
-	code := run([]string{"mirror", "open", "--snapshot-file", snapshotPath, "--host", "source", "--all", "--dry-run", "--no-clipboard", "--mode", "attach"}, &out, &stderr)
+	code := run([]string{"mirror", "open", "--snapshot-file", snapshotPath, "--host", "source", "--all", "--dry-run", "--no-clipboard"}, &out, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -497,11 +502,6 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 		if !strings.Contains(out.String(), part) {
 			t.Fatalf("dry-run missing %q: %s", part, out.String())
 		}
-	}
-	out.Reset()
-	stderr.Reset()
-	if code := run([]string{"mirror", "open", "--mode", "watch"}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "unsupported by pinned Zellij") {
-		t.Fatalf("watch code=%d stderr=%q", code, stderr.String())
 	}
 }
 
@@ -614,19 +614,13 @@ func TestMirrorOpenNoninteractiveFlagsBypassPickerAndPreserveOrdering(t *testing
 	}
 }
 
-func TestMirrorCLIParseAndMalformedSnapshotErrors(t *testing.T) {
+func TestMirrorMalformedSnapshotError(t *testing.T) {
 	var out bytes.Buffer
 	var stderr bytes.Buffer
-	if code := run([]string{"mirror", "open", "--mode", "edit"}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "invalid mirror mode") {
-		t.Fatalf("invalid mode code=%d stderr=%q", code, stderr.String())
-	}
-
 	path := filepath.Join(t.TempDir(), "bad.json")
 	if err := os.WriteFile(path, []byte(`{"windows":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out.Reset()
-	stderr.Reset()
 	if code := run([]string{"mirror", "list", "--snapshot-file", path}, &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "malformed remote mirror snapshot") {
 		t.Fatalf("malformed code=%d stderr=%q", code, stderr.String())
 	}

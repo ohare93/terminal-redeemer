@@ -63,7 +63,6 @@ mirror:
   launcherCommand: custom-kitty
   selfCommand: /bin/redeem
   appID: redeem-owned
-  defaultMode: watch
   openDelay: 25ms
   niriCommand: custom-niri
   clipboard:
@@ -88,7 +87,7 @@ mirror:
 	if !cfg.Resume.OnStartup || cfg.Resume.MaxCheckpointAge != 12*time.Hour || cfg.Resume.UnresolvedWorkspace != "skip" || cfg.Resume.Timeout != 8*time.Second || cfg.Resume.PollInterval != 25*time.Millisecond || cfg.Resume.TerminalCommand != "foot" {
 		t.Fatalf("unexpected resume config: %#v", cfg.Resume)
 	}
-	if cfg.Mirror.SourceHost != "source-a" || cfg.Mirror.SSHCommand != "custom-ssh" || cfg.Mirror.DefaultMode != "watch" || cfg.Mirror.OpenDelay != 25*time.Millisecond || cfg.Mirror.Clipboard.TempDir != "/var/tmp" {
+	if cfg.Mirror.SourceHost != "source-a" || cfg.Mirror.SSHCommand != "custom-ssh" || cfg.Mirror.OpenDelay != 25*time.Millisecond || cfg.Mirror.Clipboard.TempDir != "/var/tmp" {
 		t.Fatalf("unexpected mirror config: %#v", cfg.Mirror)
 	}
 }
@@ -113,30 +112,22 @@ func TestLoadRejectsInvalidResumeConfig(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsRemovedProductConfig(t *testing.T) {
-	for name, payload := range map[string]string{
-		"slice":         "slice: {}\n",
-		"restore":       "restore: {}\n",
-		"snapshotEvery": "capture:\n  snapshotEvery: 10\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := Load(path, true); err == nil {
-				t.Fatal("expected removed config to be rejected")
-			}
-		})
-	}
-}
-
-func TestLoadRejectsInvalidMirrorConfig(t *testing.T) {
+func TestLoadRejectsIncompleteClipboardCommands(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("mirror:\n  defaultMode: edit\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("mirror:\n  selfCommand: ''\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path, true); err == nil {
-		t.Fatal("expected invalid mirror mode error")
+		t.Fatal("expected enabled clipboard bridge to require self command")
+	}
+}
+
+func TestLoadRejectsUnknownConfigField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("unknownField: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, true); err == nil {
+		t.Fatal("expected unknown config field to be rejected")
 	}
 }

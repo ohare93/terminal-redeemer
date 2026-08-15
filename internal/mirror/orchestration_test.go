@@ -88,9 +88,9 @@ func TestDiscoverFiltersOrdersAndDeduplicatesExactSessions(t *testing.T) {
 	}
 }
 
-func TestPlanLaunchAttachMetadataAndWatchUnsupported(t *testing.T) {
+func TestPlanLaunchAttachMetadata(t *testing.T) {
 	window := Window{Order: 4, SourceWindowID: 9, Title: "Project\nTitle", ZellijSession: "bad'; echo owned", Terminal: &Terminal{CWD: "/tmp/a'b"}}
-	cfg := LaunchConfig{SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Mode: "attach", Socket: "unix:/tmp/redeem.sock", Clipboard: true}
+	cfg := LaunchConfig{SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Socket: "unix:/tmp/redeem.sock", Clipboard: true}
 	plan, err := PlanLaunch(window, cfg)
 	if err != nil {
 		t.Fatalf("plan attach: %v", err)
@@ -110,10 +110,6 @@ func TestPlanLaunchAttachMetadataAndWatchUnsupported(t *testing.T) {
 	}
 	if plan.Command.Args[len(plan.Command.Args)-3] != "--" || plan.Command.Args[len(plan.Command.Args)-2] != "source" {
 		t.Fatalf("SSH host boundary missing: %#v", plan.Command.Args)
-	}
-	cfg.Mode = "watch"
-	if _, err := PlanLaunch(window, cfg); err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("watch should be explicitly unsupported, got %v", err)
 	}
 }
 

@@ -6,7 +6,7 @@
 
 After a reboot, Niri runtime workspace/window IDs and process IDs are different. A safe resume mechanism must recover exact live Zellij sessions without guessing which new Kitty window belongs to which captured terminal or creating a missing session under a stale name.
 
-The product needs the latest successful placement from each boot, not a time-travel event timeline or arbitrary GUI application recreation.
+The product needs the latest successful terminal placement from each boot.
 
 ## Decision
 
@@ -44,7 +44,6 @@ Manual `redeem resume` is the default. Home Manager may invoke the same command 
 - Current-boot capture cannot hide the newest prior-boot recovery candidate.
 - Session attachment and workspace mutation cannot target a window chosen by prefix, app ID, creation order, or proximity.
 - The state model is intentionally terminal-only and one checkpoint per boot.
-- Old event logs and timestamped snapshots are ignored and left untouched rather than migrated destructively.
 
 ## Rejected alternatives
 
@@ -52,4 +51,3 @@ Manual `redeem resume` is the default. Home Manager may invoke the same command 
 - **Application ID or launch-order correlation:** concurrent windows can be assigned to the wrong workspace.
 - **Current-boot latest state:** startup capture could overwrite the state needed for recovery.
 - **Continuous compositor subscription:** adds lifecycle/reconnect complexity without evidence that periodic complete capture is insufficient.
-- **General GUI application recreation:** application identity and duplicate behavior are not strong enough for the required safety boundary.

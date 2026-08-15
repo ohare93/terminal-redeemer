@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/bootid"
@@ -26,7 +24,6 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/prune"
 	"github.com/jmo/terminal-redeemer/internal/resume"
-	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 func main() {
@@ -48,6 +45,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	}
 
+	if isHelpToken(args[0]) {
+		printHelp(stdout)
+		return 0
+	}
 	if args[0] == "doctor" {
 		return runDoctor(globalFlags, stdout)
 	}
@@ -59,9 +60,6 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
-	case "-h", "--help", "help":
-		printHelp(stdout)
-		return 0
 	case "capture":
 		return runCapture(args[1:], resolvedConfig, stdout, stderr)
 	case "mirror":
@@ -70,9 +68,6 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runResume(args[1:], resolvedConfig, stdout, stderr)
 	case "prune":
 		return runPrune(args[1:], resolvedConfig, stdout, stderr)
-	case "bottle":
-		_, _ = fmt.Fprintf(stderr, "subcommand '%s' scaffolded but not implemented yet\n", args[0])
-		return 2
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printHelp(stderr)
@@ -115,8 +110,10 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 		)
 		if resolvedConfig.Mirror.Clipboard.Enabled {
 			checks = append(checks,
+				doctor.CommandAvailableCheck{CheckName: "mirror_self_available", Command: resolvedConfig.Mirror.SelfCommand},
 				doctor.CommandAvailableCheck{CheckName: "mirror_clipboard_available", Command: resolvedConfig.Mirror.Clipboard.Command},
 				doctor.CommandAvailableCheck{CheckName: "mirror_scp_available", Command: resolvedConfig.Mirror.Clipboard.SCPCommand},
+				doctor.CommandAvailableCheck{CheckName: "mirror_kitty_available", Command: resolvedConfig.Mirror.Clipboard.KittyCommand},
 			)
 		}
 	}
@@ -354,7 +351,6 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 	fs := flag.NewFlagSet("mirror open", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
-	mode := fs.String("mode", resolvedConfig.Mirror.DefaultMode, "attach or watch")
 	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
 	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
 	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by Kitty clipboard mapping")
@@ -369,14 +365,6 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 		if err == flag.ErrHelp {
 			return 0
 		}
-		return 2
-	}
-	if *mode != "attach" && *mode != "watch" {
-		_, _ = fmt.Fprintf(stderr, "invalid mirror mode %q (expected attach or watch)\n", *mode)
-		return 2
-	}
-	if *mode == "watch" {
-		_, _ = fmt.Fprintf(stderr, "mirror watch is unsupported by pinned Zellij %s; no watch command was executed\n", zellijlive.PinnedVersion)
 		return 2
 	}
 	if *openDelay < 0 {
@@ -428,7 +416,7 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 		socket := fmt.Sprintf("unix:/tmp/%s-%s.sock", safeSocketPart(*appID), unique)
 		plan, planErr := mirror.PlanLaunch(window, mirror.LaunchConfig{
 			SourceHost: host, SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values,
-			LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID, Mode: *mode,
+			LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID,
 			Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
 		})
 		if planErr != nil {
@@ -756,23 +744,18 @@ func runPrune(args []string, resolvedConfig config.Config, stdout io.Writer, std
 
 func runCapture(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem capture <once|run> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: redeem capture once [flags]")
 		return 2
 	}
 	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem capture <once|run> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem capture once [flags]")
 		return 0
 	}
-
-	switch args[0] {
-	case "once":
-		return runCaptureOnce(args[1:], resolvedConfig, stdout, stderr)
-	case "run":
-		return runCaptureRun(args[1:], resolvedConfig, stdout, stderr)
-	default:
+	if args[0] != "once" {
 		writef(stderr, "unknown capture subcommand: %s\n", args[0])
 		return 2
 	}
+	return runCaptureOnce(args[1:], resolvedConfig, stdout, stderr)
 }
 
 func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -806,7 +789,6 @@ func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Write
 		processWhitelist:      splitCSV(*processWhitelist),
 		processWhitelistExtra: splitCSV(*processWhitelistExtra),
 		includeSessionTag:     *includeSessionTag,
-		stderr:                stderr,
 	})
 	if err != nil {
 		writef(stderr, "capture init failed: %v\n", err)
@@ -826,57 +808,6 @@ func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Write
 	return 0
 }
 
-func runCaptureRun(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
-	fs := flag.NewFlagSet("capture run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
-	host := fs.String("host", resolvedConfig.Host, "host identifier")
-	profile := fs.String("profile", resolvedConfig.Profile, "profile name")
-	interval := fs.Duration("interval", resolvedConfig.Capture.Interval, "capture interval")
-	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "niri JSON fixture path")
-	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "niri snapshot command")
-	processWhitelist := fs.String("process-whitelist", strings.Join(resolvedConfig.ProcessMetadata.Whitelist, ","), "comma-separated process tags")
-	processWhitelistExtra := fs.String("process-whitelist-extra", strings.Join(resolvedConfig.ProcessMetadata.WhitelistExtra, ","), "comma-separated extra process tags")
-	includeSessionTag := fs.Bool("include-session-tag", resolvedConfig.ProcessMetadata.IncludeSessionTag, "capture terminal session tags")
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-	if strings.TrimSpace(*fixture) == "" && strings.TrimSpace(*niriCmd) == "" {
-		_, _ = fmt.Fprintln(stderr, "capture run requires --fixture or --niri-cmd")
-		return 2
-	}
-
-	runner, err := buildCaptureRunner(captureBuildConfig{
-		stateDir:              *stateDir,
-		host:                  *host,
-		profile:               *profile,
-		fixture:               *fixture,
-		niriCmd:               *niriCmd,
-		processWhitelist:      splitCSV(*processWhitelist),
-		processWhitelistExtra: splitCSV(*processWhitelistExtra),
-		includeSessionTag:     *includeSessionTag,
-		stderr:                stderr,
-	})
-	if err != nil {
-		writef(stderr, "capture init failed: %v\n", err)
-		return 1
-	}
-
-	ticker := time.NewTicker(*interval)
-	defer ticker.Stop()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	writef(stdout, "capture_run_started interval=%s\n", interval.String())
-	if err := runner.CaptureRun(ctx, ticker.C); err != nil {
-		writef(stderr, "capture run failed: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
 type captureBuildConfig struct {
 	stateDir              string
 	host                  string
@@ -886,7 +817,6 @@ type captureBuildConfig struct {
 	processWhitelist      []string
 	processWhitelistExtra []string
 	includeSessionTag     bool
-	stderr                io.Writer
 }
 
 func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
@@ -915,7 +845,6 @@ func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
 		StateDir:        cfg.stateDir,
 		Host:            cfg.host,
 		Profile:         cfg.profile,
-		Logger:          cfg.stderr,
 	}), nil
 }
 
@@ -1005,12 +934,11 @@ func printHelp(w io.Writer) {
 	writeln(w, "  redeem [command]")
 	writeln(w)
 	writeln(w, "Commands:")
-	writeln(w, "  capture   Capture window/session state")
-	writeln(w, "  resume    Reconcile prior-boot terminal sessions")
-	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")
+	writeln(w, "  capture   Refresh this boot's rolling terminal checkpoint")
+	writeln(w, "  resume    Restore exact prior-boot terminal placement")
+	writeln(w, "  mirror    Create, browse, and reopen remote terminal sessions")
 	writeln(w, "  prune     Prune old boot checkpoints")
-	writeln(w, "  bottle    Bottle workflows (V2)")
-	writeln(w, "  doctor    Read-only capture/resume diagnostics")
+	writeln(w, "  doctor    Read-only capture/resume/mirror diagnostics")
 	writeln(w)
 	writeln(w, "Flags:")
 	writeln(w, "  --config <path>  Path to YAML config file")

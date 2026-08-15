@@ -3,7 +3,6 @@ package capture
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -29,7 +28,6 @@ type Config struct {
 	Host            string
 	Profile         string
 	Now             func() time.Time
-	Logger          io.Writer
 }
 
 type Runner struct {
@@ -40,7 +38,6 @@ type Runner struct {
 	host            string
 	profile         string
 	now             func() time.Time
-	logger          io.Writer
 }
 
 type Result struct {
@@ -52,10 +49,6 @@ func NewRunner(config Config) *Runner {
 	now := config.Now
 	if now == nil {
 		now = time.Now
-	}
-	logger := config.Logger
-	if logger == nil {
-		logger = io.Discard
 	}
 	bootIDSource := config.BootIDSource
 	if bootIDSource == nil {
@@ -69,7 +62,6 @@ func NewRunner(config Config) *Runner {
 		host:            strings.TrimSpace(config.Host),
 		profile:         strings.TrimSpace(config.Profile),
 		now:             now,
-		logger:          logger,
 	}
 }
 
@@ -124,20 +116,4 @@ func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("publish rolling checkpoint: %w", err)
 	}
 	return Result{CheckpointPath: path, StateHash: stateHash}, nil
-}
-
-func (r *Runner) CaptureRun(ctx context.Context, ticks <-chan time.Time) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case _, ok := <-ticks:
-			if !ok {
-				return nil
-			}
-			if _, err := r.CaptureOnce(ctx); err != nil {
-				_, _ = fmt.Fprintf(r.logger, "capture_once_error err=%q\n", err.Error())
-			}
-		}
-	}
 }

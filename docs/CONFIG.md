@@ -6,7 +6,7 @@ Configuration precedence is:
 2. YAML from `--config PATH` or the XDG default path;
 3. per-command flags.
 
-The YAML decoder rejects unknown fields. Removed history, general application restore, and slice/controller keys are intentionally not accepted.
+The YAML decoder rejects unknown fields.
 
 ```yaml
 stateDir: ~/.terminal-redeemer
@@ -41,7 +41,6 @@ mirror:
   launcherCommand: kitty
   selfCommand: redeem
   appID: terminal-redeemer-mirror
-  defaultMode: attach
   openDelay: 150ms
   niriCommand: niri
   clipboard:
@@ -58,7 +57,7 @@ mirror:
 
 `capture.interval` controls the Home Manager timer and `capture.niriCommand` controls the complete Niri windows/workspaces query. Every successful capture refreshes one deterministic checkpoint for the current boot/host/profile identity. Window titles remain in the checkpoint, while the state hash excludes volatile titles.
 
-`host` partitions local checkpoints. `mirror.sourceHost` is instead the SSH destination for remote terminal access.
+`host` partitions local checkpoints. `mirror.sourceHost` is instead the SSH destination for remote terminal access. A new remote session runs on that host and is projected in a local Kitty; it does not create a visible Kitty on the source host.
 
 ## Resume policy
 

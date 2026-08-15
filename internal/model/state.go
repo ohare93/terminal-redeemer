@@ -31,7 +31,7 @@ type Window struct {
 }
 
 // WorkspaceRef contains only cross-boot workspace selectors. WorkspaceID is
-// retained separately on Window as historical/current-runtime evidence.
+// retained separately on Window as source runtime evidence.
 type WorkspaceRef struct {
 	Name   string `json:"name,omitempty"`
 	Output string `json:"output,omitempty"`

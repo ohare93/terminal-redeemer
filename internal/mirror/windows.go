@@ -23,7 +23,6 @@ type LaunchConfig struct {
 	LauncherCommand string
 	SelfCommand     string
 	AppID           string
-	Mode            string
 	Socket          string
 	Clipboard       bool
 }
@@ -38,12 +37,6 @@ type LaunchPlan struct {
 }
 
 func PlanLaunch(window Window, cfg LaunchConfig) (LaunchPlan, error) {
-	if cfg.Mode != "attach" && cfg.Mode != "watch" {
-		return LaunchPlan{}, fmt.Errorf("invalid mirror mode %q (expected attach or watch)", cfg.Mode)
-	}
-	if cfg.Mode == "watch" {
-		return LaunchPlan{}, fmt.Errorf("mirror watch is unsupported by pinned Zellij 0.44.3")
-	}
 	session := SessionName(window)
 	if session == "" {
 		return LaunchPlan{}, fmt.Errorf("source window %d has no zellij session", window.SourceWindowID)
