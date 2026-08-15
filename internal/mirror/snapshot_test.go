@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 type fakeReader map[int]procmeta.ProcessInfo
@@ -33,8 +34,16 @@ func (r fakeResolver) Resolve(session string) (string, error) {
 
 type fakeLister []string
 
-func (l fakeLister) List() ([]string, error) {
+func (l fakeLister) List(context.Context) ([]string, error) {
 	return append([]string(nil), l...), nil
+}
+
+type fakeCataloger struct {
+	catalog zellijlive.Catalog
+}
+
+func (c fakeCataloger) Observe(context.Context) (zellijlive.Catalog, error) {
+	return c.catalog, nil
 }
 
 func TestCaptureOrdersWindowsAndIncludesZellijSession(t *testing.T) {
@@ -138,6 +147,26 @@ func TestCaptureExtractsVerifiedSessionFromTitle(t *testing.T) {
 	}
 	if window.Terminal == nil || window.Terminal.CWD != "/home/jmo/project" {
 		t.Fatalf("expected resolver-upgraded cwd, got %#v", window.Terminal)
+	}
+}
+
+func TestLiveSessionListerExcludesCacheOnlyDeadSessions(t *testing.T) {
+	t.Parallel()
+
+	lister := liveSessionLister{cataloger: fakeCataloger{catalog: zellijlive.Catalog{
+		Names: []string{"active", "cache-only"},
+		Sessions: map[string]zellijlive.Session{
+			"active":     {Name: "active", Status: zellijlive.StatusActive},
+			"cache-only": {Name: "cache-only", Status: zellijlive.StatusDeadResurrectable},
+		},
+	}}}
+
+	sessions, err := lister.List(context.Background())
+	if err != nil {
+		t.Fatalf("list live sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0] != "active" {
+		t.Fatalf("live sessions = %q, want only active", sessions)
 	}
 }
 

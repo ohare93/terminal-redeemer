@@ -13,6 +13,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 const DefaultNiriCommand = "niri msg -j windows"
@@ -22,7 +23,25 @@ type CommandRunner interface {
 }
 
 type SessionLister interface {
-	List() ([]string, error)
+	List(context.Context) ([]string, error)
+}
+
+type liveSessionLister struct {
+	cataloger zellijlive.Cataloger
+}
+
+func (l liveSessionLister) List(ctx context.Context) ([]string, error) {
+	catalog, err := l.cataloger.Observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active := make([]string, 0, len(catalog.Names))
+	for _, name := range catalog.Names {
+		if catalog.Exact(name).Status == zellijlive.StatusActive {
+			active = append(active, name)
+		}
+	}
+	return active, nil
 }
 
 type Options struct {
@@ -211,10 +230,10 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 
 	lister := opts.Lister
 	if lister == nil && strings.TrimSpace(opts.FixturePath) == "" {
-		lister = procmeta.NewZellijSessionVerifier(nil)
+		lister = liveSessionLister{cataloger: zellijlive.CommandCataloger{}}
 	}
 	if lister != nil {
-		sessions, err := lister.List()
+		sessions, err := lister.List(ctx)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list live Zellij sessions: %w", err)
 		}
