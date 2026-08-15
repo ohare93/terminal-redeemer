@@ -1,7 +1,6 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.programs.terminal-redeemer;
-  supportedNiriVersion = "26.04";
   settingsFormat = pkgs.formats.yaml { };
   renderedConfig = {
     stateDir = cfg.stateDir;
