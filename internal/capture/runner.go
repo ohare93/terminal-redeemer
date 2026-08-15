@@ -76,6 +76,22 @@ func NewRunner(config Config) *Runner {
 // CaptureOnce performs one complete query and atomically replaces this boot's
 // rolling checkpoint while holding the repository's single-writer lock.
 func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
+	if r.checkpointStore == nil {
+		return Result{}, fmt.Errorf("rolling checkpoint store is unavailable")
+	}
+	if r.stateDir == "" {
+		return Result{}, fmt.Errorf("state directory is required")
+	}
+
+	// Collection is part of the serialized write transaction. Otherwise a slow
+	// capture can observe old state, wait behind a newer capture, and then
+	// overwrite the newer checkpoint with a later publication timestamp.
+	lock, err := storelock.Acquire(r.stateDir)
+	if err != nil {
+		return Result{}, fmt.Errorf("acquire checkpoint writer lock: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
+
 	state, err := r.collector.Collect(ctx)
 	if err != nil {
 		return Result{}, err
@@ -85,18 +101,6 @@ func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if r.checkpointStore == nil {
-		return Result{}, fmt.Errorf("rolling checkpoint store is unavailable")
-	}
-	if r.stateDir == "" {
-		return Result{}, fmt.Errorf("state directory is required")
-	}
-
-	lock, err := storelock.Acquire(r.stateDir)
-	if err != nil {
-		return Result{}, fmt.Errorf("acquire checkpoint writer lock: %w", err)
-	}
-	defer func() { _ = lock.Close() }()
 
 	bootID, err := r.bootIDSource()
 	if err != nil {

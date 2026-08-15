@@ -332,11 +332,13 @@ func TestPruneRunCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Write(checkpoints.Checkpoint{
-		V: checkpoints.SchemaVersion, BootID: "old", Host: "host-a", Profile: "default",
-		ObservedAt: time.Now().UTC().AddDate(0, 0, -40), State: state, StateHash: hash,
-	}); err != nil {
-		t.Fatal(err)
+	for boot, ageDays := range map[string]int{"older": -60, "newest-prior": -40} {
+		if _, err := store.Write(checkpoints.Checkpoint{
+			V: checkpoints.SchemaVersion, BootID: boot, Host: "host-a", Profile: "default",
+			ObservedAt: time.Now().UTC().AddDate(0, 0, ageDays), State: state, StateHash: hash,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var out, stderr bytes.Buffer

@@ -247,9 +247,15 @@ func List(root string) ([]Checkpoint, []Issue, error) {
 	return out, issues, nil
 }
 
-// Prune removes valid rolling checkpoints whose latest successful observation
-// predates cutoff. The caller holds the repository's single-writer lock.
-func Prune(root string, cutoff time.Time) (int, error) {
+// Prune removes expired rolling checkpoints while retaining the current boot
+// and the newest usable prior-boot checkpoint for every host/profile identity.
+// The caller holds the repository's single-writer lock.
+func Prune(root string, cutoff time.Time, currentBootID string) (int, error) {
+	currentBootID = strings.TrimSpace(currentBootID)
+	if currentBootID == "" {
+		return 0, errors.New("current boot ID is required to prune rolling checkpoints")
+	}
+
 	dir := filepath.Join(root, "checkpoints")
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -258,18 +264,51 @@ func Prune(root string, cutoff time.Time) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read rolling checkpoints dir: %w", err)
 	}
-	removed := 0
+
+	type identity struct {
+		host    string
+		profile string
+	}
+	type candidate struct {
+		path       string
+		checkpoint Checkpoint
+	}
+	candidates := make([]candidate, 0, len(entries))
+	newestPrior := make(map[identity]candidate)
+	protected := make(map[string]bool)
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
 		checkpoint, readErr := readPath(path)
-		if readErr != nil || !checkpoint.ObservedAt.Before(cutoff) {
+		if readErr != nil || entry.Name() != pathName(checkpoint.BootID, checkpoint.Host, checkpoint.Profile) {
 			continue
 		}
-		if err := os.Remove(path); err != nil {
-			return removed, fmt.Errorf("remove expired rolling checkpoint %s: %w", entry.Name(), err)
+		entryCandidate := candidate{path: path, checkpoint: checkpoint}
+		candidates = append(candidates, entryCandidate)
+		if checkpoint.BootID == currentBootID {
+			protected[path] = true
+			continue
+		}
+		key := identity{host: checkpoint.Host, profile: checkpoint.Profile}
+		previous, ok := newestPrior[key]
+		if !ok || checkpoint.ObservedAt.After(previous.checkpoint.ObservedAt) ||
+			(checkpoint.ObservedAt.Equal(previous.checkpoint.ObservedAt) && checkpoint.BootID > previous.checkpoint.BootID) {
+			newestPrior[key] = entryCandidate
+		}
+	}
+	for _, entry := range newestPrior {
+		protected[entry.path] = true
+	}
+
+	removed := 0
+	for _, entry := range candidates {
+		if protected[entry.path] || !entry.checkpoint.ObservedAt.Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(entry.path); err != nil {
+			return removed, fmt.Errorf("remove expired rolling checkpoint %s: %w", filepath.Base(entry.path), err)
 		}
 		removed++
 	}

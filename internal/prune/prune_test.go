@@ -24,17 +24,45 @@ func writeCheckpoint(t *testing.T, store *checkpoints.Store, boot string, at tim
 	}
 }
 
-func TestPruneBoundsRetainedBootCheckpoints(t *testing.T) {
+func newTestPruneRunner(root string, days int, now time.Time, currentBootID string) *Runner {
+	runner := NewRunner(root, days, func() time.Time { return now })
+	runner.bootIDSource = func() (string, error) { return currentBootID, nil }
+	return runner
+}
+
+func TestPrunePreservesSoleExpiredPriorCheckpoint(t *testing.T) {
 	root := t.TempDir()
 	store, err := checkpoints.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	writeCheckpoint(t, store, "old", now.Add(-40*24*time.Hour))
-	writeCheckpoint(t, store, "current", now.Add(-time.Hour))
+	writeCheckpoint(t, store, "prior", now.Add(-40*24*time.Hour))
 
-	summary, err := NewRunner(root, 30, func() time.Time { return now }).Run()
+	summary, err := newTestPruneRunner(root, 30, now, "current").Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.CheckpointsPruned != 0 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	if _, err := store.Read("prior", "host", "default"); err != nil {
+		t.Fatalf("sole prior-boot recovery candidate was pruned: %v", err)
+	}
+}
+
+func TestPrunePreservesCurrentAndNewestPriorWhileBoundingOlderBoots(t *testing.T) {
+	root := t.TempDir()
+	store, err := checkpoints.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	writeCheckpoint(t, store, "oldest-prior", now.Add(-60*24*time.Hour))
+	writeCheckpoint(t, store, "newest-prior", now.Add(-40*24*time.Hour))
+	writeCheckpoint(t, store, "current", now.Add(-35*24*time.Hour))
+
+	summary, err := newTestPruneRunner(root, 30, now, "current").Run()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +70,15 @@ func TestPruneBoundsRetainedBootCheckpoints(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 	valid, issues, err := checkpoints.List(root)
-	if err != nil || len(issues) != 0 || len(valid) != 1 || valid[0].BootID != "current" {
+	if err != nil || len(issues) != 0 || len(valid) != 2 {
 		t.Fatalf("valid=%#v issues=%#v err=%v", valid, issues, err)
+	}
+	remaining := map[string]bool{}
+	for _, checkpoint := range valid {
+		remaining[checkpoint.BootID] = true
+	}
+	if !remaining["current"] || !remaining["newest-prior"] || remaining["oldest-prior"] {
+		t.Fatalf("remaining=%v", remaining)
 	}
 }
 
@@ -59,7 +94,7 @@ func TestPruneRefusesActiveWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = lock.Close() }()
-	if _, err := NewRunner(root, 30, time.Now).Run(); !errors.Is(err, ErrActiveWriter) {
+	if _, err := newTestPruneRunner(root, 30, time.Now(), "current").Run(); !errors.Is(err, ErrActiveWriter) {
 		t.Fatalf("expected active writer error, got %v", err)
 	}
 	if _, err := store.Read("old", "host", "default"); err != nil {
@@ -75,7 +110,7 @@ func TestPruneIgnoresStaleLockFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "meta", "lock"), []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRunner(root, 30, time.Now).Run(); err != nil {
+	if _, err := newTestPruneRunner(root, 30, time.Now(), "current").Run(); err != nil {
 		t.Fatalf("stale marker retained lock: %v", err)
 	}
 }

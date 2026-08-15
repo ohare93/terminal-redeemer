@@ -84,6 +84,13 @@ func TestStoreRoundTripAndIdentityPaths(t *testing.T) {
 	if pathA == pathB || filepath.Dir(pathA) != filepath.Join(root, "checkpoints") {
 		t.Fatalf("unsafe/colliding paths: %q %q", pathA, pathB)
 	}
+	info, err := os.Stat(pathA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("checkpoint permissions=%#o, want 0600", got)
+	}
 	got, err := store.Read(first.BootID, first.Host, first.Profile)
 	if err != nil {
 		t.Fatal(err)
@@ -175,28 +182,38 @@ func TestListReportsCorruptionWithoutHidingValidCheckpoint(t *testing.T) {
 	}
 }
 
-func TestPruneUsesLatestObservedAtAndSyncsDirectory(t *testing.T) {
+func TestPrunePreservesCurrentAndNewestPriorWhileRemovingOlderExpiredBoots(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	if _, err := store.Write(testCheckpoint(t, "old", "host", "default", now.Add(-48*time.Hour))); err != nil {
-		t.Fatal(err)
+	for boot, observed := range map[string]time.Time{
+		"oldest-prior": now.Add(-72 * time.Hour),
+		"newest-prior": now.Add(-48 * time.Hour),
+		"current":      now.Add(-36 * time.Hour),
+	} {
+		if _, err := store.Write(testCheckpoint(t, boot, "host", "default", observed)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := store.Write(testCheckpoint(t, "new", "host", "default", now.Add(-time.Hour))); err != nil {
-		t.Fatal(err)
-	}
-	removed, err := Prune(root, now.Add(-24*time.Hour))
+	removed, err := Prune(root, now.Add(-24*time.Hour), "current")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if removed != 1 {
 		t.Fatalf("removed=%d, want 1", removed)
 	}
-	valid, _, err := List(root)
-	if err != nil || len(valid) != 1 || valid[0].BootID != "new" {
-		t.Fatalf("remaining=%#v err=%v", valid, err)
+	valid, issues, err := List(root)
+	if err != nil || len(issues) != 0 || len(valid) != 2 {
+		t.Fatalf("remaining=%#v issues=%#v err=%v", valid, issues, err)
+	}
+	remaining := map[string]bool{}
+	for _, checkpoint := range valid {
+		remaining[checkpoint.BootID] = true
+	}
+	if !remaining["current"] || !remaining["newest-prior"] || remaining["oldest-prior"] {
+		t.Fatalf("remaining boots=%v", remaining)
 	}
 }
