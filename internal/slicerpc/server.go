@@ -1052,6 +1052,9 @@ func (s Server) EnsureWorkspace(ctx context.Context, name string) (uint64, error
 	if catalog.requested != nil {
 		return catalog.requested.ID, nil
 	}
+	if catalog.headless {
+		return 0, errors.New("headless workspace must already exist")
+	}
 	candidate := catalog.maxWorkspace
 	if candidate.Name != nil || catalog.occupied[candidate.ID] {
 		return 0, errors.New("trailing empty workspace unavailable")
@@ -1105,6 +1108,7 @@ func (s Server) EnsureWorkspace(ctx context.Context, name string) (uint64, error
 }
 
 type workspaceCatalog struct {
+	headless     bool
 	activeOutput string
 	byID         map[uint64]niriipc.Workspace
 	occupied     map[uint64]bool
@@ -1113,7 +1117,14 @@ type workspaceCatalog struct {
 }
 
 func inspectWorkspaceCatalog(state niriipc.State, requestedName, requestedKey string) (workspaceCatalog, error) {
-	catalog := workspaceCatalog{byID: make(map[uint64]niriipc.Workspace, len(state.Workspaces)), occupied: map[uint64]bool{}}
+	headless := len(state.Outputs) == 0
+	for _, workspace := range state.Workspaces {
+		if workspace.Output != nil {
+			headless = false
+			break
+		}
+	}
+	catalog := workspaceCatalog{headless: headless, byID: make(map[uint64]niriipc.Workspace, len(state.Workspaces)), occupied: map[uint64]bool{}}
 	if len(state.Workspaces) == 0 {
 		return catalog, errors.New("workspace catalog is empty")
 	}
@@ -1123,8 +1134,15 @@ func inspectWorkspaceCatalog(state niriipc.State, requestedName, requestedKey st
 	namedByKey := map[string]niriipc.Workspace{}
 	maxIndex := -1
 	for _, workspace := range state.Workspaces {
-		if workspace.ID == 0 || workspace.Index <= 0 || workspace.Output == nil || *workspace.Output == "" {
-			return catalog, errors.New("workspace catalog contains invalid identity or output")
+		if workspace.ID == 0 || workspace.Index <= 0 {
+			return catalog, errors.New("workspace catalog contains invalid identity")
+		}
+		if catalog.headless {
+			if workspace.Output != nil {
+				return catalog, errors.New("headless workspace catalog retains output references")
+			}
+		} else if workspace.Output == nil || *workspace.Output == "" {
+			return catalog, errors.New("workspace catalog contains invalid output")
 		}
 		if _, exists := catalog.byID[workspace.ID]; exists {
 			return catalog, errors.New("workspace catalog contains a duplicate runtime ID")
@@ -1134,10 +1152,12 @@ func inspectWorkspaceCatalog(state niriipc.State, requestedName, requestedKey st
 		}
 		indices[workspace.Index] = struct{}{}
 		catalog.byID[workspace.ID] = workspace
-		outputs[*workspace.Output] = struct{}{}
-		if workspace.IsActive {
-			activeCount++
-			catalog.activeOutput = *workspace.Output
+		if !catalog.headless {
+			outputs[*workspace.Output] = struct{}{}
+			if workspace.IsActive {
+				activeCount++
+				catalog.activeOutput = *workspace.Output
+			}
 		}
 		if workspace.Index > maxIndex {
 			maxIndex = workspace.Index
@@ -1158,11 +1178,13 @@ func inspectWorkspaceCatalog(state niriipc.State, requestedName, requestedKey st
 		}
 		namedByKey[key] = workspace
 	}
-	if len(outputs) != 1 || activeCount != 1 {
-		return catalog, errors.New("MVP workspace ensure requires exactly one active output")
-	}
-	if _, exists := outputs[catalog.activeOutput]; !exists {
-		return catalog, errors.New("active workspace output does not match the one-output topology")
+	if !catalog.headless {
+		if len(outputs) != 1 || activeCount != 1 {
+			return catalog, errors.New("MVP workspace ensure requires exactly one active output")
+		}
+		if _, exists := outputs[catalog.activeOutput]; !exists {
+			return catalog, errors.New("active workspace output does not match the one-output topology")
+		}
 	}
 	for _, window := range state.Windows {
 		if window.WorkspaceID == nil {

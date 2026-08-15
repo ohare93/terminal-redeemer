@@ -14,7 +14,7 @@ This ADR fixes the deterministic spatial policy for one host output and one leec
 
 ### 1. Topology and identity
 
-MVP accepts exactly one active output on the host and one active output on the leech. Mapping is implicit and one-to-one. A second active output, a source window outside the active output, an incomplete output join, or invalid logical geometry is a typed unsupported/degraded outcome and authorizes no spatial write. Docked, multi-monitor, rotated-topology, and output-name mapping are future work.
+MVP accepts either exactly one active output on the host or a coherent host zero-output state, and exactly one active output on the leech. Mapping is implicit and one-to-one. A second output, a source window outside the active output, an incomplete output join, mixed null/non-null workspace outputs, or invalid logical geometry is a typed unsupported/degraded outcome and authorizes no spatial write. Docked, multi-monitor, rotated-topology, and output-name mapping are future work.
 
 A static named Niri workspace is the only cross-machine workspace identity. Names use protocol normalization `unicode-nfkc-fold-v1`: trim Unicode whitespace, NFKC, Unicode case fold, then NFKC. The controller carries the display spelling but compares the canonical key. Unnamed workspaces are not cross-machine identities. Duplicate runtime workspaces with one key and distinct spellings that normalize to one key are explicit `workspace_normalization_collision`; duplicate exact names at distinct runtime IDs are `workspace_duplicate`. Neither permits an arbitrary target.
 
@@ -28,14 +28,14 @@ For each eligible source, a complete observation carries:
 - tiled or floating mode;
 - exact one-based source `(column,tile)` for tiled windows;
 - observed window width and height;
-- active output logical x/y/width/height, scale, and transform; and
+- active output logical x/y/width/height, scale, and transform when an output exists; and
 - the source epoch and same-epoch runtime window ID.
 
 The underlying Niri observation uses direct EventStream replay through explicit `ConfigLoaded.failed:false`, then a separate Outputs request and complete-reference validation. A malformed, dangling, timed-out, topology-incompatible, or otherwise degraded observation preserves the prior accepted spatial authority. It proposes no ensure, move, float/tile, resize, order, focus, close, or ownership action.
 
 ### 3. Workspace creation and membership
 
-When a desired canonical workspace already exists exactly once on the target, a move proposal carries that workspace's current runtime ID. When it is absent, reconciliation first requests `workspace_ensure` and performs no dependent window mutation in that proposal generation.
+When a desired canonical workspace already exists exactly once on the target, a move proposal carries that workspace's current runtime ID. On a zero-output host, lookup may return only that existing exact uniquely normalized named workspace; absence, duplication, or collision fails closed and workspace creation is forbidden. When it is absent, reconciliation first requests `workspace_ensure` and performs no dependent window mutation in that proposal generation.
 
 Workspace creation follows the proven exact contract:
 
@@ -60,14 +60,14 @@ Verification requires the same exact window ID on the exact target workspace and
 
 ### 4. Proportional size and layout state
 
-The shared size is a percentage of the source output's logical dimensions:
+When source output geometry is present, the shared size is a percentage of the source output's logical dimensions:
 
 ```text
 width_percent  = clamp(1, 100, source_window_width  / source_logical_width  * 100)
 height_percent = clamp(1, 100, source_window_height / source_logical_height * 100)
 ```
 
-The pure policy rounds to four decimal places. The same percentages are requested on the target, not raw pixels. The pinned direct actions are:
+A coherent zero-output observation retains workspace, tiled/floating mode, window dimensions, and tiled order but emits no width or height action. It never uses cached geometry. The next complete outputful revision resumes the ordinary calculation with unchanged source/session ownership. The pure policy rounds to four decimal places. The same percentages are requested on the target, not raw pixels. The pinned direct actions are:
 
 ```json
 {"Action":{"MoveWindowToFloating":{"id":42}}}

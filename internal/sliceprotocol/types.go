@@ -3,7 +3,7 @@ package sliceprotocol
 import "time"
 
 const (
-	SchemaVersion          uint32 = 1
+	SchemaVersion          uint32 = 2
 	MaxPayloadBytes               = 4 << 20
 	MaxStringBytes                = 1024
 	WorkspaceNormalization        = "unicode-nfkc-fold-v1"
@@ -85,7 +85,7 @@ type Source struct {
 	RuntimeWindowID uint64    `json:"runtime_window_id"`
 	Session         Session   `json:"session"`
 	Workspace       Workspace `json:"workspace"`
-	Output          Output    `json:"output"`
+	Output          *Output   `json:"output,omitempty"`
 	Layout          Layout    `json:"layout"`
 }
 

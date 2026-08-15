@@ -97,7 +97,7 @@ func fuzzHighCardinalityEnvelope() []byte {
 
 func FuzzCanonicalHashing(f *testing.F) {
 	now := time.Unix(1, 0).UTC()
-	sourceA := Source{SourceID: "src_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", RuntimeWindowID: 2, Session: Session{ID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Name: "alpha", Status: "active"}, Workspace: Workspace{RuntimeID: 2, Name: "Work", Key: "work"}, Output: Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: Layout{Mode: "tiled", Position: &Position{Column: 2, Tile: 1}, TileWidth: 900, TileHeight: 700, WindowWidth: 900, WindowHeight: 700}}
+	sourceA := Source{SourceID: "src_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", RuntimeWindowID: 2, Session: Session{ID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Name: "alpha", Status: "active"}, Workspace: Workspace{RuntimeID: 2, Name: "Work", Key: "work"}, Output: &Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: Layout{Mode: "tiled", Position: &Position{Column: 2, Tile: 1}, TileWidth: 900, TileHeight: 700, WindowWidth: 900, WindowHeight: 700}}
 	sourceB := sourceA
 	sourceB.SourceID, sourceB.Session.ID, sourceB.Session.Name, sourceB.RuntimeWindowID = "src_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "ses_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "beta", 1
 	sourceB.Workspace = Workspace{RuntimeID: 1, Name: "Dev", Key: "dev"}

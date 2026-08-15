@@ -463,14 +463,14 @@ func (r *modelRun) observation(kind string) sliceprotocol.Envelope {
 			return r.complete("complete")
 		}
 		copy := cloneModelAuthority(*r.last)
-		return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
+		return sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
 	case "stale":
 		if r.last == nil || r.last.Revision <= 1 {
 			return r.observation("duplicate")
 		}
 		copy := cloneModelAuthority(r.history[r.last.Revision-1])
 		copy.ObservedAt = r.now
-		return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
+		return sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
 	case "conflict":
 		if r.last == nil {
 			return r.complete("complete")
@@ -484,13 +484,13 @@ func (r *modelRun) observation(kind string) sliceprotocol.Envelope {
 			copy.LiveSessionIDs = append(copy.LiveSessionIDs, sessionB)
 		}
 		copy = sliceprotocol.Canonicalize(copy)
-		return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
+		return sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
 	case "replay":
 		if r.retired == nil {
 			return r.observation("duplicate")
 		}
 		copy := cloneModelAuthority(*r.retired)
-		return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
+		return sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: r.now}, Authoritative: &copy}
 	default:
 		panic("unknown observation: " + kind)
 	}

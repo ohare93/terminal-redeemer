@@ -92,7 +92,11 @@ func (builder Builder) Build(ctx context.Context, epoch string, state niriipc.St
 			conflicts = append(conflicts, sliceprotocol.Conflict{Code: sliceprotocol.ConflictWorkspaceNameCollision, SourceID: sourceID, SessionID: session.ID})
 			continue
 		}
-		output := state.Outputs[*workspace.Output]
+		var output *sliceprotocol.Output
+		if workspace.Output != nil {
+			observed := state.Outputs[*workspace.Output]
+			output = &sliceprotocol.Output{Name: observed.Name, LogicalX: observed.Logical.X, LogicalY: observed.Logical.Y, LogicalWidth: observed.Logical.Width, LogicalHeight: observed.Logical.Height, Scale: observed.Logical.Scale, Transform: observed.Logical.Transform}
+		}
 		layout := sliceprotocol.Layout{TileWidth: window.Layout.TileSize[0], TileHeight: window.Layout.TileSize[1], WindowWidth: window.Layout.WindowSize[0], WindowHeight: window.Layout.WindowSize[1]}
 		if window.IsFloating {
 			layout.Mode = "floating"
@@ -108,7 +112,7 @@ func (builder Builder) Build(ctx context.Context, epoch string, state niriipc.St
 			SourceID: sourceID, RuntimeWindowID: window.ID,
 			Session:   sliceprotocol.Session{ID: session.ID, Name: session.Name, Status: "active"},
 			Workspace: sliceprotocol.Workspace{RuntimeID: workspace.ID, Name: workspaceName, Key: key},
-			Output:    sliceprotocol.Output{Name: output.Name, LogicalX: output.Logical.X, LogicalY: output.Logical.Y, LogicalWidth: output.Logical.Width, LogicalHeight: output.Logical.Height, Scale: output.Logical.Scale, Transform: output.Logical.Transform},
+			Output:    output,
 			Layout:    layout,
 		}
 		candidates = append(candidates, candidate{source: source, window: window, session: session})

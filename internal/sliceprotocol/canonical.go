@@ -16,7 +16,11 @@ func Canonicalize(authority Authoritative) Authoritative {
 	out.Conflicts = make([]Conflict, len(authority.Conflicts))
 	copy(out.Conflicts, authority.Conflicts)
 	for i := range out.Sources {
-		out.Sources[i].Output.Scale = noNegativeZero(out.Sources[i].Output.Scale)
+		if out.Sources[i].Output != nil {
+			output := *out.Sources[i].Output
+			output.Scale = noNegativeZero(output.Scale)
+			out.Sources[i].Output = &output
+		}
 		out.Sources[i].Layout.TileWidth = noNegativeZero(out.Sources[i].Layout.TileWidth)
 		out.Sources[i].Layout.TileHeight = noNegativeZero(out.Sources[i].Layout.TileHeight)
 	}

@@ -268,6 +268,55 @@ func TestPublisherRevisionDegradedRetentionEpochRotationAndRuntimeReuse(t *testi
 	}
 }
 
+func TestPublisherHeadlessRevisionPreservesSourcesAndRestoresOutput(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuids := []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "11111111-1111-4111-8111-111111111111"}
+	uuidIndex := 0
+	publisher := Publisher{Store: store, UUID: func() (string, error) {
+		value := uuids[uuidIndex]
+		uuidIndex++
+		return value, nil
+	}}
+	if _, err := publisher.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	niri := &fakeNiri{state: completeNiriState()}
+	niri.state.Outputs = map[string]niriipc.Output{}
+	niri.state.Workspaces[0].Output = nil
+	catalog := &fakeCataloger{catalog: activeCatalog()}
+	now := time.Unix(200, 0).UTC()
+	publisher.Niri = niri
+	publisher.Catalog = catalog
+	publisher.Builder = Builder{Processes: fakeProcesses{values: map[int]zellijlive.ProcessEvidence{100: {KittyVerified: true, Candidates: []string{"project"}}}}}
+	publisher.Fingerprint = func() (string, error) { return strings.Repeat("1", 64), nil }
+	publisher.Now = func() time.Time { return now }
+
+	headless, err := publisher.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headless.SchemaVersion != sliceprotocol.SchemaVersion || headless.Observation.Quality != sliceprotocol.QualityComplete || headless.Authoritative.Revision != 1 || len(headless.Authoritative.Sources) != 1 || headless.Authoritative.Sources[0].Output != nil || len(headless.Authoritative.LiveSessionIDs) != 2 {
+		t.Fatalf("incomplete headless authority: %+v", headless)
+	}
+	if headless.Authoritative.Sources[0].Session.Name != "project" {
+		t.Fatalf("windowless session became a source: %+v", headless.Authoritative.Sources)
+	}
+	sourceID := headless.Authoritative.Sources[0].SourceID
+
+	niri.state = completeNiriState()
+	now = now.Add(time.Second)
+	restored, err := publisher.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Authoritative.Revision != 2 || len(restored.Authoritative.Sources) != 1 || restored.Authoritative.Sources[0].SourceID != sourceID || restored.Authoritative.Sources[0].Output == nil || restored.Authoritative.Sources[0].Output.LogicalWidth != 1920 {
+		t.Fatalf("output restoration changed identity or omitted geometry: %+v", restored.Authoritative)
+	}
+}
+
 func TestStoreInitializationCorruptionAndFingerprintPrivacy(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)

@@ -735,7 +735,7 @@ func (s *soak) exerciseRoutedRestartReplay() {
 			SourceID: second.Intent.SourceID, RuntimeWindowID: second.Intent.RuntimeWindowID,
 			Session:   sliceprotocol.Session{ID: sessionID, Name: second.Intent.SessionName, Status: "active"},
 			Workspace: sliceprotocol.Workspace{RuntimeID: 3, Name: "Work", Key: key},
-			Output:    sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"},
+			Output:    &sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"},
 			Layout:    sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 0.5, TileHeight: 0.5, WindowWidth: 960, WindowHeight: 540},
 		}},
 	}
@@ -998,7 +998,7 @@ func makeAuthority(epoch string, revision uint64, iteration int, now time.Time) 
 			SourceID: sourceID, RuntimeWindowID: runtimeID,
 			Session:   sliceprotocol.Session{ID: sessionID, Name: fmt.Sprintf("session-%d", slot), Status: "active"},
 			Workspace: sliceprotocol.Workspace{RuntimeID: uint64((slot % 2) + 1), Name: workspace, Key: key},
-			Output:    sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"},
+			Output:    &sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"},
 			Layout:    sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: index + 1, Tile: 1}, TileWidth: 0.5, TileHeight: 0.5, WindowWidth: 960, WindowHeight: 540},
 		})
 		live = append(live, sessionID)

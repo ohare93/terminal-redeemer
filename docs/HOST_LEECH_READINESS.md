@@ -6,7 +6,7 @@ The host/leech terminal-slice MVP is opt in and disabled by default. Installing
 the package does not activate the controller, routed launch mode, or Niri
 bindings.
 
-Use the v1.2.0 machine-readable artifacts in
+Use the v1.3.0 machine-readable artifacts in
 [`contracts/host-leech-slices/v1`](../contracts/host-leech-slices/v1/) for the
 consumer surface. The const-rich JSON Schema owns strict structure and exact
 semantic values; runtime-coupled Go tests own protocol constants, pinned
@@ -28,17 +28,17 @@ The detailed behavior is intentionally not repeated here:
 - [OPERATIONS.md](OPERATIONS.md) owns generic deployment, service, security,
   state, and incident guidance.
 
-The accepted v1 limitations remain one active output per machine, approximate
+The accepted limitations are one active output per leech and either one active output or a coherent zero-output source host, approximate
 proportional placement, report-only live order drift, Niri 26.04, Zellij
 0.44.3, shared
 minimum-client-grid reflow, and no automatic local fallback after an ambiguous
 remote launch.
 
-Contract 1.2.0 updates the exact runtime compatibility pair and Zellij's
-`contract_version_1` socket/cache layout. Inventory schema 1, RPC schema 1,
+Contract 1.3.0 updates the exact runtime compatibility pair and Zellij's
+`contract_version_1` socket/cache layout. Inventory schema 2, RPC schema 1,
 controller schema 2, artifact path `v1`, option names, defaults, and persisted
-authority formats are unchanged. Consumers need only update the Terminal
-Redeemer pin/NAR metadata; no new mono-nix option or authority migration is
+authority formats are unchanged. Consumers must update both host and leech to the same Terminal
+Redeemer pin/NAR metadata; mixed inventory schema revisions reject safely and retain prior authority, but do not authorize disappearance or spatial writes; no new mono-nix option or authority migration is
 required. Quiesce in-flight projection helpers before replacing 1.1.0 because
 prepared 0.43.1 socket namespaces are not adopted by the 0.44.3 binary.
 
@@ -200,7 +200,7 @@ private state, environment values, titles, or argv dumps.
 
 | Area | Required observation |
 | --- | --- |
-| Compatibility | Both machines use one package revision; inventory/RPC schema 1, controller schema 2, Niri 26.04, and Zellij 0.44.3 pass. |
+| Compatibility | Both machines use one package revision; inventory schema 2, RPC schema 1, controller schema 2, Niri 26.04, and Zellij 0.44.3 pass. |
 | Local boundary | Mode-off and unselected `Mod+Return` remain ordinary local launch. |
 | Workspace selection | Selected current and newly opened eligible sources project once; unselection touches no unrelated window. |
 | All-eligible fanout | With `all-enable`, every current eligible source projects exactly once and each later eligible source projects once without another selection action; `all-disable` removes only that reason and preserves independent workspace/pickup projections and the unrelated sentinel. |
@@ -210,6 +210,9 @@ private state, environment values, titles, or argv dumps.
 | Exact attach | Concurrent host/leech clients use the exact live session; dead, cache-only, and prefix names fail; detach and resize preserve host work while documenting shared-grid reflow. |
 | Routed launch separation/replay | With Leech mode and all-eligible active, `Mod+Return` on an unselected named workspace remains an ordinary local launch; only an explicitly selected named workspace routes. Selected mode creates one token/session/host Kitty and exact projection; a lost first response remains inspectable and same-token replay creates no duplicate or local fallback. |
 | Close/drop/reopen | `Mod+W` closes only exact owned leech state; the session-keyed drop survives source/epoch replacement and live headless intervals; only explicit reopen/undo or confirmed complete absence plus grace clears it. |
+| Headless source | With the source monitor unavailable, inventory is complete schema 2, existing Kitty/Zellij sources list and attach, workspace/layout/order remain authoritative, no proportional-size action is emitted, and no windowless Zellij session becomes a source. |
+| Headless routed launch | Selected `Mod+Return` routes once into an existing exact uniquely normalized named source workspace; missing, duplicate, and colliding names create no workspace, no host Kitty/session duplicate, and no local fallback. |
+| Output restoration | The next complete outputful revision resumes proportional sizing for the same source/session identity without focus or unrelated mutation. |
 | Spatial | Host workspace, floating/tiled mode, and proportional size converge on the leech; supported leech drift reverts, initial order is best effort, later order drift is report-only, and approximation is recorded. |
 | Recovery | In-window recovery retains its original budget; exhaustion becomes stable disconnected; explicit reconnect uses the same source/token. |
 | Disappearance/revision | Degraded, stale, duplicate, conflicting, and retired observations close nothing; accepted complete revisions alone advance absence; restart/epoch rotation never reuses raw identity. |

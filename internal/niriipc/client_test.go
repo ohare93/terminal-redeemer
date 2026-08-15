@@ -70,6 +70,53 @@ func TestClientInitialReplayAndSeparateOutputs(t *testing.T) {
 	}
 }
 
+func TestClientAcceptsCoherentZeroOutputReplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "niri.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			done <- acceptErr
+			return
+		}
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		_, writeErr := conn.Write([]byte("{\"Ok\":\"Handled\"}\n" +
+			"{\"WorkspacesChanged\":{\"workspaces\":[{\"id\":1,\"idx\":1,\"name\":\"dev\",\"output\":null}]}}\n" +
+			"{\"WindowsChanged\":{\"windows\":[{\"id\":42,\"app_id\":\"kitty\",\"pid\":4242,\"workspace_id\":1,\"is_floating\":false,\"layout\":{\"pos_in_scrolling_layout\":[1,1],\"tile_size\":[900,700],\"window_size\":[900,700]}}]}}\n" +
+			"{\"ConfigLoaded\":{\"failed\":false}}\n"))
+		_ = conn.Close()
+		if writeErr != nil {
+			done <- writeErr
+			return
+		}
+		conn, acceptErr = listener.Accept()
+		if acceptErr != nil {
+			done <- acceptErr
+			return
+		}
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		_, writeErr = conn.Write([]byte("{\"Ok\":{\"Outputs\":{}}}\n"))
+		_ = conn.Close()
+		done <- writeErr
+	}()
+
+	state, err := (Client{SocketPath: path, Timeout: time.Second}).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Outputs) != 0 || len(state.Workspaces) != 1 || state.Workspaces[0].Output != nil || len(state.Windows) != 1 {
+		t.Fatalf("headless replay changed: %+v", state)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientTransientDanglingReplayConvergesBeforeConfigLoaded(t *testing.T) {
 	root, err := os.MkdirTemp("/tmp", "niri-replay-")
 	if err != nil {
@@ -171,6 +218,19 @@ func TestValidateRejectsDanglingGeometryAndTopology(t *testing.T) {
 	geometry.Outputs = map[string]Output{"winit": {Name: "winit", Logical: Logical{Width: 0, Height: 100, Scale: 1}}}
 	if code := ReasonCode(Validate(geometry)); code != sliceprotocol.ReasonNiriInvalidGeometry {
 		t.Fatalf("geometry code %s", code)
+	}
+	headless := base
+	headless.Outputs = map[string]Output{}
+	headless.Workspaces = append([]Workspace(nil), base.Workspaces...)
+	headless.Workspaces[0].Output = nil
+	if err := Validate(headless); err != nil {
+		t.Fatalf("coherent headless state rejected: %v", err)
+	}
+	partial := headless
+	partial.Workspaces = append([]Workspace(nil), headless.Workspaces...)
+	partial.Workspaces[0].Output = &outputName
+	if code := ReasonCode(Validate(partial)); code != sliceprotocol.ReasonNiriMissingOutput {
+		t.Fatalf("partial headless join code %s", code)
 	}
 	second := "other"
 	topology := base

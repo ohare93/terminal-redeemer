@@ -30,7 +30,7 @@
       "const": "terminal-redeemer.host-leech-slices"
     },
     "contract_version": {
-      "const": "1.2.0"
+      "const": "1.3.0"
     },
     "protocol": {
       "type": "object",
@@ -44,7 +44,7 @@
       "properties": {
         "inventory_schema_versions": {
           "const": [
-            1
+            2
           ]
         },
         "rpc_schema_versions": {
@@ -78,7 +78,7 @@
           "const": "0.44.3"
         },
         "topology": {
-          "const": "one_active_output_per_machine"
+          "const": "one_active_output_or_coherent_zero_output_source"
         }
       }
     },
@@ -141,7 +141,8 @@
         "all_eligible_state_field",
         "all_eligible_undoable",
         "prior_reader_behavior_when_enabled",
-        "downgrade_requires_disable_first"
+        "downgrade_requires_disable_first",
+        "headless_workspace_policy"
       ],
       "properties": {
         "formula": {
@@ -167,6 +168,9 @@
         },
         "downgrade_requires_disable_first": {
           "const": true
+        },
+        "headless_workspace_policy": {
+          "const": "existing_exact_uniquely_normalized_named_workspace_only_no_creation"
         }
       }
     },
@@ -179,7 +183,10 @@
         "local_supported_drift_policy",
         "order_policy",
         "leech_location_configurable",
-        "host_spatial_writeback_available"
+        "host_spatial_writeback_available",
+        "headless_observable_properties",
+        "headless_omitted_property",
+        "output_restoration_policy"
       ],
       "properties": {
         "supported_modes": {
@@ -206,6 +213,19 @@
         },
         "host_spatial_writeback_available": {
           "const": false
+        },
+        "headless_observable_properties": {
+          "const": [
+            "workspace",
+            "floating_or_tiled",
+            "initial_order"
+          ]
+        },
+        "headless_omitted_property": {
+          "const": "proportional_size_until_output_returns"
+        },
+        "output_restoration_policy": {
+          "const": "next_complete_revision_same_source_identity"
         }
       }
     },
@@ -323,7 +343,7 @@
             "inventory",
             "snapshot",
             "--accept-schema-version",
-            "1"
+            "2"
           ]
         },
         "rpc": {
@@ -585,7 +605,7 @@
           "const": true
         },
         "spatial_placement": {
-          "const": "approximate_proportional"
+          "const": "approximate_proportional_when_source_output_present"
         },
         "pinned_version_coupling": {
           "const": true

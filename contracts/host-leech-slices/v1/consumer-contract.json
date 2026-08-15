@@ -1,17 +1,23 @@
 {
   "schema_version": 1,
   "contract_id": "terminal-redeemer.host-leech-slices",
-  "contract_version": "1.2.0",
+  "contract_version": "1.3.0",
   "protocol": {
-    "inventory_schema_versions": [1],
-    "rpc_schema_versions": [1],
-    "controller_schema_versions": [2],
+    "inventory_schema_versions": [
+      2
+    ],
+    "rpc_schema_versions": [
+      1
+    ],
+    "controller_schema_versions": [
+      2
+    ],
     "workspace_normalization": "unicode-nfkc-fold-v1"
   },
   "compatibility": {
     "niri_version": "26.04",
     "zellij_version": "0.44.3",
-    "topology": "one_active_output_per_machine"
+    "topology": "one_active_output_or_coherent_zero_output_source"
   },
   "defaults": {
     "leech_mode_enabled": false,
@@ -33,23 +39,45 @@
     "all_eligible_state_field": "optional_omitempty_boolean",
     "all_eligible_undoable": false,
     "prior_reader_behavior_when_enabled": "reject_unknown_field",
-    "downgrade_requires_disable_first": true
+    "downgrade_requires_disable_first": true,
+    "headless_workspace_policy": "existing_exact_uniquely_normalized_named_workspace_only_no_creation"
   },
   "authority": {
-    "supported_modes": ["host_location"],
-    "converged_properties": ["workspace", "floating_or_tiled", "proportional_width", "proportional_height"],
+    "supported_modes": [
+      "host_location"
+    ],
+    "converged_properties": [
+      "workspace",
+      "floating_or_tiled",
+      "proportional_width",
+      "proportional_height"
+    ],
     "local_supported_drift_policy": "revert_to_host",
     "order_policy": "initial_best_effort_then_observation_only",
     "leech_location_configurable": false,
-    "host_spatial_writeback_available": false
+    "host_spatial_writeback_available": false,
+    "headless_observable_properties": [
+      "workspace",
+      "floating_or_tiled",
+      "initial_order"
+    ],
+    "headless_omitted_property": "proportional_size_until_output_returns",
+    "output_restoration_policy": "next_complete_revision_same_source_identity"
   },
   "drops": {
     "key": "exact_verified_zellij_session_id",
     "survives_source_replacement": true,
     "survives_source_epoch_replacement": true,
     "survives_headless_while_session_live": true,
-    "early_clear_operations": ["reopen", "undo"],
-    "automatic_expiry_requires": ["accepted_higher_complete_revisions", "consecutive_confirmed_session_absence", "committed_grace_elapsed"],
+    "early_clear_operations": [
+      "reopen",
+      "undo"
+    ],
+    "automatic_expiry_requires": [
+      "accepted_higher_complete_revisions",
+      "consecutive_confirmed_session_absence",
+      "committed_grace_elapsed"
+    ],
     "non_authoritative_observations_do_not_advance": true
   },
   "revisions": {
@@ -57,24 +85,114 @@
     "unchanged_semantics_still_advances_revision": true,
     "same_revision_same_semantics": "idempotent_replay",
     "same_revision_different_semantics": "conflict",
-    "non_authoritative_observations": ["degraded", "duplicate", "stale", "conflicting", "retired_epoch", "transport_disconnected"]
+    "non_authoritative_observations": [
+      "degraded",
+      "duplicate",
+      "stale",
+      "conflicting",
+      "retired_epoch",
+      "transport_disconnected"
+    ]
   },
   "commands": {
-    "inventory_init": ["$REDEEM", "slice", "inventory", "init"],
-    "inventory_snapshot": ["$REDEEM", "slice", "inventory", "snapshot", "--accept-schema-version", "1"],
-    "rpc": ["$REDEEM", "slice", "rpc"],
-    "launch": ["$REDEEM", "slice", "launch"],
-    "launch_reconnect": ["$REDEEM", "slice", "launch", "--reconnect-token", "$TOKEN"],
-    "close_focused": ["$REDEEM", "slice", "close-focused"],
-    "manage": ["$REDEEM", "slice", "manage"],
-    "controller_init": ["$REDEEM", "slice", "controller", "init"],
-    "controller_run": ["$REDEEM", "slice", "controller", "run"],
-    "controller_status": ["$REDEEM", "slice", "controller", "status"],
-    "controller_operations": ["workspace-add", "workspace-remove", "all-enable", "all-disable", "pickup", "pickup-remove", "drop", "close", "reopen", "undo", "reconnect", "launch-handoff"],
-    "mode_enable": ["$REDEEM", "slice", "mode", "enable"],
-    "mode_disable": ["$REDEEM", "slice", "mode", "disable"],
-    "mode_status": ["$REDEEM", "slice", "mode", "status"],
-    "legacy_attach": ["$REDEEM", "mirror", "open", "--mode", "attach"]
+    "inventory_init": [
+      "$REDEEM",
+      "slice",
+      "inventory",
+      "init"
+    ],
+    "inventory_snapshot": [
+      "$REDEEM",
+      "slice",
+      "inventory",
+      "snapshot",
+      "--accept-schema-version",
+      "2"
+    ],
+    "rpc": [
+      "$REDEEM",
+      "slice",
+      "rpc"
+    ],
+    "launch": [
+      "$REDEEM",
+      "slice",
+      "launch"
+    ],
+    "launch_reconnect": [
+      "$REDEEM",
+      "slice",
+      "launch",
+      "--reconnect-token",
+      "$TOKEN"
+    ],
+    "close_focused": [
+      "$REDEEM",
+      "slice",
+      "close-focused"
+    ],
+    "manage": [
+      "$REDEEM",
+      "slice",
+      "manage"
+    ],
+    "controller_init": [
+      "$REDEEM",
+      "slice",
+      "controller",
+      "init"
+    ],
+    "controller_run": [
+      "$REDEEM",
+      "slice",
+      "controller",
+      "run"
+    ],
+    "controller_status": [
+      "$REDEEM",
+      "slice",
+      "controller",
+      "status"
+    ],
+    "controller_operations": [
+      "workspace-add",
+      "workspace-remove",
+      "all-enable",
+      "all-disable",
+      "pickup",
+      "pickup-remove",
+      "drop",
+      "close",
+      "reopen",
+      "undo",
+      "reconnect",
+      "launch-handoff"
+    ],
+    "mode_enable": [
+      "$REDEEM",
+      "slice",
+      "mode",
+      "enable"
+    ],
+    "mode_disable": [
+      "$REDEEM",
+      "slice",
+      "mode",
+      "disable"
+    ],
+    "mode_status": [
+      "$REDEEM",
+      "slice",
+      "mode",
+      "status"
+    ],
+    "legacy_attach": [
+      "$REDEEM",
+      "mirror",
+      "open",
+      "--mode",
+      "attach"
+    ]
   },
   "module": {
     "home_manager": "homeManagerModules.terminal-redeemer",
@@ -114,8 +232,17 @@
       "controller.sourceGoneGrace",
       "controller.sourceGoneConfirmations"
     ],
-    "read_only_options": ["launchCommand", "closeFocusedCommand", "manageCommand", "niriIntegrationFragment", "clipboard.enabled"],
-    "unsupported_options": ["controller.authorityMode", "controller.leechWriteAuthorized"]
+    "read_only_options": [
+      "launchCommand",
+      "closeFocusedCommand",
+      "manageCommand",
+      "niriIntegrationFragment",
+      "clipboard.enabled"
+    ],
+    "unsupported_options": [
+      "controller.authorityMode",
+      "controller.leechWriteAuthorized"
+    ]
   },
   "integration": {
     "launch_helper_option": "programs.terminal-redeemer.slice.launchCommand",
@@ -129,7 +256,7 @@
   },
   "limitations": {
     "zellij_shared_minimum_client_grid_reflow": true,
-    "spatial_placement": "approximate_proportional",
+    "spatial_placement": "approximate_proportional_when_source_output_present",
     "pinned_version_coupling": true,
     "ambiguous_transport_may_have_created_host_work": true,
     "routed_launch_process_correlation_can_remain_pending": true

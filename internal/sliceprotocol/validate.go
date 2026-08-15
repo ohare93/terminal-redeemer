@@ -153,14 +153,16 @@ func validateSource(source Source) error {
 			return fmt.Errorf("%w: workspace key mismatch", ErrInvalid)
 		}
 	}
-	if err := boundedRequired("output.name", source.Output.Name); err != nil {
-		return err
-	}
-	if len(source.Output.Transform) > MaxStringBytes || strings.ContainsRune(source.Output.Transform, 0) {
-		return fmt.Errorf("%w: output transform is invalid", ErrInvalid)
-	}
-	if source.Output.LogicalWidth <= 0 || source.Output.LogicalHeight <= 0 || !finitePositive(source.Output.Scale) {
-		return fmt.Errorf("%w: invalid output geometry", ErrInvalid)
+	if source.Output != nil {
+		if err := boundedRequired("output.name", source.Output.Name); err != nil {
+			return err
+		}
+		if len(source.Output.Transform) > MaxStringBytes || strings.ContainsRune(source.Output.Transform, 0) {
+			return fmt.Errorf("%w: output transform is invalid", ErrInvalid)
+		}
+		if source.Output.LogicalWidth <= 0 || source.Output.LogicalHeight <= 0 || !finitePositive(source.Output.Scale) {
+			return fmt.Errorf("%w: invalid output geometry", ErrInvalid)
+		}
 	}
 	if !finiteNonnegative(source.Layout.TileWidth) || !finiteNonnegative(source.Layout.TileHeight) || source.Layout.WindowWidth <= 0 || source.Layout.WindowHeight <= 0 {
 		return fmt.Errorf("%w: invalid layout geometry", ErrInvalid)

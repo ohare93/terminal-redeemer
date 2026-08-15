@@ -17,7 +17,7 @@ Initialization first durably creates an independent enrollment marker, then writ
 Request a full snapshot:
 
 ```bash
-redeem slice inventory snapshot --accept-schema-version 1
+redeem slice inventory snapshot --accept-schema-version 2
 ```
 
 `--accept-schema-version` is repeatable. With no flag the command accepts the currently supported set. If there is no common version, it returns nonzero before contacting Niri:
@@ -25,7 +25,7 @@ redeem slice inventory snapshot --accept-schema-version 1
 ```json
 {
   "code": "unsupported_schema_version",
-  "supported_schema_versions": [1]
+  "supported_schema_versions": [2]
 }
 ```
 
@@ -35,7 +35,7 @@ The source state is stored under `stateDir/slice/source-inventory/`, separately 
 
 The [version-1 consumer contract](../contracts/host-leech-slices/v1/consumer-contract.json) records the supported protocol, compatibility, defaults, configuration, helper argv, module, binding, legacy, watch, and fallback surfaces. Its strict schema is packaged alongside identical contract bytes. See [HOST_LEECH_READINESS.md](HOST_LEECH_READINESS.md) for deployment, rollback, and proof requirements.
 
-Version 1 requires all documented required fields and stable enum values. Decoders accept unknown additive object fields. They reject:
+Inventory schema 2 requires all documented required fields and stable enum values; only source `output` geometry is optional. Decoders accept unknown additive object fields. They reject:
 
 - unsupported schema versions;
 - duplicate JSON object keys;
@@ -44,13 +44,13 @@ Version 1 requires all documented required fields and stable enum values. Decode
 - oversized payloads and strings; and
 - semantic invariant violations.
 
-Breaking field or enum changes require a new integer schema version. The legacy mirror snapshot remains unversioned and cannot be decoded as authoritative version 1 inventory. Existing `mirror snapshot`, `mirror list`, and `mirror open` consumers retain their current behavior.
+Breaking field or enum changes require a new integer schema version. The legacy mirror snapshot remains unversioned and cannot be decoded as authoritative schema-2 inventory. Existing `mirror snapshot`, `mirror list`, and `mirror open` consumers retain their current behavior.
 
 ## Complete envelope
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_host_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "observation": {
     "quality": "complete",
@@ -68,7 +68,7 @@ Breaking field or enum changes require a new integer schema version. The legacy 
 }
 ```
 
-A complete observation is built from Niri's local direct Unix-socket event replay through successful `ConfigLoaded`, a separate Outputs request, bounded process evidence, and a pinned Zellij 0.44.3 live-socket catalog. `live_session_ids` is a required (possibly empty), sorted, duplicate-free list of every directly verified active session in that catalog, including live headless sessions that are not eligible window-bound sources. Every eligible source session must occur in the list. Catalog-only changes participate in the semantic hash. All workspace/window/output references and the one-active-output MVP topology validate before publication. A join or catalog failure degrades the whole attempt and retains prior authority; it never publishes a partial or empty live list as absence.
+A complete observation is built from Niri's local direct Unix-socket event replay through successful `ConfigLoaded`, a separate Outputs request, bounded process evidence, and a pinned Zellij 0.44.3 live-socket catalog. `live_session_ids` is a required (possibly empty), sorted, duplicate-free list of every directly verified active session in that catalog, including live headless sessions that are not eligible window-bound sources. Every eligible source session must occur in the list. Catalog-only changes participate in the semantic hash. All workspace/window references validate before publication. The source topology is either one complete active output or a coherent zero-output state where every workspace output is null; partial joins and multiple outputs degrade. A join or catalog failure degrades the whole attempt and retains prior authority; it never publishes a partial or empty live list as absence.
 
 `attempted_at` is the completed attempt time. Every successfully completed authoritative poll advances revision and refreshes `observed_at`, even when no semantic inventory changed.
 
@@ -80,7 +80,7 @@ Each source contains:
 - `runtime_window_id`: positive same-epoch evidence only;
 - `session`: a distinct opaque verified live-session ID, bounded safe name, and `active` status;
 - `workspace`: runtime workspace evidence plus optional static display name and canonical key;
-- `output`: output name, logical position/dimensions, scale, and transform; and
+- optional `output`: output name, logical position/dimensions, scale, and transform, omitted only for a coherent zero-output observation; and
 - `layout`: `tiled` or `floating`, tile/window size, and exact one-based `(column,tile)` position for tiled windows.
 
 Source IDs are not titles, PIDs, CWDs, timestamps, orders, or raw runtime IDs. A random public source epoch rotates only when a successful complete poll observes a changed private Linux boot identity or Niri socket filesystem identity (device/inode). The private path is used only to locate and `lstat` the socket; another path to the same socket inode does not rotate the epoch. Runtime ID reuse after rotation therefore yields a different source ID.
@@ -106,7 +106,7 @@ A complete inventory can contain per-window conflicts without making an unsafe b
 - `session_socket_invalid`
 - `workspace_name_collision`
 
-A session catalog alone never creates a source. Two windows cannot share one eligible session, and one window cannot choose among multiple candidates.
+A session catalog alone never creates a source. Zero-output publication still requires an eligible open Kitty window with exact live Zellij evidence; arbitrary windowless sessions remain live-session evidence only. Two windows cannot share one eligible session, and one window cannot choose among multiple candidates.
 
 ## Degraded observations
 
@@ -114,7 +114,7 @@ A degraded attempt is informative only:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_host_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "observation": {
     "quality": "degraded",
@@ -135,7 +135,7 @@ A degraded attempt is informative only:
 
 If prior authority exists, it is retained unchanged. Before the first successful complete observation, `authoritative` is absent. Degraded responses never invent an empty inventory and never authorize disappearance or projection close.
 
-Version 1 degraded reason codes are:
+Schema-2 inventory degraded reason codes are:
 
 - `niri_socket_unavailable`, `niri_replay_timeout`, `niri_replay_eof`, `niri_config_failed`, `niri_malformed`, `niri_reply_too_large`
 - `niri_missing_workspace`, `niri_missing_output`, `niri_invalid_geometry`, `niri_unsupported_topology`
@@ -178,7 +178,7 @@ Every valid request receives a typed response with the same request ID:
 {"schema_version":1,"request_id":"req-01","outcome":{"status":"ok"},"result":{"alive":true,"schema_versions":[1]}}
 ```
 
-Version 1 verbs are `liveness`, `snapshot`, `workspace_ensure`, `launch`, `token_query`, and `token_replay`. `snapshot` returns the complete/degraded inventory envelope above. `workspace_ensure` uses direct Niri IPC, exact runtime workspace IDs, and verify-after-write for routed host launch placement; it is not a general spatial-writeback capability. It rejects normalized-name collisions and does not trust `Handled` as completion.
+Version 1 verbs are `liveness`, `snapshot`, `workspace_ensure`, `launch`, `token_query`, and `token_replay`. `snapshot` returns the complete/degraded inventory envelope above. `workspace_ensure` uses direct Niri IPC, exact runtime workspace IDs, and verify-after-write for routed host launch placement; it is not a general spatial-writeback capability. With a coherent zero-output source it returns only an existing exact uniquely normalized named workspace and never creates a missing workspace. Missing, duplicate, or normalization-colliding names fail closed. It does not trust `Handled` as completion.
 
 `launch` requires a bounded safe idempotency token. Routed launches additionally require the exact deterministic `tr-<base32(sha256(token))>` session name and canonical static workspace name. Before any host side effect, the source first durably enrolls a sentinel outside the journal root, then fully writes and file-fsyncs a mode-0600 temporary `pending` transaction containing the stable opaque `host_terminal_id`, transaction source epoch/private fingerprint, session, and workspace, atomically hard-links it to the final digest path without replacement, and fsyncs the private token directory. A sentinel with a missing journal root is missing-after-use authority and returns `token_state_unavailable`; only a valid enrolled journal can prove `token_not_found`. A crash can leave an ignorable temporary name or a complete pending final transaction, never a torn final record.
 
@@ -206,9 +206,9 @@ Slice RPC requires the exact order-insensitive set `NIRI_SOCKET`, `WAYLAND_DISPL
 
 ## Spatial proposal boundary
 
-The [single-monitor Niri spatial policy](adr/0004-single-monitor-niri-spatial-mapping-policy.md) consumes complete inventory spatial fields through the pure `internal/slicelayout` package. It maps canonical static workspace identity, tiled/floating state, and logical-output-relative width/height to typed exact-window proposals. Every exact-window proposal carries target side, opaque source ownership, exact target compositor epoch and same-epoch runtime target ID, controller origin/generation, `focus:false`, and verify-after-write. Ownership binds both host and leech epoch/ID pairs, so a compositor restart invalidates stale ownership even when a numeric ID is reused. Missing workspaces produce an ensure-only generation before any dependent window mutation; source-side ensure scans the whole catalog before action and on every verification poll revalidates exact/canonical uniqueness, unchanged one-output topology, candidate ID/output/index, and a unique later trailing empty replacement.
+The [single-monitor Niri spatial policy](adr/0004-single-monitor-niri-spatial-mapping-policy.md) consumes complete inventory spatial fields through the pure `internal/slicelayout` package. It maps canonical static workspace identity, tiled/floating state, and, when source output geometry is present, logical-output-relative width/height to typed exact-window proposals. Every exact-window proposal carries target side, opaque source ownership, exact target compositor epoch and same-epoch runtime target ID, controller origin/generation, `focus:false`, and verify-after-write. Ownership binds both host and leech epoch/ID pairs, so a compositor restart invalidates stale ownership even when a numeric ID is reused. Missing workspaces produce an ensure-only generation before any dependent window mutation; source-side ensure scans the whole catalog before action and on every verification poll revalidates exact/canonical uniqueness, unchanged one-output topology, candidate ID/output/index, and a unique later trailing empty replacement.
 
-Production v1 uses only host-location proposals flowing from host authority to the owned leech projection. Column/tile order is used only for initial launch ordering and later drift reporting; it never creates a correction or writeback action. Cross-machine size is always marked approximate because Niri working areas and terminal cell grids are not fully observable. Logical dimension differences and every exact decoded scale difference are reported explicitly; scale has no tolerance.
+Production v1 uses only host-location proposals flowing from host authority to the owned leech projection. Column/tile order is used only for initial launch ordering and later drift reporting; it never creates a correction or writeback action. When source output geometry is absent, reconciliation omits width and height actions while retaining workspace, layout mode, and initial order; the next complete outputful revision resumes proportional sizing without changing source/session identity. Cross-machine size is always marked approximate because Niri working areas and terminal cell grids are not fully observable. Logical dimension differences and every exact decoded scale difference are reported explicitly; scale has no tolerance.
 
 ## Leech controller and local control protocol
 
@@ -243,3 +243,7 @@ The host owns the Kitty, Zellij session, execution, and work. The leech Kitty is
 ## Scope
 
 V1.1 includes the opt-in single-pair controller, additive all-eligible/workspace/pickup selection, controller-backed live manager, strict local control protocol, crash-safe lifecycle/retry/absence/successor authority, exact projection ownership and live-only attachment launch, focused-close helper, and verified host-authoritative projection execution. It remains disabled by default and does not install a consumer routed-launch keybinding. Raw event forwarding, watch mode, clipboard synchronization, multi-monitor mapping, and host spatial writeback are unsupported.
+
+## Inventory schema 2 upgrade behavior
+
+Publishers and readers must be upgraded to one package revision. A schema-1 reader rejects schema 2, and a schema-2 reader rejects schema 1; this mismatch is degraded transport/input, not evidence that sources disappeared and not authority for spatial writes. Preserve the last accepted authority until both ends negotiate schema 2. Do not delete or re-enrol inventory/controller/token state during this package upgrade.

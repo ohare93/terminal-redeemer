@@ -143,6 +143,45 @@ func TestResolutionFixtureVectorsAreWidthHeightPairs(t *testing.T) {
 	}
 }
 
+func TestHeadlessHostKeepsWorkspaceAndModeButSkipsOnlySizing(t *testing.T) {
+	input := inputFromFixture(t, "equal-resolution.json")
+	input.Host.Output = sliceprotocol.Output{}
+	input.Host.Workspace = workspace(2, "Work")
+	input.Host.Mode = Floating
+	input.Host.Order = nil
+	input.HostWorkspaces = []Workspace{workspace(2, "Work")}
+	input.LeechWorkspaces = []Workspace{workspace(1, "Dev"), workspace(3, "Work")}
+
+	headless := Plan(input)
+	if headless.Status != PlanComplete {
+		t.Fatalf("headless plan failed: %#v", headless)
+	}
+	if workspaceChange, ok := change(headless, ChangeWorkspace); !ok || workspaceChange.WorkspaceRuntimeID != 3 {
+		t.Fatalf("headless workspace authority lost: %#v", headless)
+	}
+	if modeChange, ok := change(headless, ChangeLayoutMode); !ok || modeChange.Mode != Floating {
+		t.Fatalf("headless layout mode authority lost: %#v", headless)
+	}
+	if _, ok := change(headless, ChangeWidth); ok {
+		t.Fatalf("headless plan emitted width sizing: %#v", headless)
+	}
+	if _, ok := change(headless, ChangeHeight); ok {
+		t.Fatalf("headless plan emitted height sizing: %#v", headless)
+	}
+
+	input.Host.Output = loadFixture(t, "equal-resolution.json").SourceOutput
+	restored := Plan(input)
+	if _, ok := change(restored, ChangeWidth); !ok {
+		t.Fatalf("restored output did not resume width sizing: %#v", restored)
+	}
+	if _, ok := change(restored, ChangeHeight); !ok {
+		t.Fatalf("restored output did not resume height sizing: %#v", restored)
+	}
+	if restored.Proposals[0].SourceID != headless.Proposals[0].SourceID || restored.Proposals[0].RuntimeWindowID != headless.Proposals[0].RuntimeWindowID {
+		t.Fatalf("output restoration changed proposal identity: headless=%#v restored=%#v", headless, restored)
+	}
+}
+
 func TestAnyExactScaleDifferenceIsReported(t *testing.T) {
 	input := inputFromFixture(t, "equal-resolution.json")
 	input.Leech.Output.Scale = 1.005

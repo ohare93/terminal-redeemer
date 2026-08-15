@@ -41,7 +41,7 @@
           };
         };
 
-        packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.2.0" { } ''
+        packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.3.0" { } ''
           mkdir -p "$out/share/terminal-redeemer/host-leech-slices/v1"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.json"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.schema.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.schema.json"
@@ -358,10 +358,14 @@
           '';
 
         checks.host-leech-consumer-contract =
-          assert self.lib.sliceConsumerContract.inventorySchemaVersion == 1;
+          assert self.lib.sliceConsumerContract.inventorySchemaVersion == 2;
           assert self.lib.sliceConsumerContract.rpcSchemaVersion == 1;
+          assert self.lib.sliceConsumerContract.sourceTopology == "one_active_output_or_coherent_zero_output_source";
+          assert self.lib.sliceConsumerContract.headlessWorkspacePolicy == "existing_exact_uniquely_normalized_named_workspace_only_no_creation";
+          assert self.lib.sliceConsumerContract.headlessOmittedProperty == "proportional_size_until_output_returns";
+          assert self.lib.sliceConsumerContract.outputRestorationPolicy == "next_complete_revision_same_source_identity";
           assert self.lib.sliceConsumerContract.controllerSchemaVersion == 2;
-          assert self.lib.sliceConsumerContract.contractVersion == "1.2.0";
+          assert self.lib.sliceConsumerContract.contractVersion == "1.3.0";
           assert self.lib.sliceConsumerContract.niriVersion == "26.04";
           assert self.lib.sliceConsumerContract.zellijVersion == "0.44.3";
           assert self.lib.sliceConsumerContract.allEligibleIncludesUnnamed;
@@ -551,15 +555,19 @@
       };
       lib.sliceConsumerContract = {
         schemaVersion = 1;
-        inventorySchemaVersion = 1;
+        inventorySchemaVersion = 2;
         rpcSchemaVersion = 1;
         controllerSchemaVersion = 2;
         authorityMode = "host_location";
         leechWriteAuthorized = false;
         contractId = "terminal-redeemer.host-leech-slices";
-        contractVersion = "1.2.0";
+        contractVersion = "1.3.0";
         niriVersion = "26.04";
         zellijVersion = "0.44.3";
+        sourceTopology = "one_active_output_or_coherent_zero_output_source";
+        headlessWorkspacePolicy = "existing_exact_uniquely_normalized_named_workspace_only_no_creation";
+        headlessOmittedProperty = "proportional_size_until_output_returns";
+        outputRestorationPolicy = "next_complete_revision_same_source_identity";
         allEligibleIncludesUnnamed = true;
         allEligibleRoutesLaunches = false;
         leechModeEnabledByDefault = false;

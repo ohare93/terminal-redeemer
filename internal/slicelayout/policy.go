@@ -183,7 +183,7 @@ func Plan(input Input) Result {
 		result.Conflicts = append(result.Conflicts, *mismatch)
 		return result
 	}
-	hostSpatial, err := spatial(input.Host)
+	hostSpatial, err := spatial(input.Host, true)
 	if err != nil {
 		return conflictResult(result, ConflictInvalidInput, "host", err.Error())
 	}
@@ -201,7 +201,7 @@ func Plan(input Input) Result {
 		appendProposal(&result, input.LastApplied, p)
 		return result
 	}
-	leechSpatial, err := spatial(*input.Leech)
+	leechSpatial, err := spatial(*input.Leech, false)
 	if err != nil {
 		return conflictResult(result, ConflictInvalidInput, "leech", err.Error())
 	}
@@ -223,12 +223,16 @@ func Plan(input Input) Result {
 	return result
 }
 
-func spatial(observation Observation) (Spatial, error) {
+func spatial(observation Observation, allowMissingOutput bool) (Spatial, error) {
 	if observation.SourceID == "" || observation.SourceEpoch == "" || observation.RuntimeWindowID == 0 {
 		return Spatial{}, errors.New("opaque source, epoch, and same-epoch runtime window ID are required")
 	}
-	if observation.Output.LogicalWidth <= 0 || observation.Output.LogicalHeight <= 0 || observation.Output.Scale <= 0 || math.IsNaN(observation.Output.Scale) || math.IsInf(observation.Output.Scale, 0) {
-		return Spatial{}, errors.New("one active output with valid logical dimensions and scale is required")
+	hasOutput := observation.Output.LogicalWidth != 0 || observation.Output.LogicalHeight != 0 || observation.Output.Scale != 0 || observation.Output.Name != "" || observation.Output.Transform != "" || observation.Output.LogicalX != 0 || observation.Output.LogicalY != 0
+	if !hasOutput && !allowMissingOutput {
+		return Spatial{}, errors.New("target output geometry is required")
+	}
+	if hasOutput && (observation.Output.LogicalWidth <= 0 || observation.Output.LogicalHeight <= 0 || observation.Output.Scale <= 0 || math.IsNaN(observation.Output.Scale) || math.IsInf(observation.Output.Scale, 0)) {
+		return Spatial{}, errors.New("output geometry must be wholly absent or valid")
 	}
 	if observation.WindowWidth <= 0 || observation.WindowHeight <= 0 {
 		return Spatial{}, errors.New("positive observed window dimensions are required")
@@ -247,8 +251,11 @@ func spatial(observation Observation) (Spatial, error) {
 	} else if observation.Order != nil {
 		return Spatial{}, errors.New("floating windows do not carry tiled order")
 	}
-	width := clamp(float64(observation.WindowWidth) / float64(observation.Output.LogicalWidth) * 100)
-	height := clamp(float64(observation.WindowHeight) / float64(observation.Output.LogicalHeight) * 100)
+	width, height := 0.0, 0.0
+	if hasOutput {
+		width = clamp(float64(observation.WindowWidth) / float64(observation.Output.LogicalWidth) * 100)
+		height = clamp(float64(observation.WindowHeight) / float64(observation.Output.LogicalHeight) * 100)
+	}
 	return Spatial{WorkspaceName: observation.Workspace.Name, WorkspaceKey: key, Mode: observation.Mode, WidthPercent: width, HeightPercent: height, Order: copyPosition(observation.Order)}, nil
 }
 
@@ -325,10 +332,10 @@ func changesForTarget(desired, current Spatial, catalog []Workspace) ([]Change, 
 	if desired.Mode != current.Mode {
 		changes = append(changes, Change{Kind: ChangeLayoutMode, Mode: desired.Mode})
 	}
-	if !near(desired.WidthPercent, current.WidthPercent) {
+	if desired.WidthPercent > 0 && !near(desired.WidthPercent, current.WidthPercent) {
 		changes = append(changes, Change{Kind: ChangeWidth, Percent: desired.WidthPercent})
 	}
-	if !near(desired.HeightPercent, current.HeightPercent) {
+	if desired.HeightPercent > 0 && !near(desired.HeightPercent, current.HeightPercent) {
 		changes = append(changes, Change{Kind: ChangeHeight, Percent: desired.HeightPercent})
 	}
 	return changes, conflicts

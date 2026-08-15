@@ -20,12 +20,12 @@ func fixtureAuthority(epoch string, revision uint64, observed time.Time) Authori
 		SourceID: testSourceID, RuntimeWindowID: 42,
 		Session:   Session{ID: testSessionID, Name: "project", Status: "active"},
 		Workspace: Workspace{RuntimeID: 7, Name: "Dev", Key: "dev"},
-		Output:    Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "Normal"},
+		Output:    &Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "Normal"},
 		Layout:    Layout{Mode: "tiled", Position: &Position{Column: 1, Tile: 1}, TileWidth: 900, TileHeight: 700, WindowWidth: 900, WindowHeight: 700},
 	}}}
 }
 
-func TestEncodeDecodeV1AndUnknownAdditiveFields(t *testing.T) {
+func TestEncodeDecodeV2AndUnknownAdditiveFields(t *testing.T) {
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	authority := fixtureAuthority("11111111-1111-4111-8111-111111111111", 1, now)
 	envelope := Envelope{SchemaVersion: SchemaVersion, SourceHostID: testHostID, Observation: Observation{Quality: QualityComplete, AttemptedAt: now}, Authoritative: &authority}
@@ -40,6 +40,30 @@ func TestEncodeDecodeV1AndUnknownAdditiveFields(t *testing.T) {
 	}
 	if decoded.Authoritative.Revision != 1 || decoded.Authoritative.Sources[0].Session.Name != "project" {
 		t.Fatalf("unexpected decode: %+v", decoded)
+	}
+}
+
+func TestSchema2AllowsOnlyOutputGeometryToBeAbsent(t *testing.T) {
+	now := time.Unix(1, 0).UTC()
+	authority := fixtureAuthority("11111111-1111-4111-8111-111111111111", 1, now)
+	authority.Sources[0].Output = nil
+	envelope := Envelope{SchemaVersion: SchemaVersion, SourceHostID: testHostID, Observation: Observation{Quality: QualityComplete, AttemptedAt: now}, Authoritative: &authority}
+	var encoded bytes.Buffer
+	if err := Encode(&encoded, envelope); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(encoded.String(), `"output"`) {
+		t.Fatalf("absent output geometry was serialized: %s", encoded.String())
+	}
+	decoded, err := Decode(bytes.NewReader(encoded.Bytes()))
+	if err != nil || decoded.Authoritative.Sources[0].Output != nil {
+		t.Fatalf("headless source did not round trip: %+v %v", decoded, err)
+	}
+	invalid := authority
+	invalid.Sources = append([]Source(nil), authority.Sources...)
+	invalid.Sources[0].Layout.WindowWidth = 0
+	if err := ValidateAuthoritative(invalid); err == nil {
+		t.Fatal("optional output weakened required window layout validation")
 	}
 }
 
@@ -160,7 +184,7 @@ func TestAcceptorOrderingEpochAndReceiveTimeFreshness(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	epoch1 := "11111111-1111-4111-8111-111111111111"
 	authority := fixtureAuthority(epoch1, 1, time.Unix(999999, 0).UTC())
-	envelope := Envelope{SchemaVersion: 1, SourceHostID: testHostID, Observation: Observation{Quality: QualityComplete, AttemptedAt: now}, Authoritative: &authority}
+	envelope := Envelope{SchemaVersion: SchemaVersion, SourceHostID: testHostID, Observation: Observation{Quality: QualityComplete, AttemptedAt: now}, Authoritative: &authority}
 	first, err := Accept(AcceptanceState{}, envelope, now)
 	if err != nil || first.Decision != DecisionAccepted {
 		t.Fatalf("first: %+v %v", first, err)
@@ -220,7 +244,7 @@ func TestAcceptorOrderingEpochAndReceiveTimeFreshness(t *testing.T) {
 
 func TestDegradedPreservesAuthority(t *testing.T) {
 	state := AcceptanceState{SourceHostID: testHostID, SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 7, SemanticHash: "hash", AuthorityReceivedAt: time.Unix(1, 0)}
-	envelope := Envelope{SchemaVersion: 1, SourceHostID: testHostID, Observation: Observation{Quality: QualityDegraded, AttemptedAt: time.Unix(2, 0), DegradedReasons: []Reason{{Code: ReasonNiriReplayTimeout}}}}
+	envelope := Envelope{SchemaVersion: SchemaVersion, SourceHostID: testHostID, Observation: Observation{Quality: QualityDegraded, AttemptedAt: time.Unix(2, 0), DegradedReasons: []Reason{{Code: ReasonNiriReplayTimeout}}}}
 	result, err := Accept(state, envelope, time.Unix(3, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +255,7 @@ func TestDegradedPreservesAuthority(t *testing.T) {
 }
 
 func TestCommittedProtocolFixturesDecode(t *testing.T) {
-	for _, path := range []string{"testdata/complete-v1.json", "testdata/degraded-v1.json"} {
+	for _, path := range []string{"testdata/complete-v2.json", "testdata/degraded-v2.json"} {
 		payload, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -319,9 +343,9 @@ func TestEncodeRefusesIndentedExpansionOverWireCapWithoutPartialOutput(t *testin
 func TestEncodeOmitsFloatingPositionAndPreservesSpatialFields(t *testing.T) {
 	now := time.Unix(1, 0).UTC()
 	authority := fixtureAuthority("11111111-1111-4111-8111-111111111111", 1, now)
-	authority.Sources[0].Output = Output{Name: "DP-1", LogicalX: 10, LogicalY: 20, LogicalWidth: 2560, LogicalHeight: 1440, Scale: 1.5, Transform: "Flipped180"}
+	authority.Sources[0].Output = &Output{Name: "DP-1", LogicalX: 10, LogicalY: 20, LogicalWidth: 2560, LogicalHeight: 1440, Scale: 1.5, Transform: "Flipped180"}
 	authority.Sources[0].Layout = Layout{Mode: "floating", TileWidth: 700, TileHeight: 500, WindowWidth: 680, WindowHeight: 480}
-	envelope := Envelope{SchemaVersion: 1, SourceHostID: testHostID, Observation: Observation{Quality: QualityComplete, AttemptedAt: now}, Authoritative: &authority}
+	envelope := Envelope{SchemaVersion: SchemaVersion, SourceHostID: testHostID, Observation: Observation{Quality: QualityComplete, AttemptedAt: now}, Authoritative: &authority}
 	var encoded bytes.Buffer
 	if err := Encode(&encoded, envelope); err != nil {
 		t.Fatal(err)

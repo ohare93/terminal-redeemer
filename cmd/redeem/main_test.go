@@ -1243,7 +1243,7 @@ func TestSliceInventoryInitAndVersionNegotiation(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &initialized); err != nil {
 		t.Fatal(err)
 	}
-	if initialized.SchemaVersion != 1 || initialized.SourceHostID == "" || !initialized.Initialized {
+	if initialized.SchemaVersion != sliceprotocol.SchemaVersion || initialized.SourceHostID == "" || !initialized.Initialized {
 		t.Fatalf("unexpected init output: %+v", initialized)
 	}
 	if _, err := os.Stat(filepath.Join(root, "slice", "source-inventory", "current.json")); err != nil {
@@ -1292,7 +1292,7 @@ func TestSliceInventorySnapshotJSONAndErrorContractsHermetic(t *testing.T) {
 		root := initRoot(t)
 		authority := sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{}, Sources: []sliceprotocol.Source{}, Conflicts: []sliceprotocol.Conflict{}}
 		collectSliceInventorySnapshot = func(context.Context, sliceInventorySnapshotOptions) (sliceprotocol.Envelope, error) {
-			return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: host, Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &authority}, nil
+			return sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: host, Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &authority}, nil
 		}
 		var out, stderr bytes.Buffer
 		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root}, &out, &stderr)
@@ -1307,7 +1307,7 @@ func TestSliceInventorySnapshotJSONAndErrorContractsHermetic(t *testing.T) {
 	t.Run("degraded", func(t *testing.T) {
 		root := initRoot(t)
 		collectSliceInventorySnapshot = func(context.Context, sliceInventorySnapshotOptions) (sliceprotocol.Envelope, error) {
-			return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: host, Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityDegraded, AttemptedAt: now, DegradedReasons: []sliceprotocol.Reason{{Code: sliceprotocol.ReasonZellijCatalogUnavailable}}}}, nil
+			return sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: host, Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityDegraded, AttemptedAt: now, DegradedReasons: []sliceprotocol.Reason{{Code: sliceprotocol.ReasonZellijCatalogUnavailable}}}}, nil
 		}
 		var out, stderr bytes.Buffer
 		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root}, &out, &stderr)
@@ -1458,8 +1458,8 @@ func TestSliceControllerCLIInitControlAndDisabledDefault(t *testing.T) {
 	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const sessionID = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	now := time.Now().UTC()
-	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1, Name: "work", Key: "work"}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
-	envelope := sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1, Name: "work", Key: "work"}, Output: &sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	envelope := sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
 	if _, _, _, err := engine.ApplyEnvelope(envelope, now); err != nil {
 		t.Fatal(err)
 	}
@@ -1542,8 +1542,8 @@ func TestControllerSpatialSkipsUnnamedSourcesWithoutStateChurn(t *testing.T) {
 	engine := &slicecontroller.Engine{Store: store, Config: slicecontroller.ControllerConfig{RetryWindow: time.Second, RetryInitialBackoff: time.Millisecond, RetryMaxBackoff: time.Millisecond, RetryMaxAttempts: 1}, Now: func() time.Time { return now }}
 	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const sessionID = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
-	envelope := sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1}, Output: &sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	envelope := sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
 	if _, _, _, err = engine.ApplyEnvelope(envelope, now); err != nil {
 		t.Fatal(err)
 	}
@@ -1667,8 +1667,8 @@ func closeEffectHarness(t *testing.T) (*slicecontroller.Engine, string, []string
 	engine := &slicecontroller.Engine{Store: store, Config: slicecontroller.ControllerConfig{RetryWindow: time.Minute, RetryInitialBackoff: time.Second, RetryMaxBackoff: time.Second, RetryMaxAttempts: 2, SourceGoneGrace: time.Second, SourceGoneConfirmations: 2}, Now: func() time.Time { return now }}
 	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const sessionID = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1, Name: "work", Key: "work"}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
-	envelope := sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1, Name: "work", Key: "work"}, Output: &sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	envelope := sliceprotocol.Envelope{SchemaVersion: sliceprotocol.SchemaVersion, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
 	if _, _, _, err = engine.ApplyEnvelope(envelope, now); err != nil {
 		t.Fatal(err)
 	}
