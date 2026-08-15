@@ -31,6 +31,12 @@ func (r fakeResolver) Resolve(session string) (string, error) {
 	return r[session], nil
 }
 
+type fakeLister []string
+
+func (l fakeLister) List() ([]string, error) {
+	return append([]string(nil), l...), nil
+}
+
 func TestCaptureOrdersWindowsAndIncludesZellijSession(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +138,46 @@ func TestCaptureExtractsVerifiedSessionFromTitle(t *testing.T) {
 	}
 	if window.Terminal == nil || window.Terminal.CWD != "/home/jmo/project" {
 		t.Fatalf("expected resolver-upgraded cwd, got %#v", window.Terminal)
+	}
+}
+
+func TestCaptureAddsHeadlessSessionsWithoutExactDuplicates(t *testing.T) {
+	t.Parallel()
+
+	fixturePath := filepath.Join(t.TempDir(), "niri.json")
+	payload := []byte(`{
+		"workspaces": [{"id": "ws-1", "idx": 1, "name": "Dev"}],
+		"windows": [{"id": 10, "app_id": "kitty", "title": "visible", "workspace_id": "ws-1", "pid": 100}]
+	}`)
+	if err := os.WriteFile(fixturePath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := Capture(context.Background(), Options{
+		Host: "lattice", FixturePath: fixturePath,
+		Reader:          fakeReader{100: {CWD: "/visible", Env: map[string]string{"ZELLIJ_SESSION_NAME": "visible"}}},
+		Resolver:        fakeResolver{"visible": "/visible", "detached": "/headless/project"},
+		Lister:          fakeLister{"detached", "visible", "detached"},
+		ProcessMetadata: procmeta.Config{IncludeSessionTag: true},
+	})
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	windows := Discover(snapshot)
+	if len(windows) != 2 || SessionName(windows[0]) != "visible" || SessionName(windows[1]) != "detached" {
+		t.Fatalf("discovery = %#v", windows)
+	}
+	headless := windows[1]
+	if !headless.Headless || headless.SourceWindowID != 0 || headless.AppID != "zellij" || headless.Terminal == nil || headless.Terminal.CWD != "/headless/project" {
+		t.Fatalf("headless metadata = %#v", headless)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSnapshot(encoded)
+	if err != nil || len(Discover(decoded)) != 2 {
+		t.Fatalf("decode headless snapshot: %#v err=%v", decoded, err)
 	}
 }
 

@@ -31,6 +31,13 @@ func TestZellijSessionVerifierListDeduplicatesNames(t *testing.T) {
 	}
 }
 
+func TestParseZellijSessionsIgnoresNoActiveMessage(t *testing.T) {
+	t.Parallel()
+	if got := ParseZellijSessions([]byte("No active zellij sessions found\n")); len(got) != 0 {
+		t.Fatalf("sessions = %#v", got)
+	}
+}
+
 func TestZellijSessionVerifierMissing(t *testing.T) {
 	t.Parallel()
 

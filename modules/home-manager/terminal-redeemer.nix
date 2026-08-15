@@ -98,6 +98,21 @@ let
   resumeExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} resume";
   pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
   controllerExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} slice controller run";
+  renderNiriSpawn = argv: "spawn " + lib.concatMapStringsSep " " builtins.toJSON argv + ";";
+  mirrorLocalCommand = [ cfg.mirror.launcherCommand ];
+  mirrorNewCommand = [ (lib.getExe cfg.package) "mirror" "new" ]
+    ++ lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
+  mirrorOpenCommand = [ (lib.getExe cfg.package) "mirror" "open" ]
+    ++ lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
+  mirrorNiriIntegrationFragment = ''
+    // Terminal Redeemer explicit local and remote terminal shortcuts.
+    // Opt-in template only; this module does not install these bindings.
+    binds {
+        Mod+Return { ${renderNiriSpawn mirrorLocalCommand} }
+        Mod+Shift+Return { ${renderNiriSpawn mirrorNewCommand} }
+        Mod+Ctrl+Return { ${renderNiriSpawn mirrorOpenCommand} }
+    }
+  '';
   sliceLaunchCommand = [ (lib.getExe cfg.package) "slice" "launch" ];
   sliceCloseFocusedCommand = [ (lib.getExe cfg.package) "slice" "close-focused" ];
   sliceManageCommand = [
@@ -108,14 +123,7 @@ let
     "--title" "Terminal Redeemer Slices"
     "-e" cfg.slice.selfCommand "--config" configPath "slice" "manage"
   ];
-  sliceNiriIntegrationFragment = ''
-    // Terminal Redeemer host/leech consumer contract v1.2.0.
-    // Opt-in template only; this module does not install these bindings.
-    binds {
-        Mod+Return { spawn "${lib.getExe cfg.package}" "slice" "launch"; }
-        Mod+W { spawn "${lib.getExe cfg.package}" "slice" "close-focused"; }
-    }
-  '';
+  sliceNiriIntegrationFragment = mirrorNiriIntegrationFragment;
   graphicalPath = "${config.home.profileDirectory}/bin:/run/current-system/sw/bin";
 in {
   options.programs.terminal-redeemer = {
@@ -281,7 +289,7 @@ in {
       launchCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceLaunchCommand; description = "Packaged argv suitable for a future leech Niri Super+Enter binding; this module does not install the binding."; };
       closeFocusedCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceCloseFocusedCommand; description = "Packaged argv suitable for a future leech Niri Super+W projection-close binding; this module does not install the binding."; };
       manageCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceManageCommand; description = "Direct packaged Kitty argv that opens the live slice manager; consumers choose and install any binding."; };
-      niriIntegrationFragment = lib.mkOption { type = lib.types.lines; readOnly = true; default = sliceNiriIntegrationFragment; description = "Generated opt-in Niri KDL fragment for Super+Enter routed launch and Super+W owned projection close; never installed automatically."; };
+      niriIntegrationFragment = lib.mkOption { type = lib.types.lines; readOnly = true; default = sliceNiriIntegrationFragment; description = "Deprecated alias of the explicit local/mirror Niri fragment; never installed automatically."; };
       sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "Operator-owned SSH destination for the additive slice RPC transport."; };
       selfCommand = lib.mkOption { type = lib.types.str; default = lib.getExe cfg.package; defaultText = lib.literalExpression "lib.getExe cfg.package"; description = "Packaged redeem executable; executed directly without a shell wrapper."; };
       kittyCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.kitty; defaultText = lib.literalExpression "lib.getExe pkgs.kitty"; description = "Pinned packaged Kitty executable for host launches."; };
@@ -313,6 +321,10 @@ in {
     };
 
     mirror = {
+      localCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorLocalCommand; description = "Direct local Kitty argv suitable for Mod+Return."; };
+      newCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorNewCommand; description = "Packaged argv creating and attaching a new persistent remote session."; };
+      openCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorOpenCommand; description = "Packaged argv opening the remote session picker."; };
+      niriIntegrationFragment = lib.mkOption { type = lib.types.lines; readOnly = true; default = mirrorNiriIntegrationFragment; description = "Generated opt-in Niri shortcuts for local, new remote, and remote picker terminals; never installed automatically."; };
       sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "SSH source host for live session mirroring."; };
       sshCommand = lib.mkOption { type = lib.types.str; default = "ssh"; description = "SSH executable."; };
       sshOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "SSH argv options."; };

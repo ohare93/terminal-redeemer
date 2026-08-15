@@ -71,6 +71,12 @@ func DecodeSnapshot(raw []byte) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: windows is missing")
 	}
 	for i, window := range snapshot.Windows {
+		if window.Headless {
+			if window.SourceWindowID != 0 || strings.TrimSpace(window.AppID) != "zellij" || SessionName(window) == "" {
+				return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: headless session %d is invalid", i)
+			}
+			continue
+		}
 		if window.SourceWindowID <= 0 || strings.TrimSpace(window.AppID) == "" {
 			return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: window %d lacks source_window_id or app_id", i)
 		}
@@ -78,18 +84,24 @@ func DecodeSnapshot(raw []byte) (Snapshot, error) {
 	return snapshot, nil
 }
 
-// Discover returns only live Kitty windows carrying a Zellij session. Snapshot
-// order is authoritative, with stable metadata tie-breakers for malformed or
-// hand-authored order values.
+// Discover returns live Kitty-backed and headless Zellij sessions. Snapshot
+// order is authoritative; an exact session appears at most once, preferring
+// the first (normally window-backed) entry.
 func Discover(snapshot Snapshot) []Window {
 	windows := make([]Window, 0, len(snapshot.Windows))
+	seen := make(map[string]struct{})
 	for _, window := range snapshot.Windows {
-		if !strings.EqualFold(strings.TrimSpace(window.AppID), "kitty") {
+		if !window.Headless && !strings.EqualFold(strings.TrimSpace(window.AppID), "kitty") {
 			continue
 		}
-		if SessionName(window) == "" {
+		session := SessionName(window)
+		if session == "" {
 			continue
 		}
+		if _, found := seen[session]; found {
+			continue
+		}
+		seen[session] = struct{}{}
 		windows = append(windows, window)
 	}
 	sort.SliceStable(windows, func(i, j int) bool {

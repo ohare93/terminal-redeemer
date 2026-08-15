@@ -1,7 +1,8 @@
-// Terminal Redeemer host/leech slice contract v1.3.0.
+// Terminal Redeemer local and Lattice terminal shortcuts.
 // Packaged in source-template and generated store-pinned forms.
 // This repository and its module do not install these bindings.
 binds {
-    Mod+Return { spawn "@REDEEM@" "slice" "launch"; }
-    Mod+W { spawn "@REDEEM@" "slice" "close-focused"; }
+    Mod+Return { spawn "@KITTY@"; }
+    Mod+Shift+Return { spawn "@REDEEM@" "mirror" "new" "--host" "lattice"; }
+    Mod+Ctrl+Return { spawn "@REDEEM@" "mirror" "open" "--host" "lattice"; }
 }

@@ -47,7 +47,8 @@
           cp ${./contracts/host-leech-slices/v1/consumer-contract.schema.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.schema.json"
           cp ${./contracts/host-leech-slices/v1/niri-bindings.kdl.in} "$out/share/terminal-redeemer/host-leech-slices/v1/niri-bindings.kdl.in"
           substitute ${./contracts/host-leech-slices/v1/niri-bindings.kdl.in} "$out/share/terminal-redeemer/host-leech-slices/v1/niri-bindings.kdl" \
-            --replace-fail '@REDEEM@' '${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}'
+            --replace-fail '@REDEEM@' '${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}' \
+            --replace-fail '@KITTY@' '${pkgs.lib.getExe pkgs.kitty}'
         '';
 
         packages.default = self.packages.${system}.terminal-redeemer;
@@ -193,7 +194,16 @@
             "--config" "/home/test/.config/terminal-redeemer/config.yaml"
             "slice" "manage"
           ];
-          assert builtins.match ".*Mod\\+Return.*slice.*launch.*Mod\\+W.*slice.*close-focused.*" cfg.programs.terminal-redeemer.slice.niriIntegrationFragment != null;
+          assert cfg.programs.terminal-redeemer.mirror.localCommand == [ "custom-kitty" ];
+          assert cfg.programs.terminal-redeemer.mirror.newCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "new" "--host" "source.example" ];
+          assert cfg.programs.terminal-redeemer.mirror.openCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "open" "--host" "source.example" ];
+          assert pkgs.lib.hasInfix ''Mod+Return { spawn "custom-kitty"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''Mod+Shift+Return { spawn '' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"mirror" "new" "--host" "source.example"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''Mod+Ctrl+Return { spawn '' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"mirror" "open" "--host" "source.example"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert !(pkgs.lib.hasInfix "slice" cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment);
+          assert cfg.programs.terminal-redeemer.slice.niriIntegrationFragment == cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert rendered.slice.selfCommand == pkgs.lib.getExe self.packages.${system}.terminal-redeemer;
           assert rendered.slice.kittyCommand == pkgs.lib.getExe pkgs.kitty;
           assert rendered.slice.transportCommand == pkgs.lib.getExe pkgs.openssh;
@@ -336,7 +346,10 @@
             "--config" "/home/test/.config/terminal-redeemer/config.yaml"
             "slice" "manage"
           ];
-          assert builtins.match ".*Mod\\+Return.*slice.*launch.*Mod\\+W.*slice.*close-focused.*" cfg.programs.terminal-redeemer.slice.niriIntegrationFragment != null;
+          assert pkgs.lib.hasInfix ''Mod+Return { spawn "kitty"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix "Mod+Shift+Return" cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix "Mod+Ctrl+Return" cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert !(pkgs.lib.hasInfix "slice" cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment);
           hmCfg.activationPackage;
 
         checks.zellij-live-only-attachment-spike =
@@ -417,19 +430,26 @@
           cmp contracts/host-leech-slices/v1/consumer-contract.schema.json "$contractOut/consumer-contract.schema.json"
           cmp contracts/host-leech-slices/v1/niri-bindings.kdl.in "$contractOut/niri-bindings.kdl.in"
           test -f "$contractOut/niri-bindings.kdl"
-          grep -Fx '    Mod+Return { spawn "@REDEEM@" "slice" "launch"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
-          grep -Fx '    Mod+W { spawn "@REDEEM@" "slice" "close-focused"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
+          grep -Fx '    Mod+Return { spawn "@KITTY@"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
+          grep -Fx '    Mod+Shift+Return { spawn "@REDEEM@" "mirror" "new" "--host" "lattice"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
+          grep -Fx '    Mod+Ctrl+Return { spawn "@REDEEM@" "mirror" "open" "--host" "lattice"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
+          if grep -F '"slice"' contracts/host-leech-slices/v1/niri-bindings.kdl.in; then
+            echo "Niri template must not route terminal shortcuts through slice" >&2
+            exit 1
+          fi
           if grep -Eq '(^|[[:space:]"/])(sh|bash)([[:space:]"/]|$)|[[:space:]]-c([[:space:]]|$)' contracts/host-leech-slices/v1/niri-bindings.kdl.in; then
             echo "Niri template must not introduce a shell" >&2
             exit 1
           fi
           grep -F '${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}' "$contractOut/niri-bindings.kdl"
+          grep -F '${pkgs.lib.getExe pkgs.kitty}' "$contractOut/niri-bindings.kdl"
           redeem=${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}
           "$redeem" slice --help | grep -F 'controller|mode|launch|manage|projection-run|close-focused'
           "$redeem" slice manage --help 2>&1 | grep -F 'refresh-interval'
           "$redeem" slice controller --help | grep -F 'controller <init|run|status|workspace-add|workspace-remove|all-enable|all-disable|pickup|pickup-remove|drop|close|reopen|undo|reconnect|launch-handoff>'
           "$redeem" slice mode --help | grep -F 'mode <enable|disable|status>'
           "$redeem" mirror open --help 2>&1 | grep -F 'attach or watch'
+          "$redeem" mirror new --help 2>&1 | grep -F 'SSH source host'
           touch "$out"
         '';
 

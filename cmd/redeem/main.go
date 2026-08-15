@@ -1418,11 +1418,11 @@ func runSliceInventorySnapshot(args []string, resolvedConfig config.Config, stdo
 
 func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|status|close|paste-image> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|new|status|close|paste-image> [flags]")
 		return 2
 	}
 	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|status|close|paste-image> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|new|status|close|paste-image> [flags]")
 		return 0
 	}
 	switch args[0] {
@@ -1432,6 +1432,8 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return runMirrorList(args[1:], resolvedConfig, stdout, stderr)
 	case "open":
 		return runMirrorOpen(args[1:], resolvedConfig, stdout, stderr)
+	case "new":
+		return runMirrorNew(args[1:], resolvedConfig, stdout, stderr)
 	case "status":
 		return runMirrorStatus(args[1:], resolvedConfig, stdout, stderr)
 	case "close":
@@ -1577,6 +1579,57 @@ func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer
 }
 
 var chooseMirrorSessions = mirrortui.Run
+var newMirrorSessionName = mirror.NewSessionName
+
+func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror new", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host := fs.String("host", resolvedConfig.Mirror.SourceHost, "SSH source host")
+	sshCommand := fs.String("ssh-command", resolvedConfig.Mirror.SSHCommand, "SSH executable")
+	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
+	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
+	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by Kitty clipboard mapping")
+	dryRun := fs.Bool("dry-run", false, "print launch command without executing")
+	noClipboard := fs.Bool("no-clipboard", false, "disable image clipboard bridge mapping")
+	sshOptions := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.SSHOptions...)}
+	fs.Var(&sshOptions, "ssh-option", "SSH option (repeatable; first occurrence replaces config)")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+
+	session, err := newMirrorSessionName()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
+		return 1
+	}
+	unique, err := mirror.RandomID()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror new failed: create socket name: %v\n", err)
+		return 1
+	}
+	socket := fmt.Sprintf("unix:/tmp/%s-%s.sock", safeSocketPart(*appID), unique)
+	plan, err := mirror.PlanNew(session, mirror.LaunchConfig{
+		SourceHost: strings.TrimSpace(*host), SSHCommand: *sshCommand, SSHOptions: sshOptions.values,
+		LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID,
+		Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
+		return 1
+	}
+	if *dryRun {
+		_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(plan.Command))
+		return 0
+	}
+	if err := (mirror.ExecRunner{}).Run(context.Background(), plan.Command); err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror new failed for %s: %v\n", plan.Session, err)
+		return 1
+	}
+	return 0
+}
 
 func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mirror open", flag.ContinueOnError)
@@ -1622,7 +1675,7 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 	}
 	windows := mirror.Discover(snapshot)
 	if len(windows) == 0 {
-		_, _ = fmt.Fprintf(stderr, "no Kitty/Zellij windows found on %s\n", host)
+		_, _ = fmt.Fprintf(stderr, "no live Zellij sessions found on %s\n", host)
 		return 1
 	}
 	selected := windows

@@ -2,6 +2,7 @@ package procmeta
 
 import (
 	"bytes"
+	"errors"
 	"os/exec"
 	"strings"
 )
@@ -55,6 +56,10 @@ func (v ZellijSessionVerifier) Exists(session string) (bool, error) {
 func (v ZellijSessionVerifier) List() ([]string, error) {
 	out, err := v.exec.Output("zellij", "list-sessions", "--short")
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && bytes.Contains(exitErr.Stderr, []byte("No active zellij sessions found")) {
+			return []string{}, nil
+		}
 		return nil, err
 	}
 	return ParseZellijSessions(out), nil
@@ -65,7 +70,7 @@ func ParseZellijSessions(out []byte) []string {
 	seen := make(map[string]struct{})
 	for _, line := range bytes.Split(out, []byte("\n")) {
 		name := strings.TrimSpace(string(line))
-		if name == "" {
+		if name == "" || strings.HasPrefix(name, "No active zellij sessions") {
 			continue
 		}
 		fields := strings.Fields(name)

@@ -153,6 +153,20 @@ func TestGroupingOrderAndUnnamedFallback(t *testing.T) {
 	}
 }
 
+func TestHeadlessSessionWithoutWindowMetadataIsUsable(t *testing.T) {
+	window := mirror.Window{Headless: true, AppID: "zellij", Title: "redeem-detached", ZellijSession: "redeem-detached", Terminal: &mirror.Terminal{ZellijSession: "redeem-detached"}}
+	model := NewModel([]mirror.Window{window}, false)
+	model.width, model.height = 80, 10
+	view := model.View()
+	if !strings.Contains(view, "(unknown)") || !strings.Contains(view, "redeem-detached") {
+		t.Fatalf("headless session was not rendered usefully:\n%s", view)
+	}
+	update(model, "enter")
+	if got := selectedSessions(model); len(got) != 1 || got[0] != "redeem-detached" {
+		t.Fatalf("headless selection = %v", got)
+	}
+}
+
 func TestProjectFirstWideAndNarrowRendering(t *testing.T) {
 	t.Setenv("HOME", "/home/test")
 	window := mirror.Window{

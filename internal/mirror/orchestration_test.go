@@ -73,15 +73,17 @@ func TestDecodeSnapshotRejectsMalformedRemoteOutput(t *testing.T) {
 	}
 }
 
-func TestDiscoverFiltersAndOrdersKittyZellijWindows(t *testing.T) {
+func TestDiscoverFiltersOrdersAndDeduplicatesExactSessions(t *testing.T) {
 	snapshot := Snapshot{Windows: []Window{
 		{Order: 3, SourceWindowID: 3, AppID: "kitty", ZellijSession: "later"},
 		{Order: 1, SourceWindowID: 1, AppID: "firefox", ZellijSession: "skip-app"},
 		{Order: 2, SourceWindowID: 2, AppID: "Kitty", Terminal: &Terminal{ZellijSession: "first"}},
 		{Order: 0, SourceWindowID: 4, AppID: "kitty"},
+		{Order: 4, AppID: "zellij", Headless: true, ZellijSession: "first"},
+		{Order: 5, AppID: "zellij", Headless: true, ZellijSession: "headless"},
 	}}
 	got := Discover(snapshot)
-	if len(got) != 2 || SessionName(got[0]) != "first" || SessionName(got[1]) != "later" {
+	if len(got) != 3 || SessionName(got[0]) != "first" || SessionName(got[1]) != "later" || SessionName(got[2]) != "headless" || got[0].Headless {
 		t.Fatalf("unexpected discovery: %#v", got)
 	}
 }
@@ -97,8 +99,11 @@ func TestPlanLaunchAttachMetadataAndWatchUnsupported(t *testing.T) {
 		t.Fatalf("metadata lost: %#v", plan)
 	}
 	rendered := strings.Join(plan.Command.Args, " ")
-	if !strings.Contains(rendered, "'env' '-u' 'ZELLIJ'") || !strings.Contains(rendered, "'zellij'") || !strings.Contains(rendered, "'attach'") {
-		t.Fatalf("missing attach/env scrub: %s", rendered)
+	if !strings.Contains(rendered, "'env' '-u' 'ZELLIJ'") || !strings.Contains(rendered, "'zellij'") || !strings.Contains(rendered, "'attach'") || !strings.Contains(rendered, "'options' '--on-force-close' 'detach'") {
+		t.Fatalf("missing exact attach/env scrub/detach policy: %s", rendered)
+	}
+	if strings.Contains(rendered, "'--create'") {
+		t.Fatalf("existing-session attach must not create: %s", rendered)
 	}
 	if !strings.Contains(rendered, `'bad'"'"'; echo owned'`) || !strings.Contains(rendered, `cd -- '/tmp/a'"'"'b'`) {
 		t.Fatalf("untrusted metadata was not quoted: %s", rendered)
@@ -109,6 +114,39 @@ func TestPlanLaunchAttachMetadataAndWatchUnsupported(t *testing.T) {
 	cfg.Mode = "watch"
 	if _, err := PlanLaunch(window, cfg); err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("watch should be explicitly unsupported, got %v", err)
+	}
+}
+
+func TestPlanNewCreatesOnlyGeneratedExactSessionAndDetaches(t *testing.T) {
+	cfg := LaunchConfig{SourceHost: "user@lattice", SSHCommand: "ssh", SSHOptions: []string{"-p", "2222"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror"}
+	plan, err := PlanNew("redeem-0123456789abcdef0123456789abcdef", cfg)
+	if err != nil {
+		t.Fatalf("plan new: %v", err)
+	}
+	rendered := strings.Join(plan.Command.Args, " ")
+	for _, want := range []string{"'zellij' 'attach' '--create' 'redeem-0123456789abcdef0123456789abcdef'", "'options' '--on-force-close' 'detach'"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("new launch missing %q: %s", want, rendered)
+		}
+	}
+	for _, forbidden := range []string{"${SHELL", "exec sh", "exec bash", "||"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("new launch contains fallback %q: %s", forbidden, rendered)
+		}
+	}
+	if _, err := PlanNew("existing-session", cfg); err == nil {
+		t.Fatal("arbitrary existing name was accepted for create")
+	}
+}
+
+func TestNewSessionNameIsSafeAndUnique(t *testing.T) {
+	first, err := NewSessionName()
+	if err != nil || !generatedSessionPattern.MatchString(first) {
+		t.Fatalf("first session = %q err=%v", first, err)
+	}
+	second, err := NewSessionName()
+	if err != nil || !generatedSessionPattern.MatchString(second) || first == second {
+		t.Fatalf("second session = %q err=%v", second, err)
 	}
 }
 

@@ -38,9 +38,6 @@ type LaunchPlan struct {
 }
 
 func PlanLaunch(window Window, cfg LaunchConfig) (LaunchPlan, error) {
-	if err := ValidateDestination(cfg.SourceHost); err != nil {
-		return LaunchPlan{}, err
-	}
 	if cfg.Mode != "attach" && cfg.Mode != "watch" {
 		return LaunchPlan{}, fmt.Errorf("invalid mirror mode %q (expected attach or watch)", cfg.Mode)
 	}
@@ -50,6 +47,23 @@ func PlanLaunch(window Window, cfg LaunchConfig) (LaunchPlan, error) {
 	session := SessionName(window)
 	if session == "" {
 		return LaunchPlan{}, fmt.Errorf("source window %d has no zellij session", window.SourceWindowID)
+	}
+	return planZellijLaunch(window, cfg, session, false)
+}
+
+// PlanNew launches a deliberately new, generated Zellij session. Existing
+// session launches use PlanLaunch and never receive --create.
+func PlanNew(session string, cfg LaunchConfig) (LaunchPlan, error) {
+	if !generatedSessionPattern.MatchString(session) {
+		return LaunchPlan{}, fmt.Errorf("invalid generated mirror session name %q", session)
+	}
+	window := Window{Title: session, ZellijSession: session}
+	return planZellijLaunch(window, cfg, session, true)
+}
+
+func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bool) (LaunchPlan, error) {
+	if err := ValidateDestination(cfg.SourceHost); err != nil {
+		return LaunchPlan{}, err
 	}
 	if strings.TrimSpace(cfg.LauncherCommand) == "" || strings.TrimSpace(cfg.SSHCommand) == "" || strings.TrimSpace(cfg.AppID) == "" {
 		return LaunchPlan{}, fmt.Errorf("launcher, SSH command, and app ID must not be empty")
@@ -63,7 +77,11 @@ func PlanLaunch(window Window, cfg LaunchConfig) (LaunchPlan, error) {
 	for _, name := range zellijEnvironment {
 		remoteArgv = append(remoteArgv, "-u", name)
 	}
-	remoteArgv = append(remoteArgv, "zellij", cfg.Mode, session)
+	remoteArgv = append(remoteArgv, "zellij", "attach")
+	if create {
+		remoteArgv = append(remoteArgv, "--create")
+	}
+	remoteArgv = append(remoteArgv, session, "options", "--on-force-close", "detach")
 	remoteCommand := "exec " + QuoteCommand(remoteArgv)
 	if cwd != "" {
 		remoteCommand = "cd -- " + ShellQuote(cwd) + " 2>/dev/null || true; " + remoteCommand

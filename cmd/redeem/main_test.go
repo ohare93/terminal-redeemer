@@ -128,6 +128,7 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror snapshot", args: []string{"mirror", "snapshot", "--help"}},
 		{name: "mirror list", args: []string{"mirror", "list", "--help"}},
 		{name: "mirror open", args: []string{"mirror", "open", "--help"}},
+		{name: "mirror new", args: []string{"mirror", "new", "--help"}},
 		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
 		{name: "mirror close", args: []string{"mirror", "close", "--help"}},
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
@@ -978,6 +979,30 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	stderr.Reset()
 	if code := run([]string{"mirror", "open", "--mode", "watch"}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "unsupported by pinned Zellij") {
 		t.Fatalf("watch code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestMirrorNewDryRunCreatesRemoteSessionWithoutLocalFallback(t *testing.T) {
+	original := newMirrorSessionName
+	defer func() { newMirrorSessionName = original }()
+	newMirrorSessionName = func() (string, error) {
+		return "redeem-0123456789abcdef0123456789abcdef", nil
+	}
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"mirror", "new", "--host", "user@lattice", "--ssh-command", "ssh", "--launcher-command", "kitty", "--app-id", "owned-mirror", "--dry-run", "--no-clipboard"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "--create", "redeem-0123456789abcdef0123456789abcdef", "--on-force-close", "detach"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry-run missing %q: %s", want, out.String())
+		}
+	}
+	for _, forbidden := range []string{"${SHELL", "exec sh", "exec bash"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Fatalf("dry-run contains local fallback %q: %s", forbidden, out.String())
+		}
 	}
 }
 

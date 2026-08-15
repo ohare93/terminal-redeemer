@@ -21,6 +21,10 @@ type CommandRunner interface {
 	Run(ctx context.Context, command string) ([]byte, error)
 }
 
+type SessionLister interface {
+	List() ([]string, error)
+}
+
 type Options struct {
 	Host            string
 	Profile         string
@@ -32,6 +36,7 @@ type Options struct {
 	Reader          procmeta.Reader
 	Verifier        procmeta.SessionVerifier
 	Resolver        procmeta.SessionCWDResolver
+	Lister          SessionLister
 }
 
 type Snapshot struct {
@@ -57,6 +62,7 @@ type Window struct {
 	WindowSize     []int     `json:"window_size,omitempty"`
 	IsFocused      bool      `json:"is_focused,omitempty"`
 	IsFloating     bool      `json:"is_floating,omitempty"`
+	Headless       bool      `json:"headless,omitempty"`
 	ZellijSession  string    `json:"zellij_session,omitempty"`
 	Terminal       *Terminal `json:"terminal,omitempty"`
 }
@@ -194,9 +200,49 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 	})
 
 	windows := make([]Window, 0, len(ordered))
+	visibleSessions := make(map[string]struct{})
 	for i, entry := range ordered {
 		entry.window.Order = i
 		windows = append(windows, entry.window)
+		if session := SessionName(entry.window); session != "" {
+			visibleSessions[session] = struct{}{}
+		}
+	}
+
+	lister := opts.Lister
+	if lister == nil && strings.TrimSpace(opts.FixturePath) == "" {
+		lister = procmeta.NewZellijSessionVerifier(nil)
+	}
+	if lister != nil {
+		sessions, err := lister.List()
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("list live Zellij sessions: %w", err)
+		}
+		sort.Strings(sessions)
+		added := make(map[string]struct{}, len(sessions))
+		for _, session := range sessions {
+			session = strings.TrimSpace(session)
+			if session == "" {
+				continue
+			}
+			if _, found := visibleSessions[session]; found {
+				continue
+			}
+			if _, found := added[session]; found {
+				continue
+			}
+			added[session] = struct{}{}
+			cwd, _ := resolver.Resolve(session)
+			windows = append(windows, Window{
+				Order:         len(windows),
+				Key:           "zellij:" + session,
+				AppID:         "zellij",
+				Title:         session,
+				Headless:      true,
+				ZellijSession: session,
+				Terminal:      &Terminal{CWD: strings.TrimSpace(cwd), ZellijSession: session},
+			})
+		}
 	}
 
 	return Snapshot{
