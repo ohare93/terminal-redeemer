@@ -145,6 +145,109 @@ func TestGroupingOrderAndUnnamedFallback(t *testing.T) {
 	if !strings.Contains(view, "Workspace: Chat") || strings.Contains(view, "Workspace: Dev") || strings.Contains(view, "Workspace: (unnamed)") {
 		t.Fatalf("empty filtered groups were not hidden:\n%s", view)
 	}
+
+	m = NewModel(pickerWindows()[3:], false)
+	m.width, m.height = 100, 20
+	if view = m.View(); strings.Contains(view, "Workspace: (unnamed)") {
+		t.Fatalf("sole unnamed workspace heading was not omitted:\n%s", view)
+	}
+}
+
+func TestProjectFirstWideAndNarrowRendering(t *testing.T) {
+	t.Setenv("HOME", "/home/test")
+	window := mirror.Window{
+		Title:         "sensible-bee | OC | Fix picker",
+		ZellijSession: "sensible-bee",
+		IsFocused:     true,
+		Terminal:      &mirror.Terminal{CWD: "/home/test/Development/projects/terminal-redeemer"},
+	}
+
+	wide := NewModel([]mirror.Window{window}, false)
+	wide.width, wide.height = 84, 20
+	update(wide, "space")
+	view := wide.View()
+	projectHeading := strings.Index(view, "PROJECT / DIRECTORY")
+	activityHeading := strings.Index(view, "ACTIVITY")
+	sessionHeading := strings.Index(view, "SESSION")
+	project := strings.Index(view, "terminal-redeemer")
+	activity := strings.Index(view, "OC | Fix picker")
+	session := strings.LastIndex(view, "sensible-bee")
+	if projectHeading < 0 || activityHeading < projectHeading || sessionHeading < activityHeading || project < sessionHeading || activity < project || session < activity {
+		t.Fatalf("wide view is not project/activity/session ordered:\n%s", view)
+	}
+	if !strings.Contains(view, "> [x] * ") || strings.Contains(view, "Workspace: (unnamed)") || strings.Contains(view, "sensible-bee | OC") {
+		t.Fatalf("wide focused, checked, grouping, or activity rendering regressed:\n%s", view)
+	}
+	if !strings.Contains(view, "Selected: 1  Matching: 1/1") || !strings.Contains(view, "Ctrl+A matches") {
+		t.Fatalf("wide header or footer is not concise:\n%s", view)
+	}
+
+	narrow := NewModel([]mirror.Window{window}, false)
+	narrow.width, narrow.height = 36, 20
+	view = narrow.View()
+	project = strings.Index(view, "terminal-redeemer")
+	activity = strings.Index(view, "activity: OC | Fix picker")
+	session = strings.Index(view, "session: sensible-bee")
+	if project < 0 || activity < project || session < activity || !strings.Contains(view, "> [ ] * ") || !strings.Contains(view, "Selected: 0  Matching: 1/1") {
+		t.Fatalf("narrow view did not retain clear totals and a project-first stacked fallback:\n%s", view)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(view, "\n"), "\n") {
+		if ansi.StringWidth(line) > narrow.width {
+			t.Fatalf("narrow line exceeds display width: width=%d line=%q", ansi.StringWidth(line), line)
+		}
+	}
+}
+
+func TestDisplayedActivityCleanupIsConservative(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		title   string
+		session string
+		want    string
+	}{
+		{name: "known separator", title: "alpha | OC | task", session: "alpha", want: "OC | task"},
+		{name: "duplicate", title: "alpha", session: "alpha", want: ""},
+		{name: "different separator", title: "alpha - task", session: "alpha", want: "alpha - task"},
+		{name: "different case", title: "Alpha | task", session: "alpha", want: "Alpha | task"},
+		{name: "not leading", title: "task | alpha", session: "alpha", want: "task | alpha"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			window := mirror.Window{Title: tc.title, ZellijSession: tc.session}
+			if got := displayActivity(window); got != tc.want {
+				t.Fatalf("displayActivity()=%q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	model := NewModel([]mirror.Window{{
+		Title:         "alpha | OC | task",
+		ZellijSession: "alpha",
+		Terminal:      &mirror.Terminal{CWD: "/tmp/project"},
+	}}, false)
+	update(model, "alpha | OC")
+	if len(model.visible) != 1 {
+		t.Fatalf("display cleanup changed filtering data: visible=%v", model.visible)
+	}
+}
+
+func TestPathTruncationAndEmptyStates(t *testing.T) {
+	got := fitPath("/one/two/project-a", 10)
+	if got != "…project-a" || ansi.StringWidth(got) != 10 {
+		t.Fatalf("fitPath()=%q width=%d", got, ansi.StringWidth(got))
+	}
+
+	empty := NewModel(nil, false)
+	empty.width, empty.height = 80, 10
+	if view := empty.View(); !strings.Contains(view, "Matching: 0/0") || !strings.Contains(view, "No sessions are available.") || strings.Contains(view, "PROJECT / DIRECTORY") {
+		t.Fatalf("empty state rendering regressed:\n%s", view)
+	}
+
+	filtered := NewModel(pickerWindows(), false)
+	filtered.width, filtered.height = 80, 10
+	update(filtered, "not-a-match")
+	if view := filtered.View(); !strings.Contains(view, "Matching: 0/4") || !strings.Contains(view, "No sessions match the current filter.") || strings.Contains(view, "PROJECT / DIRECTORY") {
+		t.Fatalf("filtered-empty state rendering regressed:\n%s", view)
+	}
 }
 
 func TestEscapeAndControlCCancel(t *testing.T) {
@@ -185,8 +288,8 @@ func TestResponsiveRenderingColorNoColorAndViewport(t *testing.T) {
 	plain = NewModel(windows[:1], false)
 	plain.width, plain.height = 40, 20
 	view = plain.View()
-	if strings.Contains(view, "title: alpha") || !strings.Contains(view, "cwd: ~/project-a") {
-		t.Fatalf("duplicate title was not elided or home CWD not shortened:\n%s", view)
+	if strings.Contains(view, "activity:") || !strings.Contains(view, "~/project-a") || !strings.Contains(view, "session: alpha") {
+		t.Fatalf("duplicate activity was not elided or home CWD not shortened:\n%s", view)
 	}
 
 	colored := NewModel(windows, true)

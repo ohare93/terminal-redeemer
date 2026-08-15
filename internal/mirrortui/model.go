@@ -213,12 +213,20 @@ func (m *Model) View() string {
 	}
 
 	top := []renderedLine{
-		{text: "Mirror sessions", role: roleAccent},
+		{text: fmt.Sprintf("Mirror sessions  Selected: %d  Matching: %d/%d", m.checkedCount(), len(m.visible), len(m.windows)), role: roleAccent},
 		{text: "Filter: " + m.query, role: roleText},
-		{text: fmt.Sprintf("Checked: %d  Matching: %d/%d", m.checkedCount(), len(m.visible), len(m.windows)), role: roleMuted},
+	}
+	if width < 72 {
+		top = []renderedLine{
+			{text: "Mirror sessions", role: roleAccent},
+			{text: fmt.Sprintf("Selected: %d  Matching: %d/%d", m.checkedCount(), len(m.visible), len(m.windows)), role: roleMuted},
+			{text: "Filter: " + m.query, role: roleText},
+		}
+	} else if len(m.visible) > 0 {
+		top = append(top, renderedLine{text: columnHeading(width), role: roleMuted})
 	}
 	body := m.bodyLines(width)
-	footer := renderedLine{text: "↑/k ↓/j move  Space toggle  Ctrl+A filtered  Enter open  Esc clear/cancel  Ctrl+C cancel", role: roleDim}
+	footer := renderedLine{text: "↑/↓ move  Space select  Ctrl+A matches  Enter open  Esc clear/cancel  * source focus", role: roleDim}
 
 	bodyCapacity := len(body)
 	showFooter := true
@@ -289,11 +297,13 @@ func (m *Model) bodyLines(width int) []renderedLine {
 	active := m.currentIndex()
 	lines := make([]renderedLine, 0, len(m.visible)*2+len(groupOrder))
 	for _, group := range groupOrder {
-		heading := group
-		if heading == "" {
-			heading = "(unnamed)"
+		if group != "" || len(groupOrder) > 1 {
+			heading := group
+			if heading == "" {
+				heading = "(unnamed)"
+			}
+			lines = append(lines, renderedLine{text: "  Workspace: " + heading, role: roleAccent})
 		}
-		lines = append(lines, renderedLine{text: "  Workspace: " + heading, role: roleAccent})
 		for i, window := range m.windows {
 			if !visible[i] || strings.TrimSpace(window.WorkspaceName) != group {
 				continue
@@ -315,47 +325,68 @@ func (m *Model) windowLines(index int, window mirror.Window, width int, active b
 		check = "[x] "
 		role = roleSuccess
 	}
-	prefix := cursor + check
+	focus := "  "
+	if window.IsFocused {
+		focus = "* "
+	}
+	prefix := cursor + check + focus
 	session := mirror.SessionName(window)
-	title := strings.TrimSpace(window.Title)
-	if title == strings.TrimSpace(session) {
-		title = ""
-	}
-	cwd := ""
-	if window.Terminal != nil {
-		cwd = shortenHome(window.Terminal.CWD)
-	}
+	activity := displayActivity(window)
+	project := projectDirectory(window)
 
 	if width >= 72 {
-		available := width - ansi.StringWidth(prefix)
-		sessionWidth := available / 4
-		if sessionWidth < 12 {
-			sessionWidth = 12
-		}
-		if sessionWidth > 24 {
-			sessionWidth = 24
-		}
-		cwdWidth := available / 3
-		if cwdWidth < 12 {
-			cwdWidth = 12
-		}
-		titleWidth := available - sessionWidth - cwdWidth - 4
-		if titleWidth < 1 {
-			titleWidth = 1
-		}
-		line := prefix + padCell(session, sessionWidth) + "  " + padCell(title, titleWidth) + "  " + fit(cwd, cwdWidth)
+		projectWidth, activityWidth, sessionWidth := columnWidths(width)
+		line := prefix + padPath(project, projectWidth) + "  " + padCell(activity, activityWidth) + "  " + fit(session, sessionWidth)
 		return []renderedLine{{text: line, role: role, selected: active, active: active}}
 	}
 
-	lines := []renderedLine{{text: prefix + session, role: role, selected: active, active: active}}
-	indent := "      "
-	if title != "" {
-		lines = append(lines, renderedLine{text: indent + "title: " + title, role: roleDim, selected: active, active: active})
+	projectWidth := width - ansi.StringWidth(prefix)
+	lines := []renderedLine{{text: prefix + fitPath(project, projectWidth), role: role, selected: active, active: active}}
+	indent := strings.Repeat(" ", ansi.StringWidth(prefix))
+	if activity != "" {
+		lines = append(lines, renderedLine{text: indent + "activity: " + activity, role: roleDim, selected: active, active: active})
 	}
-	if strings.TrimSpace(cwd) != "" {
-		lines = append(lines, renderedLine{text: indent + "cwd: " + cwd, role: roleDim, selected: active, active: active})
+	if strings.TrimSpace(session) != "" {
+		lines = append(lines, renderedLine{text: indent + "session: " + session, role: roleDim, selected: active, active: active})
 	}
 	return lines
+}
+
+func projectDirectory(window mirror.Window) string {
+	if window.Terminal == nil || strings.TrimSpace(window.Terminal.CWD) == "" {
+		return "(unknown)"
+	}
+	return shortenHome(window.Terminal.CWD)
+}
+
+func displayActivity(window mirror.Window) string {
+	title := strings.TrimSpace(window.Title)
+	session := strings.TrimSpace(mirror.SessionName(window))
+	if title == session {
+		return ""
+	}
+	if session != "" {
+		title = strings.TrimPrefix(title, session+" | ")
+	}
+	return strings.TrimSpace(title)
+}
+
+func columnWidths(width int) (project, activity, session int) {
+	available := width - rowPrefixWidth - 4
+	session = available / 4
+	if session > 24 {
+		session = 24
+	}
+	project = (available - session) * 55 / 100
+	activity = available - session - project
+	return project, activity, session
+}
+
+const rowPrefixWidth = 8
+
+func columnHeading(width int) string {
+	project, activity, session := columnWidths(width)
+	return strings.Repeat(" ", rowPrefixWidth) + padCell("PROJECT / DIRECTORY", project) + "  " + padCell("ACTIVITY", activity) + "  " + fit("SESSION", session)
 }
 
 func (m *Model) checkedCount() int {
@@ -435,8 +466,38 @@ func fit(value string, width int) string {
 	return ansi.Truncate(value, width, "…")
 }
 
+func fitPath(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(value) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+
+	available := width - ansi.StringWidth("…")
+	start := len(value)
+	for index := range value {
+		if ansi.StringWidth(value[index:]) <= available {
+			start = index
+			break
+		}
+	}
+	return "…" + value[start:]
+}
+
 func padCell(value string, width int) string {
 	value = fit(value, width)
+	if padding := width - ansi.StringWidth(value); padding > 0 {
+		value += strings.Repeat(" ", padding)
+	}
+	return value
+}
+
+func padPath(value string, width int) string {
+	value = fitPath(value, width)
 	if padding := width - ansi.StringWidth(value); padding > 0 {
 		value += strings.Repeat(" ", padding)
 	}
