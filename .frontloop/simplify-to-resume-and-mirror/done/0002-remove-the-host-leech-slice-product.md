@@ -26,3 +26,34 @@ Delete the distributed slice controller/RPC/selection/routed-launch product afte
 ## Implementation Notes
 
 Likely deletion surface: internal/slice*, internal/sourceinventory, internal/zellijlive unless reused by minimal mirror discovery, internal/niriipc if unused, internal/subprocessacceptance, internal/hostleechsoak, internal/consumercontract, contracts/host-leech-slices, and slice ADR/readiness/protocol docs. Verify every package caller before deletion.
+
+
+## Completion Summary
+
+- Deleted the host/leech slice CLI, controller/RPC/protocol/inventory/layout/TUI implementation, services, configuration, contracts, tests, scripts, and dedicated docs
+- Kept mirror-required active-only Zellij catalog, capture/resume/prune/doctor, and exact owned-window close safety
+- Replaced removed generated contract with direct Home Manager local Kitty, mirror-new, and mirror-picker bindings
+- Removed stale package/config dependencies and verified no retained `redeem slice` or host/leech product references
+- Passed full Go tests/vet/race checks, package and module builds, and full Nix flake checks
+
+### Files Changed
+
+- README.md
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- docs/CONFIG.md
+- docs/OPERATIONS.md
+- flake.nix
+- go.mod
+- internal/config/config.go
+- internal/config/config_test.go
+- internal/mirror/snapshot_test.go
+- modules/home-manager/terminal-redeemer.nix
+- contracts/host-leech-slices/ (deleted)
+- internal/slice*/ (deleted)
+- internal/sourceinventory/ (deleted)
+- internal/niriipc/ (deleted)
+- internal/subprocessacceptance/ (deleted)
+- internal/consumercontract/ (deleted)
+- internal/hostleechsoak/ (deleted)
+- slice-specific docs and scripts (deleted)
