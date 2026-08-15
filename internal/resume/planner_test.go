@@ -4,16 +4,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/model"
-	"github.com/jmo/terminal-redeemer/internal/replay"
 )
 
 func TestSelectLatestPriorBootWithoutFallingBackFromEmpty(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
-	checkpoints := []replay.Checkpoint{
-		{CapturedAt: now.Add(-2 * time.Hour), Host: "local", Profile: "default", BootID: "boot-old", State: stateWithTerminal("old", "old-session", model.WorkspaceRef{Index: 1})},
-		{CapturedAt: now.Add(-time.Hour), Host: "local", Profile: "default", BootID: "boot-newer", State: model.State{}},
-		{CapturedAt: now.Add(-time.Minute), Host: "local", Profile: "default", BootID: "boot-current", State: stateWithTerminal("current", "current-session", model.WorkspaceRef{Index: 1})},
+	checkpoints := []checkpoints.Checkpoint{
+		{ObservedAt: now.Add(-2 * time.Hour), Host: "local", Profile: "default", BootID: "boot-old", State: stateWithTerminal("old", "old-session", model.WorkspaceRef{Index: 1})},
+		{ObservedAt: now.Add(-time.Hour), Host: "local", Profile: "default", BootID: "boot-newer", State: model.State{}},
+		{ObservedAt: now.Add(-time.Minute), Host: "local", Profile: "default", BootID: "boot-current", State: stateWithTerminal("current", "current-session", model.WorkspaceRef{Index: 1})},
 	}
 
 	got := Select(checkpoints, SelectOptions{CurrentBootID: "boot-current", Host: "local", Profile: "default", Now: now, MaxAge: 24 * time.Hour})
@@ -27,9 +27,9 @@ func TestSelectLatestPriorBootWithoutFallingBackFromEmpty(t *testing.T) {
 
 func TestSelectExcludesLegacyAndWrongPartition(t *testing.T) {
 	now := time.Now().UTC()
-	checkpoints := []replay.Checkpoint{
-		{CapturedAt: now.Add(-time.Minute), Host: "local", Profile: "default", State: stateWithTerminal("legacy", "legacy", model.WorkspaceRef{Index: 1})},
-		{CapturedAt: now.Add(-2 * time.Minute), Host: "other", Profile: "default", BootID: "other-host", State: stateWithTerminal("other", "other", model.WorkspaceRef{Index: 1})},
+	checkpoints := []checkpoints.Checkpoint{
+		{ObservedAt: now.Add(-time.Minute), Host: "local", Profile: "default", State: stateWithTerminal("legacy", "legacy", model.WorkspaceRef{Index: 1})},
+		{ObservedAt: now.Add(-2 * time.Minute), Host: "other", Profile: "default", BootID: "other-host", State: stateWithTerminal("other", "other", model.WorkspaceRef{Index: 1})},
 	}
 	got := Select(checkpoints, SelectOptions{CurrentBootID: "current", Host: "local", Profile: "default", Now: now, MaxAge: time.Hour})
 	if got.Status != CandidateNotFound || got.Checkpoint != nil {
@@ -39,9 +39,9 @@ func TestSelectExcludesLegacyAndWrongPartition(t *testing.T) {
 
 func TestSelectMarksLatestCandidateStaleWithoutFallback(t *testing.T) {
 	now := time.Now().UTC()
-	got := Select([]replay.Checkpoint{
-		{CapturedAt: now.Add(-48 * time.Hour), BootID: "older", State: stateWithTerminal("older", "older", model.WorkspaceRef{Index: 1})},
-		{CapturedAt: now.Add(-25 * time.Hour), BootID: "latest", State: stateWithTerminal("latest", "latest", model.WorkspaceRef{Index: 1})},
+	got := Select([]checkpoints.Checkpoint{
+		{ObservedAt: now.Add(-48 * time.Hour), BootID: "older", State: stateWithTerminal("older", "older", model.WorkspaceRef{Index: 1})},
+		{ObservedAt: now.Add(-25 * time.Hour), BootID: "latest", State: stateWithTerminal("latest", "latest", model.WorkspaceRef{Index: 1})},
 	}, SelectOptions{CurrentBootID: "current", Now: now, MaxAge: 24 * time.Hour})
 	if got.Status != CandidateStale || got.Checkpoint.BootID != "latest" {
 		t.Fatalf("selection = %#v", got)
@@ -60,7 +60,7 @@ func TestPlannerReconcilesAlreadyOpenDuplicateUnavailableAndReady(t *testing.T) 
 			terminalWindow("w-ready", "ready", model.WorkspaceRef{Name: "dev", Index: 9}),
 		},
 	}
-	selection := Selection{Status: CandidateReady, Checkpoint: &replay.Checkpoint{CapturedAt: now, BootID: "prior", State: captured}}
+	selection := Selection{Status: CandidateReady, Checkpoint: &checkpoints.Checkpoint{ObservedAt: now, BootID: "prior", State: captured}}
 	current := model.State{
 		Workspaces: []model.Workspace{{ID: "runtime-dev", Name: "dev", Output: "DP-2", Index: 4}, {ID: "runtime-two", Output: "DP-1", Index: 2}},
 		Windows:    []model.Window{terminalWindow("current", "open", model.WorkspaceRef{})},
@@ -147,7 +147,7 @@ func TestStalePlanDoesNotRequireLiveStateOrAvailability(t *testing.T) {
 }
 
 func readySelection(state model.State) Selection {
-	return Selection{Status: CandidateReady, Checkpoint: &replay.Checkpoint{CapturedAt: time.Now().UTC(), BootID: "prior", State: state}}
+	return Selection{Status: CandidateReady, Checkpoint: &checkpoints.Checkpoint{ObservedAt: time.Now().UTC(), BootID: "prior", State: state}}
 }
 
 func stateWithTerminal(key, session string, ref model.WorkspaceRef) model.State {

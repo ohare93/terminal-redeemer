@@ -19,14 +19,13 @@ type Config struct {
 	Capture         CaptureConfig         `yaml:"capture"`
 	ProcessMetadata ProcessMetadataConfig `yaml:"processMetadata"`
 	Retention       RetentionConfig       `yaml:"retention"`
-	Restore         RestoreConfig         `yaml:"restore"`
+	Resume          ResumeConfig          `yaml:"resume"`
 	Mirror          MirrorConfig          `yaml:"mirror"`
 }
 
 type CaptureConfig struct {
-	Interval      time.Duration `yaml:"interval"`
-	SnapshotEvery int           `yaml:"snapshotEvery"`
-	NiriCommand   string        `yaml:"niriCommand"`
+	Interval    time.Duration `yaml:"interval"`
+	NiriCommand string        `yaml:"niriCommand"`
 }
 
 type ProcessMetadataConfig struct {
@@ -39,22 +38,13 @@ type RetentionConfig struct {
 	Days int `yaml:"days"`
 }
 
-type RestoreConfig struct {
-	OnStartup               bool              `yaml:"onStartup"`
-	AppAllowlist            map[string]string `yaml:"appAllowlist"`
-	AppMode                 map[string]string `yaml:"appMode"`
-	ReconcileWorkspaceMoves bool              `yaml:"reconcileWorkspaceMoves"`
-	WorkspaceReconcileDelay time.Duration     `yaml:"workspaceReconcileDelay"`
-	MaxCheckpointAge        time.Duration     `yaml:"maxCheckpointAge"`
-	UnresolvedWorkspace     string            `yaml:"unresolvedWorkspace"`
-	ResumeTimeout           time.Duration     `yaml:"resumeTimeout"`
-	ResumePollInterval      time.Duration     `yaml:"resumePollInterval"`
-	Terminal                TerminalConfig    `yaml:"terminal"`
-}
-
-type TerminalConfig struct {
-	Command              string `yaml:"command"`
-	ZellijAttachOrCreate bool   `yaml:"zellijAttachOrCreate"`
+type ResumeConfig struct {
+	OnStartup           bool          `yaml:"onStartup"`
+	MaxCheckpointAge    time.Duration `yaml:"maxCheckpointAge"`
+	UnresolvedWorkspace string        `yaml:"unresolvedWorkspace"`
+	Timeout             time.Duration `yaml:"timeout"`
+	PollInterval        time.Duration `yaml:"pollInterval"`
+	TerminalCommand     string        `yaml:"terminalCommand"`
 }
 
 type MirrorConfig struct {
@@ -109,9 +99,8 @@ func Defaults() Config {
 		Host:     "local",
 		Profile:  "default",
 		Capture: CaptureConfig{
-			Interval:      60 * time.Second,
-			SnapshotEvery: 100,
-			NiriCommand:   "niri msg -j windows",
+			Interval:    60 * time.Second,
+			NiriCommand: "niri msg -j windows",
 		},
 		ProcessMetadata: ProcessMetadataConfig{
 			Whitelist:         []string{},
@@ -119,20 +108,13 @@ func Defaults() Config {
 			IncludeSessionTag: true,
 		},
 		Retention: RetentionConfig{Days: 30},
-		Restore: RestoreConfig{
-			OnStartup:               false,
-			AppAllowlist:            map[string]string{},
-			AppMode:                 map[string]string{},
-			ReconcileWorkspaceMoves: true,
-			WorkspaceReconcileDelay: 1200 * time.Millisecond,
-			MaxCheckpointAge:        24 * time.Hour,
-			UnresolvedWorkspace:     "current",
-			ResumeTimeout:           10 * time.Second,
-			ResumePollInterval:      100 * time.Millisecond,
-			Terminal: TerminalConfig{
-				Command:              "kitty",
-				ZellijAttachOrCreate: true,
-			},
+		Resume: ResumeConfig{
+			OnStartup:           false,
+			MaxCheckpointAge:    24 * time.Hour,
+			UnresolvedWorkspace: "current",
+			Timeout:             10 * time.Second,
+			PollInterval:        100 * time.Millisecond,
+			TerminalCommand:     "kitty",
 		},
 		Mirror: MirrorConfig{
 			SSHCommand:      "ssh",
@@ -180,12 +162,6 @@ func Load(path string, explicitPath bool) (Config, error) {
 		return Config{}, fmt.Errorf("parse config file: %w", err)
 	}
 
-	if cfg.Restore.AppAllowlist == nil {
-		cfg.Restore.AppAllowlist = map[string]string{}
-	}
-	if cfg.Restore.AppMode == nil {
-		cfg.Restore.AppMode = map[string]string{}
-	}
 	if cfg.ProcessMetadata.Whitelist == nil {
 		cfg.ProcessMetadata.Whitelist = []string{}
 	}
@@ -212,19 +188,22 @@ func Load(path string, explicitPath bool) (Config, error) {
 }
 
 func Validate(cfg Config) error {
-	if cfg.Restore.MaxCheckpointAge <= 0 {
-		return fmt.Errorf("restore.maxCheckpointAge must be positive")
+	if cfg.Resume.MaxCheckpointAge <= 0 {
+		return fmt.Errorf("resume.maxCheckpointAge must be positive")
 	}
-	if cfg.Restore.ResumeTimeout <= 0 || cfg.Restore.ResumePollInterval <= 0 {
-		return fmt.Errorf("restore.resumeTimeout and restore.resumePollInterval must be positive")
+	if cfg.Resume.Timeout <= 0 || cfg.Resume.PollInterval <= 0 {
+		return fmt.Errorf("resume.timeout and resume.pollInterval must be positive")
 	}
-	if cfg.Restore.ResumePollInterval > cfg.Restore.ResumeTimeout {
-		return fmt.Errorf("restore.resumePollInterval must not exceed restore.resumeTimeout")
+	if cfg.Resume.PollInterval > cfg.Resume.Timeout {
+		return fmt.Errorf("resume.pollInterval must not exceed resume.timeout")
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.Restore.UnresolvedWorkspace)) {
+	if strings.TrimSpace(cfg.Resume.TerminalCommand) == "" {
+		return fmt.Errorf("resume.terminalCommand must not be empty")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Resume.UnresolvedWorkspace)) {
 	case "skip", "current", "fail":
 	default:
-		return fmt.Errorf("restore.unresolvedWorkspace must be current, skip, or fail")
+		return fmt.Errorf("resume.unresolvedWorkspace must be current, skip, or fail")
 	}
 	if cfg.Mirror.DefaultMode != "attach" && cfg.Mirror.DefaultMode != "watch" {
 		return fmt.Errorf("mirror.defaultMode must be attach or watch")

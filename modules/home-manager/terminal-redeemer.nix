@@ -8,7 +8,6 @@ let
     profile = cfg.profile;
     capture = {
       interval = cfg.capture.interval;
-      snapshotEvery = cfg.capture.snapshotEvery;
       niriCommand = cfg.capture.niriCommand;
     };
     retention = {
@@ -19,20 +18,13 @@ let
       whitelistExtra = cfg.processWhitelistExtra;
       includeSessionTag = cfg.processIncludeSessionTag;
     };
-    restore = {
-      onStartup = cfg.restore.onStartup;
-      appAllowlist = cfg.restore.appAllowlist;
-      appMode = cfg.restore.appMode;
-      reconcileWorkspaceMoves = cfg.restore.reconcileWorkspaceMoves;
-      workspaceReconcileDelay = cfg.restore.workspaceReconcileDelay;
-      maxCheckpointAge = cfg.restore.maxCheckpointAge;
-      unresolvedWorkspace = cfg.restore.unresolvedWorkspace;
-      resumeTimeout = cfg.restore.resumeTimeout;
-      resumePollInterval = cfg.restore.resumePollInterval;
-      terminal = {
-        command = cfg.terminal.command;
-        zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
-      };
+    resume = {
+      onStartup = cfg.resume.onStartup;
+      maxCheckpointAge = cfg.resume.maxCheckpointAge;
+      unresolvedWorkspace = cfg.resume.unresolvedWorkspace;
+      timeout = cfg.resume.timeout;
+      pollInterval = cfg.resume.pollInterval;
+      terminalCommand = cfg.resume.terminalCommand;
     };
     mirror = {
       sourceHost = cfg.mirror.sourceHost;
@@ -122,12 +114,6 @@ in {
         description = "Capture interval.";
       };
 
-      snapshotEvery = lib.mkOption {
-        type = lib.types.int;
-        default = 100;
-        description = "Write a legacy timestamped replay snapshot every N changed events; rolling per-boot checkpoints refresh after every successful complete capture.";
-      };
-
       niriCommand = lib.mkOption {
         type = lib.types.str;
         default = "niri msg -j windows";
@@ -167,73 +153,20 @@ in {
       description = "Whether to include session tag extraction for terminals.";
     };
 
-    restore.onStartup = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = ''
-        Run the canonical `redeem resume` command at graphical-session startup.
-        Keep this disabled until any host-local startup restoration is disabled.
-      '';
-    };
-
-    restore.appAllowlist = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = "App ID to spawn command mapping for restore.";
-    };
-
-    restore.appMode = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = "App ID to restore mode mapping (for example: per_window or oneshot).";
-    };
-
-    restore.reconcileWorkspaceMoves = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Reconcile Niri workspace moves after restore execution.";
-    };
-
-    restore.workspaceReconcileDelay = lib.mkOption {
-      type = lib.types.str;
-      default = "1200ms";
-      description = "Delay before workspace move reconciliation runs.";
-    };
-
-    restore.maxCheckpointAge = lib.mkOption {
-      type = lib.types.str;
-      default = "24h";
-      description = "Maximum age accepted by implicit prior-boot resume.";
-    };
-
-    restore.unresolvedWorkspace = lib.mkOption {
-      type = lib.types.enum [ "skip" "current" "fail" ];
-      default = "current";
-      description = "Policy when a captured workspace cannot be resolved in current Niri state.";
-    };
-
-    restore.resumeTimeout = lib.mkOption {
-      type = lib.types.str;
-      default = "10s";
-      description = "Bound for each resume correlation, attachment, and move-verification phase.";
-    };
-
-    restore.resumePollInterval = lib.mkOption {
-      type = lib.types.str;
-      default = "100ms";
-      description = "Polling interval while resume waits for exact Niri and Zellij evidence.";
-    };
-
-    terminal.command = lib.mkOption {
-      type = lib.types.str;
-      default = "kitty";
-      description = "Terminal command used during restore.";
-    };
-
-    terminal.zellijAttachOrCreate = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Use zellij attach-or-create strategy during restore.";
+    resume = {
+      onStartup = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Run the canonical `redeem resume` command at graphical-session startup.
+          Keep this disabled until any host-local startup restoration is disabled.
+        '';
+      };
+      maxCheckpointAge = lib.mkOption { type = lib.types.str; default = "24h"; description = "Maximum age accepted by prior-boot resume."; };
+      unresolvedWorkspace = lib.mkOption { type = lib.types.enum [ "skip" "current" "fail" ]; default = "current"; description = "Policy when a captured workspace cannot be resolved."; };
+      timeout = lib.mkOption { type = lib.types.str; default = "10s"; description = "Bound for each resume readiness, correlation, attachment, and move-verification phase."; };
+      pollInterval = lib.mkOption { type = lib.types.str; default = "100ms"; description = "Polling interval for exact Niri and Zellij evidence."; };
+      terminalCommand = lib.mkOption { type = lib.types.str; default = "kitty"; description = "Direct Kitty executable used by resume."; };
     };
 
     mirror = {
@@ -286,7 +219,7 @@ in {
       Unit = {
         Description = "terminal-redeemer complete Niri state capture";
         After = [ "graphical-session.target" ]
-          ++ lib.optional cfg.restore.onStartup "terminal-redeemer-resume.service";
+          ++ lib.optional cfg.resume.onStartup "terminal-redeemer-resume.service";
         PartOf = [ "graphical-session.target" ];
       };
       Service = {
@@ -295,7 +228,7 @@ in {
       };
     };
 
-    systemd.user.services.terminal-redeemer-resume = lib.mkIf cfg.restore.onStartup {
+    systemd.user.services.terminal-redeemer-resume = lib.mkIf cfg.resume.onStartup {
       Unit = {
         Description = "terminal-redeemer prior-boot terminal resume";
         After = [ "graphical-session.target" ];

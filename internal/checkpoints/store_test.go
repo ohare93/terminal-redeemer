@@ -1,6 +1,7 @@
 package checkpoints
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,14 +12,14 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/model"
 )
 
-func testCheckpoint(t *testing.T, boot, host, profile string, observed time.Time, offset int64) Checkpoint {
+func testCheckpoint(t *testing.T, boot, host, profile string, observed time.Time) Checkpoint {
 	t.Helper()
 	state := model.State{Workspaces: []model.Workspace{}, Windows: []model.Window{}}
 	hash, err := state.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Checkpoint{V: SchemaVersion, BootID: boot, Host: host, Profile: profile, ObservedAt: observed, State: state, StateHash: hash, EventOffset: offset}
+	return Checkpoint{V: SchemaVersion, BootID: boot, Host: host, Profile: profile, ObservedAt: observed, State: state, StateHash: hash}
 }
 
 func TestReadAcceptsLegacyTitleSensitiveHash(t *testing.T) {
@@ -33,7 +34,7 @@ func TestReadAcceptsLegacyTitleSensitiveHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpoint := Checkpoint{
-		V: SchemaVersion, BootID: "boot-old", Host: "host", Profile: "default",
+		V: 1, BootID: "boot-old", Host: "host", Profile: "default",
 		ObservedAt: time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC), State: state,
 		StateHash: legacyHash, EventOffset: 10,
 	}
@@ -63,8 +64,8 @@ func TestStoreRoundTripAndIdentityPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	first := testCheckpoint(t, "boot/a", "host", "default", now, 10)
-	second := testCheckpoint(t, "boot/a", "host", "other", now, 20)
+	first := testCheckpoint(t, "boot/a", "host", "default", now)
+	second := testCheckpoint(t, "boot/a", "host", "other", now)
 	pathA, err := store.Write(first)
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +73,13 @@ func TestStoreRoundTripAndIdentityPaths(t *testing.T) {
 	pathB, err := store.Write(second)
 	if err != nil {
 		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(pathA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(payload, []byte("event_offset")) {
+		t.Fatalf("schema-2 checkpoint retained event timeline metadata: %s", payload)
 	}
 	if pathA == pathB || filepath.Dir(pathA) != filepath.Join(root, "checkpoints") {
 		t.Fatalf("unsafe/colliding paths: %q %q", pathA, pathB)
@@ -103,7 +111,7 @@ func TestWriteUsesFileSyncRenameDirectorySyncOrdering(t *testing.T) {
 		steps = append(steps, "directory_fsync")
 		return syncDirectory(path)
 	}
-	if _, err := store.Write(testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC(), 10)); err != nil {
+	if _, err := store.Write(testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC())); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"file_fsync", "rename", "directory_fsync"}
@@ -117,13 +125,13 @@ func TestWriteUsesFileSyncRenameDirectorySyncOrdering(t *testing.T) {
 	}
 }
 
-func TestWriteFailurePreservesPublishedCheckpoint(t *testing.T) {
+func TestInterruptedPublishPreservesUsablePriorCheckpoint(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	original := testCheckpoint(t, "boot-a", "host", "default", now, 10)
+	original := testCheckpoint(t, "boot-a", "host", "default", now)
 	if _, err := store.Write(original); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +160,7 @@ func TestListReportsCorruptionWithoutHidingValidCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Write(testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC(), 10)); err != nil {
+	if _, err := store.Write(testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC())); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store.dir, "corrupt.json"), []byte("{"), 0o600); err != nil {
@@ -174,10 +182,10 @@ func TestPruneUsesLatestObservedAtAndSyncsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	if _, err := store.Write(testCheckpoint(t, "old", "host", "default", now.Add(-48*time.Hour), 10)); err != nil {
+	if _, err := store.Write(testCheckpoint(t, "old", "host", "default", now.Add(-48*time.Hour))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Write(testCheckpoint(t, "new", "host", "default", now.Add(-time.Hour), 20)); err != nil {
+	if _, err := store.Write(testCheckpoint(t, "new", "host", "default", now.Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	removed, err := Prune(root, now.Add(-24*time.Hour))

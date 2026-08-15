@@ -102,11 +102,10 @@ func Normalize(s State) State {
 	return out
 }
 
-// Hash returns a semantic state hash for capture-history decisions. Window
-// titles are deliberately excluded because they are volatile presentation
-// metadata (for example shell commands and progress spinners), not restorable
-// window identity or placement. Normalize still preserves titles in events and
-// rolling checkpoints.
+// Hash returns a semantic checkpoint hash. Window titles are deliberately
+// excluded because they are volatile presentation metadata (for example shell
+// commands and progress spinners), not resumable window identity or placement.
+// Normalize still preserves titles in rolling checkpoints.
 func (s State) Hash() (string, error) {
 	norm := Normalize(s)
 	for i := range norm.Windows {
@@ -117,7 +116,7 @@ func (s State) Hash() (string, error) {
 
 // HashWithTitles reproduces the pre-semantic-hash format so rolling
 // checkpoints written by older releases remain readable during migration.
-// New events and checkpoints must use Hash.
+// New checkpoints must use Hash.
 func (s State) HashWithTitles() (string, error) {
 	return hashNormalized(Normalize(s))
 }

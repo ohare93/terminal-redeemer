@@ -6,12 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,18 +19,13 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/collector"
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/doctor"
-	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
 	"github.com/jmo/terminal-redeemer/internal/mirrortui"
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/niri"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/prune"
-	"github.com/jmo/terminal-redeemer/internal/replay"
-	"github.com/jmo/terminal-redeemer/internal/restore"
 	"github.com/jmo/terminal-redeemer/internal/resume"
-	"github.com/jmo/terminal-redeemer/internal/snapshots"
-	"github.com/jmo/terminal-redeemer/internal/tui"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
@@ -72,12 +64,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	case "capture":
 		return runCapture(args[1:], resolvedConfig, stdout, stderr)
-	case "history":
-		return runHistory(args[1:], resolvedConfig, stdout, stderr)
 	case "mirror":
 		return runMirror(args[1:], resolvedConfig, stdout, stderr)
-	case "restore":
-		return runRestore(args[1:], resolvedConfig, stdout, stderr)
 	case "resume":
 		return runResume(args[1:], resolvedConfig, stdout, stderr)
 	case "prune":
@@ -107,19 +95,17 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 			Command:     captureNiriCommandDefault(resolvedConfig),
 			Socket:      os.Getenv("NIRI_SOCKET"),
 		},
-		doctor.ResumeLauncherCheck{Command: resolvedConfig.Restore.Terminal.Command},
+		doctor.ResumeLauncherCheck{Command: resolvedConfig.Resume.TerminalCommand},
 		doctor.ZellijListingCheck{},
 		doctor.ResumePolicyCheck{
-			MaxCheckpointAge:    resolvedConfig.Restore.MaxCheckpointAge,
-			UnresolvedWorkspace: resolvedConfig.Restore.UnresolvedWorkspace,
-			OnStartup:           resolvedConfig.Restore.OnStartup,
+			MaxCheckpointAge:    resolvedConfig.Resume.MaxCheckpointAge,
+			UnresolvedWorkspace: resolvedConfig.Resume.UnresolvedWorkspace,
+			OnStartup:           resolvedConfig.Resume.OnStartup,
 			CaptureInterval:     resolvedConfig.Capture.Interval,
 		},
-		doctor.StartupServiceCheck{Enabled: resolvedConfig.Restore.OnStartup},
+		doctor.StartupServiceCheck{Enabled: resolvedConfig.Resume.OnStartup},
 		doctor.LocalInstallCheck{Path: localInstallPath()},
-		doctor.EventsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 		doctor.CheckpointsIntegrityCheck{StateDir: resolvedConfig.StateDir},
-		doctor.SnapshotsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 	}
 	if strings.TrimSpace(resolvedConfig.Mirror.SourceHost) != "" {
 		checks = append(checks,
@@ -607,13 +593,13 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	fs.SetOutput(stderr)
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
 	dryRun := fs.Bool("dry-run", false, "plan prior-boot terminal reconciliation without mutating")
-	maxAge := fs.Duration("max-age", resolvedConfig.Restore.MaxCheckpointAge, "maximum checkpoint age")
-	unresolved := fs.String("unresolved-workspace", resolvedConfig.Restore.UnresolvedWorkspace, "unresolved workspace policy: current, skip, or fail")
+	maxAge := fs.Duration("max-age", resolvedConfig.Resume.MaxCheckpointAge, "maximum checkpoint age")
+	unresolved := fs.String("unresolved-workspace", resolvedConfig.Resume.UnresolvedWorkspace, "unresolved workspace policy: current, skip, or fail")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "current Niri JSON fixture path")
 	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "current Niri snapshot command")
-	launcher := fs.String("launcher-command", resolvedConfig.Restore.Terminal.Command, "Kitty executable (not a shell command)")
-	timeout := fs.Duration("timeout", resolvedConfig.Restore.ResumeTimeout, "per-phase correlation, attachment, and move timeout")
-	pollInterval := fs.Duration("poll-interval", resolvedConfig.Restore.ResumePollInterval, "Niri and attachment poll interval")
+	launcher := fs.String("launcher-command", resolvedConfig.Resume.TerminalCommand, "Kitty executable (not a shell command)")
+	timeout := fs.Duration("timeout", resolvedConfig.Resume.Timeout, "per-phase correlation, attachment, and move timeout")
+	pollInterval := fs.Duration("poll-interval", resolvedConfig.Resume.PollInterval, "Niri and attachment poll interval")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -646,9 +632,13 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return 1
 	}
 
-	resumeCheckpoints, err := replay.ListResumeCheckpoints(*stateDir)
+	resumeCheckpoints, issues, err := checkpoints.List(*stateDir)
 	if err != nil {
 		writef(stderr, "resume checkpoint scan failed: %v\n", err)
+		return 1
+	}
+	if len(issues) > 0 {
+		writef(stderr, "resume checkpoint scan failed: invalid %s: %v\n", filepath.Base(issues[0].Path), issues[0].Err)
 		return 1
 	}
 	currentBootID, err := bootid.Current()
@@ -715,9 +705,6 @@ func printResumePlan(stdout io.Writer, plan resume.Plan) {
 		}
 		writeln(stdout)
 	}
-	if plan.CandidateStatus == resume.CandidateEmpty || plan.CandidateStatus == resume.CandidateStale || plan.CandidateStatus == resume.CandidateNotFound {
-		writef(stdout, "resume_guidance restore_tui=%q restore_at=%q\n", "redeem restore tui", "redeem restore apply --at <RFC3339>")
-	}
 	for _, item := range plan.Items {
 		writef(stdout, "resume_item window_key=%q session=%q status=%s", item.WindowKey, item.Session, item.Status)
 		if item.Workspace != nil {
@@ -737,305 +724,6 @@ func printResumePlan(stdout io.Writer, plan resume.Plan) {
 	writef(stdout, "resume_summary ready=%d already_open=%d unavailable=%d degraded=%d stale=%d failed=%d skipped=%d restored=%d\n",
 		plan.Summary.Ready, plan.Summary.AlreadyOpen, plan.Summary.Unavailable, plan.Summary.Degraded, plan.Summary.Stale, plan.Summary.Failed, plan.Summary.Skipped, plan.Summary.Restored)
 }
-
-func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem restore <apply|tui> [flags]")
-		return 2
-	}
-	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem restore <apply|tui> [flags]")
-		return 0
-	}
-	if args[0] == "tui" {
-		return runRestoreTUI(args[1:], resolvedConfig, stdout, stderr)
-	}
-	if args[0] != "apply" {
-		_, _ = fmt.Fprintf(stderr, "unknown restore subcommand: %s\n", args[0])
-		return 2
-	}
-
-	fs := flag.NewFlagSet("restore apply", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
-	atRaw := fs.String("at", "", "timestamp (RFC3339)")
-	yes := fs.Bool("yes", false, "apply plan without prompt")
-	dryRun := fs.Bool("dry-run", false, "print restore actions without executing")
-	if err := fs.Parse(args[1:]); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-	if strings.TrimSpace(*atRaw) == "" {
-		_, _ = fmt.Fprintln(stderr, "restore apply requires --at")
-		return 2
-	}
-	at, err := parseAtSpec(*atRaw, time.Now().UTC())
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "invalid --at: %v\n", err)
-		return 2
-	}
-
-	engine, err := replay.NewEngine(*stateDir)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "restore init failed: %v\n", err)
-		return 1
-	}
-	state, err := engine.At(at)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "restore replay failed: %v\n", err)
-		return 1
-	}
-
-	planner := restore.NewPlanner(restore.PlannerConfig{
-		Terminal:     restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate},
-		AppAllowlist: resolvedConfig.Restore.AppAllowlist,
-		AppMode:      parseAppModes(resolvedConfig.Restore.AppMode),
-	})
-	plan := planner.Build(state)
-	if *dryRun {
-		printRestoreDryRun(stdout, plan)
-		return 0
-	}
-
-	if !*yes {
-		summary := summarizePlan(plan)
-		_, _ = fmt.Fprintf(stdout, "restore_plan ready=%d skipped=%d degraded=%d\n", summary.ready, summary.skipped, summary.degraded)
-		_, _ = fmt.Fprintln(stdout, "pass --yes to execute")
-		return 0
-	}
-
-	beforeState := tryReadNiriWindowsState(context.Background())
-
-	executor := restore.NewExecutor(restore.ShellRunner{})
-	result := executor.Execute(context.Background(), plan)
-	if resolvedConfig.Restore.ReconcileWorkspaceMoves {
-		time.Sleep(resolvedConfig.Restore.WorkspaceReconcileDelay)
-		afterState := tryReadNiriWindowsState(context.Background())
-		if beforeState != nil && afterState != nil {
-			requests := restore.BuildMoveRequests(plan, *beforeState, *afterState)
-			report := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
-			if len(requests) > 0 {
-				writef(stdout, "restore_workspace_moves moved=%d requested=%d failed=%d\n", report.Applied, len(requests), len(report.Failures))
-				for _, failure := range report.Failures {
-					writef(stdout, "restore_workspace_move_failed window_key=%s window_id=%d app_id=%s workspace=%s error=%q\n", failure.Request.WindowKey, failure.Request.WindowID, failure.Request.AppID, failure.Request.WorkspaceRef, failure.Err.Error())
-				}
-			}
-		}
-	}
-	printRestoreExecution(stdout, result)
-	return 0
-}
-
-func printRestoreDryRun(stdout io.Writer, plan restore.Plan) {
-	readyItems := make([]restore.Item, 0)
-	degradedItems := make([]restore.Item, 0)
-	skippedItems := make([]restore.Item, 0)
-
-	for _, item := range plan.Items {
-		switch item.Status {
-		case restore.StatusReady:
-			readyItems = append(readyItems, item)
-		case restore.StatusDegraded:
-			degradedItems = append(degradedItems, item)
-		default:
-			skippedItems = append(skippedItems, item)
-		}
-	}
-
-	_, _ = fmt.Fprintln(stdout, "Restore Dry Run")
-	_, _ = fmt.Fprintln(stdout, "")
-
-	if len(readyItems) > 0 {
-		_, _ = fmt.Fprintln(stdout, "Would Restore:")
-		for _, item := range readyItems {
-			writef(stdout, "- %s\n", item.WindowKey)
-			writef(stdout, "  command: %s\n", item.Command)
-		}
-		_, _ = fmt.Fprintln(stdout, "")
-	}
-
-	if len(degradedItems) > 0 {
-		_, _ = fmt.Fprintln(stdout, "Degraded:")
-		for _, item := range degradedItems {
-			writef(stdout, "- %s\n", item.WindowKey)
-			writef(stdout, "  reason: %s\n", item.Reason)
-		}
-		_, _ = fmt.Fprintln(stdout, "")
-	}
-
-	if len(skippedItems) > 0 {
-		_, _ = fmt.Fprintln(stdout, "Skipped:")
-		for _, item := range skippedItems {
-			writef(stdout, "- %s\n", item.WindowKey)
-			writef(stdout, "  reason: %s\n", item.Reason)
-		}
-		_, _ = fmt.Fprintln(stdout, "")
-	}
-
-	writef(stdout, "Summary: would_restore=%d skipped=%d degraded=%d\n", len(readyItems), len(skippedItems), len(degradedItems))
-	_, _ = fmt.Fprintln(stdout, "Run with --yes to execute.")
-}
-
-func runRestoreTUI(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
-	fs := flag.NewFlagSet("restore tui", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
-	atRaw := fs.String("at", "", "timestamp (RFC3339, optional)")
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-
-	eventsList, err := replay.ListEvents(*stateDir, nil, nil)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "restore tui failed to list history: %v\n", err)
-		return 1
-	}
-	timestamps := uniqueEventTimestamps(eventsList)
-
-	at := time.Now().UTC()
-	if len(timestamps) > 0 {
-		at = timestamps[len(timestamps)-1]
-	}
-	if strings.TrimSpace(*atRaw) != "" {
-		parsed, err := parseAtSpec(*atRaw, time.Now().UTC())
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "invalid --at: %v\n", err)
-			return 2
-		}
-		at = parsed
-	}
-	timestamps = ensureTimestampOption(timestamps, at)
-
-	engine, err := replay.NewEngine(*stateDir)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "restore tui init failed: %v\n", err)
-		return 1
-	}
-	planner := restore.NewPlanner(restore.PlannerConfig{
-		Terminal:     restore.TerminalConfig{Command: resolvedConfig.Restore.Terminal.Command, ZellijAttachOrCreate: resolvedConfig.Restore.Terminal.ZellijAttachOrCreate},
-		AppAllowlist: resolvedConfig.Restore.AppAllowlist,
-		AppMode:      parseAppModes(resolvedConfig.Restore.AppMode),
-	})
-	planAt := func(ts time.Time) (restore.Plan, error) {
-		state, err := engine.At(ts)
-		if err != nil {
-			return restore.Plan{}, err
-		}
-		return planner.Build(state), nil
-	}
-
-	initialPlan, err := planAt(at)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "restore tui replay failed: %v\n", err)
-		return 1
-	}
-
-	filteredPlan, confirmed, err := tui.RunWithPlanLoader(initialPlan, timestamps, at, planAt)
-	if err != nil {
-		writef(stderr, "restore tui failed: %v\n", err)
-		return 1
-	}
-	if !confirmed {
-		_, _ = fmt.Fprintln(stdout, "restore cancelled")
-		return 0
-	}
-
-	beforeState := tryReadNiriWindowsState(context.Background())
-
-	executor := restore.NewExecutor(restore.ShellRunner{})
-	result := executor.Execute(context.Background(), filteredPlan)
-	if resolvedConfig.Restore.ReconcileWorkspaceMoves {
-		time.Sleep(resolvedConfig.Restore.WorkspaceReconcileDelay)
-		afterState := tryReadNiriWindowsState(context.Background())
-		if beforeState != nil && afterState != nil {
-			requests := restore.BuildMoveRequests(filteredPlan, *beforeState, *afterState)
-			report := restore.ApplyMoveRequests(context.Background(), restore.NiriWindowMover{}, requests)
-			if len(requests) > 0 {
-				writef(stdout, "restore_workspace_moves moved=%d requested=%d failed=%d\n", report.Applied, len(requests), len(report.Failures))
-				for _, failure := range report.Failures {
-					writef(stdout, "restore_workspace_move_failed window_key=%s window_id=%d app_id=%s workspace=%s error=%q\n", failure.Request.WindowKey, failure.Request.WindowID, failure.Request.AppID, failure.Request.WorkspaceRef, failure.Err.Error())
-				}
-			}
-		}
-	}
-	printRestoreExecution(stdout, result)
-	return 0
-}
-
-func tryReadNiriWindowsState(ctx context.Context) *model.State {
-	raw, err := niri.CommandSnapshotter{Command: "niri msg -j windows"}.Snapshot(ctx)
-	if err != nil {
-		return nil
-	}
-	state, err := niri.ParseSnapshot(raw)
-	if err != nil {
-		return nil
-	}
-	return &state
-}
-
-func parseAppModes(input map[string]string) map[string]restore.AppMode {
-	out := make(map[string]restore.AppMode, len(input))
-	for appID, rawMode := range input {
-		mode := strings.ToLower(strings.TrimSpace(rawMode))
-		if mode == string(restore.AppModeOneShot) {
-			out[appID] = restore.AppModeOneShot
-			continue
-		}
-		out[appID] = restore.AppModePerWindow
-	}
-	return out
-}
-
-func printRestoreExecution(stdout io.Writer, result restore.Result) {
-	for _, item := range result.Items {
-		switch item.Status {
-		case restore.StatusFailed:
-			writef(stdout, "restore_item window_key=%s status=%s error=%q\n", item.WindowKey, item.Status, item.Error)
-		case restore.StatusDegraded, restore.StatusSkipped:
-			writef(stdout, "restore_item window_key=%s status=%s reason=%q\n", item.WindowKey, item.Status, item.Reason)
-		}
-	}
-	writef(stdout, "restore_summary restored=%d skipped=%d failed=%d\n", result.Summary.Restored, result.Summary.Skipped, result.Summary.Failed)
-}
-
-func uniqueEventTimestamps(eventsList []events.Event) []time.Time {
-	if len(eventsList) == 0 {
-		return nil
-	}
-	seen := make(map[int64]struct{})
-	out := make([]time.Time, 0, len(eventsList))
-	for _, event := range eventsList {
-		k := event.TS.UnixNano()
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, event.TS)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
-	return out
-}
-
-func ensureTimestampOption(timestamps []time.Time, ts time.Time) []time.Time {
-	if ts.IsZero() {
-		return timestamps
-	}
-	for _, existing := range timestamps {
-		if existing.Equal(ts) {
-			return timestamps
-		}
-	}
-	out := append(append([]time.Time(nil), timestamps...), ts)
-	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
-	return out
-}
-
 func runPrune(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 && isHelpToken(args[0]) {
 		_, _ = fmt.Fprintln(stdout, "usage: redeem prune run [--state-dir <path>] [--days <n>]")
@@ -1062,228 +750,8 @@ func runPrune(args []string, resolvedConfig config.Config, stdout io.Writer, std
 		writef(stderr, "prune run failed: %v\n", err)
 		return 1
 	}
-	writef(stdout, "prune_summary events_pruned=%d checkpoints_pruned=%d snapshots_pruned=%d\n", summary.EventsPruned, summary.CheckpointsPruned, summary.SnapshotsPruned)
+	writef(stdout, "prune_summary checkpoints_pruned=%d\n", summary.CheckpointsPruned)
 	return 0
-}
-
-type planSummary struct {
-	ready    int
-	skipped  int
-	degraded int
-}
-
-func summarizePlan(plan restore.Plan) planSummary {
-	s := planSummary{}
-	for _, item := range plan.Items {
-		switch item.Status {
-		case restore.StatusReady:
-			s.ready++
-		case restore.StatusDegraded:
-			s.degraded++
-		default:
-			s.skipped++
-		}
-	}
-	return s
-}
-
-func runHistory(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem history <list|inspect> [flags]")
-		return 2
-	}
-	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem history <list|inspect> [flags]")
-		return 0
-	}
-
-	switch args[0] {
-	case "list":
-		return runHistoryList(args[1:], resolvedConfig, stdout, stderr)
-	case "inspect":
-		return runHistoryInspect(args[1:], resolvedConfig, stdout, stderr)
-	default:
-		writef(stderr, "unknown history subcommand: %s\n", args[0])
-		return 2
-	}
-}
-
-func runHistoryList(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
-	fs := flag.NewFlagSet("history list", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
-	fromRaw := fs.String("from", "", "start timestamp (RFC3339)")
-	toRaw := fs.String("to", "", "end timestamp (RFC3339)")
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-
-	from, err := parseOptionalTimestamp(*fromRaw)
-	if err != nil {
-		writef(stderr, "invalid --from: %v\n", err)
-		return 2
-	}
-	to, err := parseOptionalTimestamp(*toRaw)
-	if err != nil {
-		writef(stderr, "invalid --to: %v\n", err)
-		return 2
-	}
-
-	eventsList, err := replay.ListEvents(*stateDir, from, to)
-	if err != nil {
-		writef(stderr, "history list failed: %v\n", err)
-		return 1
-	}
-
-	for _, event := range eventsList {
-		writef(stdout, "%s %s %s\n", event.TS.Format(time.RFC3339Nano), event.EventType, event.WindowKey)
-	}
-	return 0
-}
-
-func runHistoryInspect(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
-	fs := flag.NewFlagSet("history inspect", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
-	atRaw := fs.String("at", "", "timestamp (RFC3339)")
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-	var at time.Time
-	if strings.TrimSpace(*atRaw) == "" {
-		eventsList, err := replay.ListEvents(*stateDir, nil, nil)
-		if err != nil {
-			writef(stderr, "history inspect failed: %v\n", err)
-			return 1
-		}
-		if len(eventsList) == 0 {
-			_, _ = fmt.Fprintln(stderr, "history inspect found no events")
-			return 1
-		}
-		at = eventsList[len(eventsList)-1].TS
-	} else {
-		var err error
-		at, err = parseAtSpec(*atRaw, time.Now().UTC())
-		if err != nil {
-			writef(stderr, "invalid --at: %v\n", err)
-			return 2
-		}
-	}
-
-	engine, err := replay.NewEngine(*stateDir)
-	if err != nil {
-		writef(stderr, "history init failed: %v\n", err)
-		return 1
-	}
-	state, err := engine.At(at)
-	if err != nil {
-		writef(stderr, "history inspect failed: %v\n", err)
-		return 1
-	}
-
-	payload, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		writef(stderr, "history encode failed: %v\n", err)
-		return 1
-	}
-	_, _ = fmt.Fprintln(stdout, string(payload))
-	return 0
-}
-
-func parseOptionalTimestamp(raw string) (*time.Time, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-	ts, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return nil, err
-	}
-	return &ts, nil
-}
-
-func parseAtSpec(raw string, now time.Time) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}, fmt.Errorf("timestamp is empty")
-	}
-
-	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return ts, nil
-	}
-
-	age, err := parseRelativeAge(raw)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("expected RFC3339 timestamp or relative age like 1m/2d")
-	}
-
-	return now.Add(-age), nil
-}
-
-func parseRelativeAge(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(strings.ToLower(raw))
-	if raw == "" {
-		return 0, fmt.Errorf("empty relative age")
-	}
-
-	total := time.Duration(0)
-	i := 0
-	for i < len(raw) {
-		start := i
-		for i < len(raw) && raw[i] >= '0' && raw[i] <= '9' {
-			i++
-		}
-		if start == i || i >= len(raw) {
-			return 0, fmt.Errorf("invalid relative age")
-		}
-
-		value, err := strconv.Atoi(raw[start:i])
-		if err != nil {
-			return 0, fmt.Errorf("invalid relative age")
-		}
-		if value < 0 {
-			return 0, fmt.Errorf("invalid relative age")
-		}
-
-		unit := raw[i]
-		i++
-
-		mult, ok := relativeUnitMultiplier(unit)
-		if !ok {
-			return 0, fmt.Errorf("invalid relative age")
-		}
-
-		segment := time.Duration(value) * mult
-		if segment < 0 || segment > (time.Duration(math.MaxInt64)-total) {
-			return 0, fmt.Errorf("relative age overflow")
-		}
-		total += segment
-	}
-
-	if total <= 0 {
-		return 0, fmt.Errorf("relative age must be > 0")
-	}
-	return total, nil
-}
-
-func relativeUnitMultiplier(unit byte) (time.Duration, bool) {
-	switch unit {
-	case 's':
-		return time.Second, true
-	case 'm':
-		return time.Minute, true
-	case 'h':
-		return time.Hour, true
-	case 'd':
-		return 24 * time.Hour, true
-	default:
-		return 0, false
-	}
 }
 
 func runCapture(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -1313,7 +781,6 @@ func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Write
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
 	host := fs.String("host", resolvedConfig.Host, "host identifier")
 	profile := fs.String("profile", resolvedConfig.Profile, "profile name")
-	snapshotEvery := fs.Int("snapshot-every", resolvedConfig.Capture.SnapshotEvery, "snapshot cadence")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "niri JSON fixture path")
 	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "niri snapshot command")
 	processWhitelist := fs.String("process-whitelist", strings.Join(resolvedConfig.ProcessMetadata.Whitelist, ","), "comma-separated process tags")
@@ -1334,7 +801,6 @@ func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Write
 		stateDir:              *stateDir,
 		host:                  *host,
 		profile:               *profile,
-		snapshotEvery:         *snapshotEvery,
 		fixture:               *fixture,
 		niriCmd:               *niriCmd,
 		processWhitelist:      splitCSV(*processWhitelist),
@@ -1353,14 +819,10 @@ func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Write
 		return 1
 	}
 
-	writef(stdout, "events_written=%d state_hash=%s\n", result.EventsWritten, result.StateHash)
+	writef(stdout, "state_hash=%s\n", result.StateHash)
 	if result.CheckpointPath != "" {
 		writef(stdout, "checkpoint=%s\n", result.CheckpointPath)
 	}
-	if result.SnapshotPath != "" {
-		writef(stdout, "snapshot=%s\n", result.SnapshotPath)
-	}
-
 	return 0
 }
 
@@ -1370,7 +832,6 @@ func runCaptureRun(args []string, resolvedConfig config.Config, stdout io.Writer
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
 	host := fs.String("host", resolvedConfig.Host, "host identifier")
 	profile := fs.String("profile", resolvedConfig.Profile, "profile name")
-	snapshotEvery := fs.Int("snapshot-every", resolvedConfig.Capture.SnapshotEvery, "snapshot cadence")
 	interval := fs.Duration("interval", resolvedConfig.Capture.Interval, "capture interval")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "niri JSON fixture path")
 	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "niri snapshot command")
@@ -1392,7 +853,6 @@ func runCaptureRun(args []string, resolvedConfig config.Config, stdout io.Writer
 		stateDir:              *stateDir,
 		host:                  *host,
 		profile:               *profile,
-		snapshotEvery:         *snapshotEvery,
 		fixture:               *fixture,
 		niriCmd:               *niriCmd,
 		processWhitelist:      splitCSV(*processWhitelist),
@@ -1421,7 +881,6 @@ type captureBuildConfig struct {
 	stateDir              string
 	host                  string
 	profile               string
-	snapshotEvery         int
 	fixture               string
 	niriCmd               string
 	processWhitelist      []string
@@ -1431,15 +890,7 @@ type captureBuildConfig struct {
 }
 
 func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
-	eventStore, err := events.NewStore(cfg.stateDir)
-	if err != nil {
-		return nil, err
-	}
 	checkpointStore, err := checkpoints.NewStore(cfg.stateDir)
-	if err != nil {
-		return nil, err
-	}
-	snapshotStore, err := snapshots.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -1460,13 +911,10 @@ func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
 
 	return capture.NewRunner(capture.Config{
 		Collector:       stateCollector,
-		EventStore:      eventStore,
 		CheckpointStore: checkpointStore,
-		SnapshotStore:   snapshotStore,
-		SnapshotEvery:   cfg.snapshotEvery,
+		StateDir:        cfg.stateDir,
 		Host:            cfg.host,
 		Profile:         cfg.profile,
-		Source:          "capture.cli",
 		Logger:          cfg.stderr,
 	}), nil
 }
@@ -1551,7 +999,7 @@ func isHelpToken(arg string) bool {
 }
 
 func printHelp(w io.Writer) {
-	writeln(w, "redeem - terminal session history and restore")
+	writeln(w, "redeem - terminal placement resume and remote sessions")
 	writeln(w)
 	writeln(w, "Usage:")
 	writeln(w, "  redeem [command]")
@@ -1559,10 +1007,8 @@ func printHelp(w io.Writer) {
 	writeln(w, "Commands:")
 	writeln(w, "  capture   Capture window/session state")
 	writeln(w, "  resume    Reconcile prior-boot terminal sessions")
-	writeln(w, "  restore   Restore from history")
-	writeln(w, "  history   Inspect timeline")
 	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")
-	writeln(w, "  prune     Prune old events/checkpoints/snapshots")
+	writeln(w, "  prune     Prune old boot checkpoints")
 	writeln(w, "  bottle    Bottle workflows (V2)")
 	writeln(w, "  doctor    Read-only capture/resume diagnostics")
 	writeln(w)

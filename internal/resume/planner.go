@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/model"
-	"github.com/jmo/terminal-redeemer/internal/replay"
 )
 
 type Status string
@@ -44,7 +44,7 @@ type SelectOptions struct {
 
 type Selection struct {
 	Status     CandidateStatus
-	Checkpoint *replay.Checkpoint
+	Checkpoint *checkpoints.Checkpoint
 	Age        time.Duration
 	Reason     string
 }
@@ -52,11 +52,11 @@ type Selection struct {
 // Select chooses by capture time before inspecting terminal contents. This is
 // important: an empty checkpoint from a newer prior boot must not cause a
 // fallback to an older boot that happened to contain terminals.
-func Select(checkpoints []replay.Checkpoint, options SelectOptions) Selection {
+func Select(candidates []checkpoints.Checkpoint, options SelectOptions) Selection {
 	currentBootID := strings.TrimSpace(options.CurrentBootID)
-	var selected *replay.Checkpoint
-	for i := range checkpoints {
-		checkpoint := checkpoints[i]
+	var selected *checkpoints.Checkpoint
+	for i := range candidates {
+		checkpoint := candidates[i]
 		bootID := strings.TrimSpace(checkpoint.BootID)
 		if bootID == "" || bootID == currentBootID {
 			continue
@@ -67,7 +67,7 @@ func Select(checkpoints []replay.Checkpoint, options SelectOptions) Selection {
 		if options.Profile != "" && checkpoint.Profile != options.Profile {
 			continue
 		}
-		if selected == nil || checkpoint.CapturedAt.After(selected.CapturedAt) {
+		if selected == nil || checkpoint.ObservedAt.After(selected.ObservedAt) {
 			copy := checkpoint
 			selected = &copy
 		}
@@ -78,7 +78,7 @@ func Select(checkpoints []replay.Checkpoint, options SelectOptions) Selection {
 
 	selection := Selection{Status: CandidateReady, Checkpoint: selected}
 	if !options.Now.IsZero() {
-		selection.Age = options.Now.Sub(selected.CapturedAt)
+		selection.Age = options.Now.Sub(selected.ObservedAt)
 		if selection.Age < 0 {
 			selection.Age = 0
 		}
@@ -175,7 +175,7 @@ func (p *Planner) Build(selection Selection, current model.State, availableSessi
 		return plan
 	}
 	plan.BootID = selection.Checkpoint.BootID
-	plan.CapturedAt = selection.Checkpoint.CapturedAt
+	plan.CapturedAt = selection.Checkpoint.ObservedAt
 
 	capturedWindows := terminalWindows(selection.Checkpoint.State)
 	if selection.Status == CandidateEmpty {

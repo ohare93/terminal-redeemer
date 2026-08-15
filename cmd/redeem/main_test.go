@@ -2,18 +2,16 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
-	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
-	"github.com/jmo/terminal-redeemer/internal/replay"
-	"github.com/jmo/terminal-redeemer/internal/resume"
+	"github.com/jmo/terminal-redeemer/internal/model"
 )
 
 func TestMain(m *testing.M) {
@@ -38,7 +36,7 @@ func TestHelpByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if !strings.Contains(out.String(), "redeem - terminal session history and restore") || !strings.Contains(out.String(), "Snapshot, discover, and mirror live terminal sessions") {
+	if !strings.Contains(out.String(), "redeem - terminal placement resume and remote sessions") || !strings.Contains(out.String(), "Snapshot, discover, and mirror live terminal sessions") {
 		t.Fatalf("expected discoverable mirror help output, got %q", out.String())
 	}
 	if stderrWithoutWarning(errBuf.String()) != "" {
@@ -61,14 +59,18 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestRemovedSliceCommandIsUnknown(t *testing.T) {
+func TestRemovedProductCommandsAreUnknown(t *testing.T) {
 	t.Parallel()
-
-	var out bytes.Buffer
-	var err bytes.Buffer
-	code := run([]string{"slice", "--help"}, &out, &err)
-	if code != 2 || !strings.Contains(err.String(), "unknown command: slice") {
-		t.Fatalf("code=%d stderr=%q", code, err.String())
+	for _, command := range []string{"slice", "history", "restore"} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			var out bytes.Buffer
+			var err bytes.Buffer
+			code := run([]string{command, "--help"}, &out, &err)
+			if code != 2 || !strings.Contains(err.String(), "unknown command: "+command) {
+				t.Fatalf("code=%d stderr=%q", code, err.String())
+			}
+		})
 	}
 }
 
@@ -81,8 +83,6 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 	}{
 		{name: "capture once", args: []string{"capture", "once", "--help"}},
 		{name: "capture run", args: []string{"capture", "run", "--help"}},
-		{name: "history list", args: []string{"history", "list", "--help"}},
-		{name: "history inspect", args: []string{"history", "inspect", "--help"}},
 		{name: "mirror snapshot", args: []string{"mirror", "snapshot", "--help"}},
 		{name: "mirror list", args: []string{"mirror", "list", "--help"}},
 		{name: "mirror open", args: []string{"mirror", "open", "--help"}},
@@ -90,8 +90,6 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
 		{name: "mirror close", args: []string{"mirror", "close", "--help"}},
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
-		{name: "restore apply", args: []string{"restore", "apply", "--help"}},
-		{name: "restore tui", args: []string{"restore", "tui", "--help"}},
 		{name: "resume", args: []string{"resume", "--help"}},
 		{name: "prune run", args: []string{"prune", "run", "--help"}},
 	}
@@ -125,10 +123,7 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 	}{
 		{name: "capture once unknown flag", args: []string{"capture", "once", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "capture run unknown flag", args: []string{"capture", "run", "--no-such-flag"}, want: "flag provided but not defined"},
-		{name: "history list unknown flag", args: []string{"history", "list", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
-		{name: "restore apply missing at", args: []string{"restore", "apply"}, want: "restore apply requires --at"},
-		{name: "restore tui unknown flag", args: []string{"restore", "tui", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "resume invalid timeout", args: []string{"resume", "--timeout", "0s"}, want: "--timeout and --poll-interval must be positive"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 	}
@@ -155,29 +150,29 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now().UTC().Add(-time.Minute)
-	event := events.Event{
-		V: 1, TS: now, Host: "local", Profile: "default", BootID: "prior-boot",
-		EventType: "state_full", StateHash: "sha256:resume",
-		State: map[string]any{
-			"workspaces": []any{map[string]any{"id": "old-id", "index": 2, "name": "dev", "output": "DP-1"}},
-			"windows": []any{map[string]any{
-				"key": "w-terminal", "app_id": "kitty", "workspace_id": "old-id",
-				"workspace_ref": map[string]any{"name": "dev", "output": "DP-1", "index": 2},
-				"terminal":      map[string]any{"cwd": "/tmp/project", "session_tag": "session-a"},
-			}},
-		},
+	state := model.State{
+		Workspaces: []model.Workspace{{ID: "old-id", Index: 2, Name: "dev", Output: "DP-1"}},
+		Windows: []model.Window{{
+			Key: "w-terminal", AppID: "kitty", WorkspaceID: "old-id",
+			WorkspaceRef: &model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 2},
+			Terminal:     &model.Terminal{CWD: "/tmp/project", SessionTag: "session-a"},
+		}},
 	}
-	line, err := json.Marshal(event)
+	hash, err := state.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "events.jsonl"), append(line, '\n'), 0o600); err != nil {
+	store, err := checkpoints.NewStore(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	checkpoints, err := replay.ListCheckpoints(root)
-	if err != nil || len(checkpoints) != 1 {
-		t.Fatalf("checkpoint fixture invalid: count=%d err=%v", len(checkpoints), err)
+	if _, err := store.Write(checkpoints.Checkpoint{
+		V: checkpoints.SchemaVersion, BootID: "prior-boot", Host: "local", Profile: "default",
+		ObservedAt: now, State: state, StateHash: hash,
+	}); err != nil {
+		t.Fatal(err)
 	}
+
 	fixture := filepath.Join(t.TempDir(), "niri.json")
 	if err := os.WriteFile(fixture, []byte(`{"workspaces":[{"id":"current-id","idx":5,"name":"dev","output":"DP-2"}],"windows":[]}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -235,61 +230,6 @@ func TestResumeWaitsForNiriBeforeCheckpointSelection(t *testing.T) {
 	}
 }
 
-func TestPrintResumePlanGuidesForensicSelectionForNonActionableCandidates(t *testing.T) {
-	for _, status := range []resume.CandidateStatus{resume.CandidateEmpty, resume.CandidateStale, resume.CandidateNotFound} {
-		t.Run(string(status), func(t *testing.T) {
-			var out bytes.Buffer
-			printResumePlan(&out, resume.Plan{CandidateStatus: status, Reason: "not actionable"})
-			for _, command := range []string{"redeem restore tui", "redeem restore apply --at <RFC3339>"} {
-				if !strings.Contains(out.String(), command) {
-					t.Fatalf("guidance missing %q: %s", command, out.String())
-				}
-			}
-		})
-	}
-
-	var ready bytes.Buffer
-	printResumePlan(&ready, resume.Plan{CandidateStatus: resume.CandidateReady})
-	if strings.Contains(ready.String(), "resume_guidance") {
-		t.Fatalf("ready candidate should not include forensic guidance: %s", ready.String())
-	}
-}
-
-func TestHistoryInspectDefaultsToLatest(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "old"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append old event: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: t0.Add(2 * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "new"}, StateHash: "sha256:b"}); err != nil {
-		t.Fatalf("append new event: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"history", "inspect", "--state-dir", root}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "\"title\": \"new\"") {
-		t.Fatalf("expected latest state output, got %q", out.String())
-	}
-}
-
 func TestCaptureOnceEndToEndWithFixture(t *testing.T) {
 	t.Parallel()
 
@@ -312,16 +252,12 @@ func TestCaptureOnceEndToEndWithFixture(t *testing.T) {
 		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
 	}
 
-	store, err := events.NewStore(stateDir)
-	if err != nil {
-		t.Fatalf("new event store: %v", err)
+	got, issues, err := checkpoints.List(stateDir)
+	if err != nil || len(issues) != 0 || len(got) != 1 {
+		t.Fatalf("captured checkpoints=%#v issues=%#v err=%v", got, issues, err)
 	}
-	got, _, err := store.ReadSince(0)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("expected capture once to append at least one event")
+	if got[0].Host != "host-a" || got[0].Profile != "default" || len(got[0].State.Windows) != 1 {
+		t.Fatalf("unexpected captured checkpoint: %#v", got[0])
 	}
 }
 
@@ -338,16 +274,12 @@ func TestCaptureOnceEndToEndWithCommandSnapshotter(t *testing.T) {
 		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
 	}
 
-	store, err := events.NewStore(stateDir)
-	if err != nil {
-		t.Fatalf("new event store: %v", err)
+	got, issues, err := checkpoints.List(stateDir)
+	if err != nil || len(issues) != 0 || len(got) != 1 {
+		t.Fatalf("captured checkpoints=%#v issues=%#v err=%v", got, issues, err)
 	}
-	got, _, err := store.ReadSince(0)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("expected capture once to append at least one event")
+	if got[0].Host != "host-a" || got[0].Profile != "default" || len(got[0].State.Windows) != 1 {
+		t.Fatalf("unexpected captured checkpoint: %#v", got[0])
 	}
 }
 
@@ -388,384 +320,32 @@ func TestMirrorSnapshotEndToEndWithFixture(t *testing.T) {
 	}
 }
 
-func TestHistoryInspectAtTimestamp(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "shell"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"history", "inspect", "--state-dir", root, "--at", "2026-02-15T10:00:00Z"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "\"title\": \"shell\"") {
-		t.Fatalf("expected history output with title, got %q", out.String())
-	}
-}
-
-func TestRestoreApplyPreview(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "shell"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"restore", "apply", "--state-dir", root, "--at", "2026-02-15T10:00:00Z"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "restore_plan") {
-		t.Fatalf("expected restore plan output, got %q", out.String())
-	}
-}
-
 func TestPruneRunCommand(t *testing.T) {
 	t.Parallel()
-
 	root := t.TempDir()
-	store, err := events.NewStore(root)
+	store, err := checkpoints.NewStore(root)
 	if err != nil {
-		t.Fatalf("new store: %v", err)
+		t.Fatal(err)
 	}
-	writer, err := store.AcquireWriter()
+	state := model.State{}
+	hash, err := state.Hash()
 	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
+		t.Fatal(err)
 	}
-	t0 := time.Now().UTC().AddDate(0, 0, -40)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "old"}, StateHash: "sha256:old"}); err != nil {
-		t.Fatalf("append old event: %v", err)
+	if _, err := store.Write(checkpoints.Checkpoint{
+		V: checkpoints.SchemaVersion, BootID: "old", Host: "host-a", Profile: "default",
+		ObservedAt: time.Now().UTC().AddDate(0, 0, -40), State: state, StateHash: hash,
+	}); err != nil {
+		t.Fatal(err)
 	}
-	_ = writer.Close()
 
-	var out bytes.Buffer
-	var stderr bytes.Buffer
+	var out, stderr bytes.Buffer
 	code := run([]string{"prune", "run", "--state-dir", root, "--days", "30"}, &out, &stderr)
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "prune_summary") {
+	if !strings.Contains(out.String(), "prune_summary checkpoints_pruned=1") {
 		t.Fatalf("expected prune summary output, got %q", out.String())
-	}
-}
-
-func TestHistoryInspectInvalidTimestamp(t *testing.T) {
-	t.Parallel()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"history", "inspect", "--state-dir", t.TempDir(), "--at", "not-a-time"}, &out, &stderr)
-	if code != 2 {
-		t.Fatalf("expected code 2, got %d", code)
-	}
-	if !strings.Contains(stderr.String(), "invalid --at") {
-		t.Fatalf("expected invalid --at error, got %q", stderr.String())
-	}
-}
-
-func TestRestoreApplyInvalidTimestamp(t *testing.T) {
-	t.Parallel()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"restore", "apply", "--state-dir", t.TempDir(), "--at", "not-a-time"}, &out, &stderr)
-	if code != 2 {
-		t.Fatalf("expected code 2, got %d", code)
-	}
-	if !strings.Contains(stderr.String(), "invalid --at") {
-		t.Fatalf("expected invalid --at error, got %q", stderr.String())
-	}
-}
-
-func TestParseAtSpecSupportsRelativeAge(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
-
-	got, err := parseAtSpec("1m", now)
-	if err != nil {
-		t.Fatalf("parse 1m: %v", err)
-	}
-	if !got.Equal(now.Add(-1 * time.Minute)) {
-		t.Fatalf("expected now-1m, got %s", got)
-	}
-
-	got, err = parseAtSpec("2d", now)
-	if err != nil {
-		t.Fatalf("parse 2d: %v", err)
-	}
-	if !got.Equal(now.Add(-48 * time.Hour)) {
-		t.Fatalf("expected now-48h, got %s", got)
-	}
-
-	got, err = parseAtSpec("1h30m", now)
-	if err != nil {
-		t.Fatalf("parse 1h30m: %v", err)
-	}
-	if !got.Equal(now.Add(-90 * time.Minute)) {
-		t.Fatalf("expected now-90m, got %s", got)
-	}
-}
-
-func TestHistoryInspectRelativeAt(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	now := time.Now().UTC()
-	if _, err := writer.Append(events.Event{V: 1, TS: now.Add(-2 * time.Minute), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "older"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append older event: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: now.Add(-20 * time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "newer"}, StateHash: "sha256:b"}); err != nil {
-		t.Fatalf("append newer event: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"history", "inspect", "--state-dir", root, "--at", "1m"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "\"title\": \"older\"") {
-		t.Fatalf("expected state at 1m ago to include older title, got %q", out.String())
-	}
-}
-
-func TestHistoryListEmptyStateDir(t *testing.T) {
-	t.Parallel()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"history", "list", "--state-dir", t.TempDir()}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if strings.TrimSpace(out.String()) != "" {
-		t.Fatalf("expected empty output for empty history, got %q", out.String())
-	}
-}
-
-func TestRestoreApplyPreviewAndApplyParityForSkippedOnlyPlan(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "firefox", "workspace_id": "ws-1", "title": "web"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-
-	configPath := filepath.Join(root, "config.yaml")
-	configPayload := []byte("stateDir: " + root + "\nrestore:\n  appAllowlist: {}\n  terminal:\n    command: kitty\n    zellijAttachOrCreate: true\n")
-	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	var previewOut bytes.Buffer
-	var previewErr bytes.Buffer
-	previewCode := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z"}, &previewOut, &previewErr)
-	if previewCode != 0 {
-		t.Fatalf("expected preview code 0, got %d stderr=%q", previewCode, previewErr.String())
-	}
-	if !strings.Contains(previewOut.String(), "restore_plan ready=0 skipped=1") {
-		t.Fatalf("unexpected preview summary: %q", previewOut.String())
-	}
-
-	var applyOut bytes.Buffer
-	var applyErr bytes.Buffer
-	applyCode := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z", "--yes"}, &applyOut, &applyErr)
-	if applyCode != 0 {
-		t.Fatalf("expected apply code 0, got %d stderr=%q", applyCode, applyErr.String())
-	}
-	if !strings.Contains(applyOut.String(), "restore_summary restored=0 skipped=1 failed=0") {
-		t.Fatalf("unexpected apply summary: %q", applyOut.String())
-	}
-}
-
-func TestRestoreApplyReportsDegradedSkippedAndFailedItems(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-term", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "terminal": map[string]any{"cwd": "/tmp/project"}}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append terminal event: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-skip", Patch: map[string]any{"app_id": "firefox", "workspace_id": "ws-1"}, StateHash: "sha256:b"}); err != nil {
-		t.Fatalf("append skipped event: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-fail", Patch: map[string]any{"app_id": "code", "workspace_id": "ws-1"}, StateHash: "sha256:c"}); err != nil {
-		t.Fatalf("append failed event: %v", err)
-	}
-
-	configPath := filepath.Join(root, "config.yaml")
-	configPayload := []byte("stateDir: " + root + "\nrestore:\n  appAllowlist:\n    code: \"false\"\n  terminal:\n    command: kitty\n    zellijAttachOrCreate: true\n")
-	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z", "--yes"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected apply code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "restore_item window_key=w-term status=degraded reason=\"missing terminal session tag\"") {
-		t.Fatalf("expected degraded detail line, got %q", out.String())
-	}
-	if !strings.Contains(out.String(), "restore_item window_key=w-skip status=skipped reason=\"app not allowlisted\"") {
-		t.Fatalf("expected skipped detail line, got %q", out.String())
-	}
-	if !strings.Contains(out.String(), "restore_item window_key=w-fail status=failed error=") {
-		t.Fatalf("expected failed detail line, got %q", out.String())
-	}
-	if !strings.Contains(out.String(), "restore_summary restored=0 skipped=2 failed=1") {
-		t.Fatalf("unexpected apply summary: %q", out.String())
-	}
-}
-
-func TestRestoreApplyPreviewUsesConfiguredRestoreSettings(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-term", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "terminal": map[string]any{"cwd": "/tmp/project"}}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append terminal event: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-app", Patch: map[string]any{"app_id": "code", "workspace_id": "ws-1"}, StateHash: "sha256:b"}); err != nil {
-		t.Fatalf("append app event: %v", err)
-	}
-
-	configPath := filepath.Join(root, "config.yaml")
-	configPayload := []byte("stateDir: " + root + "\nrestore:\n  appAllowlist:\n    code: \"true\"\n  terminal:\n    command: kitty\n    zellijAttachOrCreate: false\n")
-	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected preview code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "restore_plan ready=2 skipped=0 degraded=0") {
-		t.Fatalf("expected config-driven ready plan, got %q", out.String())
-	}
-}
-
-func TestRestoreApplyDryRunPrintsActionsWithoutExecuting(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() { _ = writer.Close() }()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-app", Patch: map[string]any{"app_id": "code", "workspace_id": "ws-1"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append app event: %v", err)
-	}
-
-	configPath := filepath.Join(root, "config.yaml")
-	configPayload := []byte("stateDir: " + root + "\nrestore:\n  appAllowlist:\n    code: \"false\"\n  terminal:\n    command: kitty\n    zellijAttachOrCreate: true\n")
-	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"--config", configPath, "restore", "apply", "--at", "2026-02-15T10:00:00Z", "--dry-run"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected dry-run code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "Would Restore:") {
-		t.Fatalf("expected would-restore section, got %q", out.String())
-	}
-	if !strings.Contains(out.String(), "Summary: would_restore=1 skipped=0 degraded=0") {
-		t.Fatalf("unexpected dry-run summary: %q", out.String())
 	}
 }
 
@@ -795,16 +375,9 @@ func TestGlobalConfigAppliesCaptureDefaultsAndCLIOverrides(t *testing.T) {
 		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
 	}
 
-	store, err := events.NewStore(stateFromConfig)
-	if err != nil {
-		t.Fatalf("new event store: %v", err)
-	}
-	got, _, err := store.ReadSince(0)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	if len(got) == 0 {
-		t.Fatal("expected captured event")
+	got, issues, err := checkpoints.List(stateFromConfig)
+	if err != nil || len(issues) != 0 || len(got) != 1 {
+		t.Fatalf("checkpoints=%#v issues=%#v err=%v", got, issues, err)
 	}
 	if got[0].Host != "cfg-host" || got[0].Profile != "cfg-profile" {
 		t.Fatalf("expected config host/profile, got host=%q profile=%q", got[0].Host, got[0].Profile)
@@ -817,19 +390,12 @@ func TestGlobalConfigAppliesCaptureDefaultsAndCLIOverrides(t *testing.T) {
 		t.Fatalf("expected override code 0, got %d stderr=%q", code, stderr.String())
 	}
 
-	overrideStore, err := events.NewStore(overrideStateDir)
-	if err != nil {
-		t.Fatalf("new override event store: %v", err)
+	overrideCheckpoints, issues, err := checkpoints.List(overrideStateDir)
+	if err != nil || len(issues) != 0 || len(overrideCheckpoints) != 1 {
+		t.Fatalf("override checkpoints=%#v issues=%#v err=%v", overrideCheckpoints, issues, err)
 	}
-	overrideEvents, _, err := overrideStore.ReadSince(0)
-	if err != nil {
-		t.Fatalf("read override events: %v", err)
-	}
-	if len(overrideEvents) == 0 {
-		t.Fatal("expected captured event with CLI overrides")
-	}
-	if overrideEvents[0].Host != "cli-host" || overrideEvents[0].Profile != "cli-profile" {
-		t.Fatalf("expected CLI host/profile, got host=%q profile=%q", overrideEvents[0].Host, overrideEvents[0].Profile)
+	if overrideCheckpoints[0].Host != "cli-host" || overrideCheckpoints[0].Profile != "cli-profile" {
+		t.Fatalf("expected CLI host/profile, got host=%q profile=%q", overrideCheckpoints[0].Host, overrideCheckpoints[0].Profile)
 	}
 }
 
@@ -865,7 +431,7 @@ func TestDoctorPassExitCode(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	configPath := filepath.Join(root, "config.yaml")
-	configPayload := []byte("stateDir: " + stateDir + "\nrestore:\n  terminal:\n    command: kitty\n")
+	configPayload := []byte("stateDir: " + stateDir + "\nresume:\n  terminalCommand: kitty\n")
 	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -896,7 +462,7 @@ func TestDoctorPassExitCode(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d output=%q", code, out.String())
 	}
-	if !strings.Contains(out.String(), "doctor_summary total=12 passed=12 failed=0") {
+	if !strings.Contains(out.String(), "doctor_summary total=10 passed=10 failed=0") {
 		t.Fatalf("unexpected doctor summary: %q", out.String())
 	}
 	for _, name := range []string{"boot_id", "state_paths", "niri_readiness", "resume_launcher", "zellij_listing", "resume_policy", "startup_service", "checkpoints_integrity"} {
@@ -1105,98 +671,6 @@ func TestCaptureNiriCommandDefaultPrecedence(t *testing.T) {
 	}
 }
 
-func TestRestoreApplyStateDirFlagOverridesConfig(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	configStateDir := filepath.Join(root, "state-config")
-	overrideStateDir := filepath.Join(root, "state-override")
-
-	store, err := events.NewStore(overrideStateDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "code", "workspace_id": "ws-1"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-
-	configPath := filepath.Join(root, "config.yaml")
-	configPayload := []byte("stateDir: " + configStateDir + "\nrestore:\n  appAllowlist:\n    code: \"code\"\n")
-	if err := os.WriteFile(configPath, configPayload, 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"--config", configPath, "restore", "apply", "--state-dir", overrideStateDir, "--at", "2026-02-15T10:00:00Z"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "restore_plan ready=1 skipped=0 degraded=0") {
-		t.Fatalf("expected restore to use CLI state-dir override, got %q", out.String())
-	}
-}
-
-func TestHistoryListFromToBoundaryInclusive(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	store, err := events.NewStore(root)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
-	t1 := t0.Add(1 * time.Second)
-	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "a"}, StateHash: "sha256:a"}); err != nil {
-		t.Fatalf("append t0: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: t1, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "b"}, StateHash: "sha256:b"}); err != nil {
-		t.Fatalf("append t1: %v", err)
-	}
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	code := run([]string{"history", "list", "--state-dir", root, "--from", "2026-02-15T10:00:00Z", "--to", "2026-02-15T10:00:01Z"}, &out, &stderr)
-	if code != 0 {
-		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
-	}
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 events in inclusive boundary range, got %d output=%q", len(lines), out.String())
-	}
-}
-
-func TestParseOptionalTimestampWhitespace(t *testing.T) {
-	t.Parallel()
-
-	ts, err := parseOptionalTimestamp("   ")
-	if err != nil {
-		t.Fatalf("parse whitespace timestamp: %v", err)
-	}
-	if ts != nil {
-		t.Fatalf("expected nil timestamp for whitespace input, got %v", ts)
-	}
-}
-
-// stderrWithoutWarning strips the local-install warning line from stderr output
-// so tests are not affected by whether ~/.local/bin/redeem exists on the runner.
 func stderrWithoutWarning(s string) string {
 	var lines []string
 	for _, line := range strings.Split(s, "\n") {

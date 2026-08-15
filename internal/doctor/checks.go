@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,9 +11,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
-	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/niri"
-	"github.com/jmo/terminal-redeemer/internal/snapshots"
 )
 
 type ConfigLoadCheck struct {
@@ -117,47 +114,6 @@ func (c CommandAvailableCheck) Run(_ context.Context) Result {
 	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("available: %s", binary)}
 }
 
-type EventsIntegrityCheck struct {
-	StateDir string
-	OpenFile func(name string) (*os.File, error)
-}
-
-func (c EventsIntegrityCheck) Name() string {
-	return "events_integrity"
-}
-
-func (c EventsIntegrityCheck) Run(_ context.Context) Result {
-	openFile := c.OpenFile
-	if openFile == nil {
-		openFile = os.Open
-	}
-
-	path := filepath.Join(c.StateDir, "events.jsonl")
-	f, err := openFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Result{Name: c.Name(), Status: StatusPass, Detail: "events file missing (no captures yet)"}
-		}
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("open failed: %v", err)}
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	decoded, consumed, err := events.ReadLog(f)
-	if err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("event log corruption: %v", err)}
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("stat failed: %v", err)}
-	}
-	if consumed < info.Size() {
-		return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d events); ignored one malformed trailing record consistently with replay", len(decoded))}
-	}
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d events)", len(decoded))}
-}
-
 type CheckpointsIntegrityCheck struct {
 	StateDir string
 }
@@ -171,61 +127,9 @@ func (c CheckpointsIntegrityCheck) Run(_ context.Context) Result {
 	}
 	if len(issues) > 0 {
 		issue := issues[0]
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("invalid %s: %v (resume will use valid rolling/event fallback)", filepath.Base(issue.Path), issue.Err)}
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("invalid %s: %v", filepath.Base(issue.Path), issue.Err)}
 	}
 	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d rolling checkpoints)", len(valid))}
-}
-
-type SnapshotsIntegrityCheck struct {
-	StateDir string
-	ReadDir  func(name string) ([]os.DirEntry, error)
-	ReadFile func(name string) ([]byte, error)
-}
-
-func (c SnapshotsIntegrityCheck) Name() string {
-	return "snapshots_integrity"
-}
-
-func (c SnapshotsIntegrityCheck) Run(_ context.Context) Result {
-	readDir := c.ReadDir
-	if readDir == nil {
-		readDir = os.ReadDir
-	}
-	readFile := c.ReadFile
-	if readFile == nil {
-		readFile = os.ReadFile
-	}
-
-	dir := filepath.Join(c.StateDir, "snapshots")
-	entries, err := readDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Result{Name: c.Name(), Status: StatusPass, Detail: "snapshots dir missing (no snapshots yet)"}
-		}
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("read dir failed: %v", err)}
-	}
-
-	checked := 0
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		checked++
-		path := filepath.Join(dir, entry.Name())
-		payload, err := readFile(path)
-		if err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("read %s failed: %v", entry.Name(), err)}
-		}
-		var snapshot snapshots.Snapshot
-		if err := json.Unmarshal(payload, &snapshot); err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("decode %s failed: %v", entry.Name(), err)}
-		}
-		if err := snapshot.Validate(); err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("invalid %s: %v", entry.Name(), err)}
-		}
-	}
-
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d snapshots)", checked)}
 }
 
 type LocalInstallCheck struct {
@@ -253,7 +157,7 @@ func (c LocalInstallCheck) Run(_ context.Context) Result {
 	return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("%s exists and may shadow the Nix-managed version; run `devenv shell uninstall-local` to remove it", path)}
 }
 
-// StatePathsCheck reports the configured history locations without creating or
+// StatePathsCheck reports the configured checkpoint location without creating or
 // modifying them. Integrity checks below inspect files that already exist.
 type StatePathsCheck struct {
 	StateDir string
@@ -269,7 +173,7 @@ func (c StatePathsCheck) Run(_ context.Context) Result {
 	}
 	stateDir := strings.TrimSpace(c.StateDir)
 	if stateDir == "" {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: "stateDir is empty; configure a history directory"}
+		return Result{Name: c.Name(), Status: StatusFail, Detail: "stateDir is empty; configure a checkpoint directory"}
 	}
 	info, err := stat(stateDir)
 	if err != nil {
@@ -280,12 +184,12 @@ func (c StatePathsCheck) Run(_ context.Context) Result {
 		if _, parentErr := stat(parent); parentErr != nil {
 			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("stateDir %s is absent and parent %s is unavailable: %v", stateDir, parent, parentErr)}
 		}
-		return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s events=%s checkpoints=%s snapshots=%s (no captures yet)", stateDir, filepath.Join(stateDir, "events.jsonl"), filepath.Join(stateDir, "checkpoints"), filepath.Join(stateDir, "snapshots"))}
+		return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s checkpoints=%s (no captures yet)", stateDir, filepath.Join(stateDir, "checkpoints"))}
 	}
 	if !info.IsDir() {
 		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("stateDir %s is not a directory", stateDir)}
 	}
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s events=%s checkpoints=%s snapshots=%s", stateDir, filepath.Join(stateDir, "events.jsonl"), filepath.Join(stateDir, "checkpoints"), filepath.Join(stateDir, "snapshots"))}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s checkpoints=%s", stateDir, filepath.Join(stateDir, "checkpoints"))}
 }
 
 type BootIDCheck struct {
@@ -395,7 +299,7 @@ func (c ResumeLauncherCheck) Name() string { return "resume_launcher" }
 func (c ResumeLauncherCheck) Run(_ context.Context) Result {
 	command := strings.TrimSpace(c.Command)
 	if command == "" {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: "restore.terminal.command is empty"}
+		return Result{Name: c.Name(), Status: StatusFail, Detail: "resume.terminalCommand is empty"}
 	}
 	lookPath := c.LookPath
 	if lookPath == nil {
@@ -475,7 +379,7 @@ func (c StartupServiceCheck) Run(ctx context.Context) Result {
 	}
 	out, err := run(ctx, "systemctl", "--user", "is-enabled", "terminal-redeemer-resume.service")
 	if err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("restore.onStartup is true but terminal-redeemer-resume.service is not enabled: %v output=%q; inspect with journalctl --user -u terminal-redeemer-resume.service", err, strings.TrimSpace(string(out)))}
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("resume.onStartup is true but terminal-redeemer-resume.service is not enabled: %v output=%q; inspect with journalctl --user -u terminal-redeemer-resume.service", err, strings.TrimSpace(string(out)))}
 	}
 	return Result{Name: c.Name(), Status: StatusPass, Detail: "enabled; inspect the last bounded resume attempt with journalctl --user -u terminal-redeemer-resume.service"}
 }

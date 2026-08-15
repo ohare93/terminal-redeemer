@@ -1,5 +1,5 @@
 {
-  description = "terminal-redeemer: terminal session history and restore";
+  description = "terminal-redeemer: terminal placement resume and remote sessions";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -24,7 +24,7 @@
           subPackages = [ "cmd/redeem" ];
 
           meta = with pkgs.lib; {
-            description = "CLI for rewindable terminal session restore";
+            description = "CLI for terminal placement resume and remote sessions";
             license = licenses.mit;
             platforms = platforms.linux;
             mainProgram = "redeem";
@@ -67,7 +67,6 @@
                     enable = true;
                     package = self.packages.${system}.terminal-redeemer;
                     capture.interval = "30s";
-                    capture.snapshotEvery = 7;
                     capture.niriCommand = "niri msg -j windows";
                     retention.days = 14;
                     retention.prune.enable = true;
@@ -75,19 +74,12 @@
                     processWhitelist = [ "opencode" "claude" "zellij" ];
                     processWhitelistExtra = [ "tmux" ];
                     processIncludeSessionTag = false;
-                    restore.onStartup = true;
-                    restore.appAllowlist = {
-                      firefox = "firefox --new-window";
-                    };
-                    restore.appMode = {
-                      firefox = "oneshot";
-                    };
-                    restore.reconcileWorkspaceMoves = false;
-                    restore.workspaceReconcileDelay = "3s";
-                    restore.maxCheckpointAge = "12h";
-                    restore.unresolvedWorkspace = "current";
-                    terminal.command = "foot";
-                    terminal.zellijAttachOrCreate = false;
+                    resume.onStartup = true;
+                    resume.maxCheckpointAge = "12h";
+                    resume.unresolvedWorkspace = "current";
+                    resume.timeout = "8s";
+                    resume.pollInterval = "25ms";
+                    resume.terminalCommand = "foot";
                     mirror = {
                       sourceHost = "source.example";
                       sshCommand = "custom-ssh";
@@ -125,22 +117,18 @@
             resumeExec = if builtins.isList resumeExecRaw then builtins.concatStringsSep " " resumeExecRaw else resumeExecRaw;
             pruneExec = if builtins.isList pruneExecRaw then builtins.concatStringsSep " " pruneExecRaw else pruneExecRaw;
           in
-          assert rendered.capture.snapshotEvery == 7;
           assert rendered.capture.interval == "30s";
           assert rendered.capture.niriCommand == "niri msg -j windows";
           assert rendered.retention.days == 14;
           assert rendered.processMetadata.whitelist == [ "opencode" "claude" "zellij" ];
           assert rendered.processMetadata.whitelistExtra == [ "tmux" ];
           assert rendered.processMetadata.includeSessionTag == false;
-          assert rendered.restore.onStartup;
-          assert rendered.restore.terminal.command == "foot";
-          assert rendered.restore.terminal.zellijAttachOrCreate == false;
-          assert rendered.restore.appAllowlist.firefox == "firefox --new-window";
-          assert rendered.restore.appMode.firefox == "oneshot";
-          assert rendered.restore.reconcileWorkspaceMoves == false;
-          assert rendered.restore.workspaceReconcileDelay == "3s";
-          assert rendered.restore.maxCheckpointAge == "12h";
-          assert rendered.restore.unresolvedWorkspace == "current";
+          assert rendered.resume.onStartup;
+          assert rendered.resume.terminalCommand == "foot";
+          assert rendered.resume.maxCheckpointAge == "12h";
+          assert rendered.resume.unresolvedWorkspace == "current";
+          assert rendered.resume.timeout == "8s";
+          assert rendered.resume.pollInterval == "25ms";
           assert cfg.programs.terminal-redeemer.mirror.localCommand == [ "custom-kitty" ];
           assert cfg.programs.terminal-redeemer.mirror.newCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "new" "--host" "source.example" ];
           assert cfg.programs.terminal-redeemer.mirror.openCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "open" "--host" "source.example" ];
@@ -209,9 +197,9 @@
             captureTimer = cfg.systemd.user.timers.terminal-redeemer-capture;
           in
           assert rendered.capture.interval == "60s";
-          assert !rendered.restore.onStartup;
-          assert rendered.restore.maxCheckpointAge == "24h";
-          assert rendered.restore.unresolvedWorkspace == "current";
+          assert !rendered.resume.onStartup;
+          assert rendered.resume.maxCheckpointAge == "24h";
+          assert rendered.resume.unresolvedWorkspace == "current";
           assert captureTimer.Timer.OnActiveSec == "60s";
           assert captureTimer.Timer.OnUnitActiveSec == "60s";
           assert !(captureTimer.Timer ? Persistent);
@@ -240,10 +228,8 @@
                     enable = true;
                     users.test = {
                       package = self.packages.${system}.terminal-redeemer;
-                      restore.onStartup = true;
-                      restore.appMode.firefox = "oneshot";
-                      restore.reconcileWorkspaceMoves = false;
-                      restore.workspaceReconcileDelay = "3s";
+                      resume.onStartup = true;
+                      resume.terminalCommand = "foot";
                       mirror.sourceHost = "source.example";
                       mirror.defaultMode = "watch";
                     };
@@ -254,10 +240,8 @@
             hmUser = nixosCfg.config.home-manager.users.test;
             rendered = hmUser.programs.terminal-redeemer.renderedConfig;
           in
-          assert rendered.restore.onStartup;
-          assert rendered.restore.appMode.firefox == "oneshot";
-          assert rendered.restore.reconcileWorkspaceMoves == false;
-          assert rendered.restore.workspaceReconcileDelay == "3s";
+          assert rendered.resume.onStartup;
+          assert rendered.resume.terminalCommand == "foot";
           assert rendered.mirror.sourceHost == "source.example";
           assert rendered.mirror.defaultMode == "watch";
           assert hmUser.systemd.user.services ? terminal-redeemer-resume;

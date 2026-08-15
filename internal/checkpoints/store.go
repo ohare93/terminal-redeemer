@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,8 +23,11 @@ var (
 	ErrInvalid  = errors.New("invalid rolling checkpoint")
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
+// Checkpoint is the latest complete state for one boot/host/profile identity.
+// EventOffset is decoded only so schema-1 rolling checkpoints remain readable;
+// schema-2 writes omit it because there is no event timeline.
 type Checkpoint struct {
 	V           int         `json:"v"`
 	BootID      string      `json:"boot_id"`
@@ -32,15 +36,15 @@ type Checkpoint struct {
 	ObservedAt  time.Time   `json:"observed_at"`
 	State       model.State `json:"state"`
 	StateHash   string      `json:"state_hash"`
-	EventOffset int64       `json:"event_offset"`
+	EventOffset int64       `json:"event_offset,omitempty"`
 }
 
 func (c Checkpoint) Validate() error {
-	return c.validate(false)
+	return c.validate(false, false)
 }
 
-func (c Checkpoint) validate(allowLegacyTitleHash bool) error {
-	if c.V != SchemaVersion {
+func (c Checkpoint) validate(allowLegacySchema, allowLegacyTitleHash bool) error {
+	if c.V != SchemaVersion && !(allowLegacySchema && c.V == 1) {
 		return fmt.Errorf("schema version is %d, want %d", c.V, SchemaVersion)
 	}
 	if strings.TrimSpace(c.BootID) == "" {
@@ -58,8 +62,8 @@ func (c Checkpoint) validate(allowLegacyTitleHash bool) error {
 	if strings.TrimSpace(c.StateHash) == "" {
 		return errors.New("state_hash is required")
 	}
-	if c.EventOffset <= 0 {
-		return errors.New("event_offset must be positive")
+	if c.V == 1 && c.EventOffset <= 0 {
+		return errors.New("event_offset must be positive for schema version 1")
 	}
 	hash, err := c.State.Hash()
 	if err != nil {
@@ -143,7 +147,7 @@ func readPath(path string) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("%w: decode %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
 	checkpoint.State = model.Normalize(checkpoint.State)
-	if err := checkpoint.validate(true); err != nil {
+	if err := checkpoint.validate(true, true); err != nil {
 		return Checkpoint{}, fmt.Errorf("%w: validate %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
 	return checkpoint, nil
@@ -151,7 +155,7 @@ func readPath(path string) (Checkpoint, error) {
 
 // Write replaces the identity's rolling checkpoint using temp-write, file
 // fsync, atomic rename, and directory fsync. Callers hold the repository's
-// single-writer lock for the complete read/compare/event/checkpoint mutation.
+// single-writer lock for the checkpoint mutation.
 func (s *Store) Write(checkpoint Checkpoint) (path string, err error) {
 	checkpoint.ObservedAt = checkpoint.ObservedAt.UTC()
 	checkpoint.State = model.Normalize(checkpoint.State)
@@ -200,7 +204,7 @@ func (s *Store) Write(checkpoint Checkpoint) (path string, err error) {
 }
 
 // List reads every valid rolling checkpoint. A malformed checkpoint is
-// reported as an issue without hiding other valid checkpoint or event history.
+// reported as an issue without hiding other valid rolling checkpoints.
 func List(root string) ([]Checkpoint, []Issue, error) {
 	dir := filepath.Join(root, "checkpoints")
 	entries, err := os.ReadDir(dir)
@@ -228,6 +232,18 @@ func List(root string) ([]Checkpoint, []Issue, error) {
 		}
 		out = append(out, checkpoint)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].ObservedAt.Equal(out[j].ObservedAt) {
+			return out[i].ObservedAt.Before(out[j].ObservedAt)
+		}
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		if out[i].Profile != out[j].Profile {
+			return out[i].Profile < out[j].Profile
+		}
+		return out[i].BootID < out[j].BootID
+	})
 	return out, issues, nil
 }
 

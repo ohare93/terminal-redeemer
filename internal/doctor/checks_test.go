@@ -2,17 +2,13 @@ package doctor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/config"
-	"github.com/jmo/terminal-redeemer/internal/events"
-	"github.com/jmo/terminal-redeemer/internal/snapshots"
 )
 
 type staticCheck struct {
@@ -47,8 +43,8 @@ func TestStatePathsCheckIsReadOnly(t *testing.T) {
 
 	stateDir := filepath.Join(t.TempDir(), "missing-state")
 	result := StatePathsCheck{StateDir: stateDir}.Run(context.Background())
-	if result.Status != StatusPass || !strings.Contains(result.Detail, "events.jsonl") {
-		t.Fatalf("expected absent history paths to pass with guidance, got %+v", result)
+	if result.Status != StatusPass || !strings.Contains(result.Detail, "checkpoints") {
+		t.Fatalf("expected absent checkpoint path to pass with guidance, got %+v", result)
 	}
 	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
 		t.Fatalf("doctor state path check mutated the filesystem: %v", err)
@@ -243,66 +239,6 @@ func TestCommandAvailableCheck(t *testing.T) {
 	}
 }
 
-func TestEventsIntegrityCheck(t *testing.T) {
-	t.Parallel()
-
-	stateDir := t.TempDir()
-	store, err := events.NewStore(stateDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	writer, err := store.AcquireWriter()
-	if err != nil {
-		t.Fatalf("acquire writer: %v", err)
-	}
-	if _, err := writer.Append(events.Event{V: 1, TS: time.Now().UTC(), Host: "h", Profile: "p", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"title": "x"}, StateHash: "sha256:x"}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-
-	pass := EventsIntegrityCheck{StateDir: stateDir}.Run(context.Background())
-	if pass.Status != StatusPass {
-		t.Fatalf("expected pass, got %+v", pass)
-	}
-
-	eventsPath := filepath.Join(stateDir, "events.jsonl")
-	file, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.WriteString("{bad-json\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	trailing := EventsIntegrityCheck{StateDir: stateDir}.Run(context.Background())
-	if trailing.Status != StatusPass || !strings.Contains(trailing.Detail, "ignored one malformed trailing record") {
-		t.Fatalf("expected replay-tolerated trailing corruption note, got %+v", trailing)
-	}
-
-	badStateDir := t.TempDir()
-	validPayload, err := json.Marshal(events.Event{V: 1, TS: time.Now().UTC(), Host: "h", Profile: "p", EventType: "window_patch", WindowKey: "w-2", Patch: map[string]any{"title": "x"}, StateHash: "sha256:y"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	nonTrailing := append([]byte("{bad-json\n"), append(validPayload, '\n')...)
-	if err := os.WriteFile(filepath.Join(badStateDir, "events.jsonl"), nonTrailing, 0o600); err != nil {
-		t.Fatalf("write malformed events: %v", err)
-	}
-	fail := EventsIntegrityCheck{StateDir: badStateDir}.Run(context.Background())
-	if fail.Status != StatusFail || !strings.Contains(fail.Detail, "line 1") {
-		t.Fatalf("expected non-trailing corruption failure, got %+v", fail)
-	}
-
-	missing := EventsIntegrityCheck{StateDir: t.TempDir()}.Run(context.Background())
-	if missing.Status != StatusPass {
-		t.Fatalf("expected missing events file to pass, got %+v", missing)
-	}
-}
-
 func TestLocalInstallCheckPassesWhenAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -335,50 +271,5 @@ func TestLocalInstallCheckPassesWithEmptyPath(t *testing.T) {
 	result := LocalInstallCheck{Path: ""}.Run(context.Background())
 	if result.Status != StatusPass {
 		t.Fatalf("expected pass for empty path, got %+v", result)
-	}
-}
-
-func TestSnapshotsIntegrityCheck(t *testing.T) {
-	t.Parallel()
-
-	stateDir := t.TempDir()
-	store, err := snapshots.NewStore(stateDir)
-	if err != nil {
-		t.Fatalf("new snapshots store: %v", err)
-	}
-	_, err = store.Write(snapshots.Snapshot{
-		V:               1,
-		CreatedAt:       time.Now().UTC(),
-		Host:            "h",
-		Profile:         "p",
-		LastEventOffset: 0,
-		State:           map[string]any{"windows": []any{}},
-		StateHash:       "sha256:x",
-	})
-	if err != nil {
-		t.Fatalf("write snapshot: %v", err)
-	}
-
-	pass := SnapshotsIntegrityCheck{StateDir: stateDir}.Run(context.Background())
-	if pass.Status != StatusPass {
-		t.Fatalf("expected pass, got %+v", pass)
-	}
-
-	badStateDir := t.TempDir()
-	badSnapshotsDir := filepath.Join(badStateDir, "snapshots")
-	if err := os.MkdirAll(badSnapshotsDir, 0o755); err != nil {
-		t.Fatalf("mkdir snapshots: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(badSnapshotsDir, "bad.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatalf("write bad snapshot: %v", err)
-	}
-	fail := SnapshotsIntegrityCheck{StateDir: badStateDir}.Run(context.Background())
-	if fail.Status != StatusFail {
-		t.Fatalf("expected fail, got %+v", fail)
-	}
-
-	missing := SnapshotsIntegrityCheck{StateDir: t.TempDir()}.Run(context.Background())
-	if missing.Status != StatusPass {
-		t.Fatalf("expected missing snapshots dir to pass, got %+v", missing)
 	}
 }

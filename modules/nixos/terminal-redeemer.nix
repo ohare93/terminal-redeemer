@@ -9,7 +9,7 @@ in {
     users = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submodule {
         freeformType = lib.types.attrs;
-        options.restore = lib.mkOption {
+        options.resume = lib.mkOption {
           type = lib.types.submodule {
             freeformType = lib.types.attrs;
             options.onStartup = lib.mkOption {
@@ -34,11 +34,8 @@ in {
           alice = {
             stateDir = "/home/alice/.terminal-redeemer";
             capture.interval = "30s";
-            restore.appAllowlist.firefox = "firefox --new-window";
-            restore.appMode.firefox = "oneshot";
-            restore.reconcileWorkspaceMoves = true;
-            restore.workspaceReconcileDelay = "1200ms";
-            terminal.command = "kitty";
+            resume.onStartup = true;
+            resume.terminalCommand = "kitty";
           };
         }
       '';
