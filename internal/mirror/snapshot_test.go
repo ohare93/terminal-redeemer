@@ -1,7 +1,6 @@
 package mirror
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
-	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
@@ -231,8 +229,5 @@ func TestLegacySnapshotFixtureRemainsUnversionedAndSeparate(t *testing.T) {
 	}
 	if _, found := shape["observation"]; found {
 		t.Fatal("legacy payload acquired authoritative observation")
-	}
-	if _, err := sliceprotocol.Decode(bytes.NewReader(payload)); err == nil {
-		t.Fatal("revisioned decoder accepted legacy snapshot")
 	}
 }

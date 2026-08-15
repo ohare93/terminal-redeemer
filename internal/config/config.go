@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmo/terminal-redeemer/internal/niriipc"
-	"github.com/jmo/terminal-redeemer/internal/slicecontroller"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,7 +21,6 @@ type Config struct {
 	Retention       RetentionConfig       `yaml:"retention"`
 	Restore         RestoreConfig         `yaml:"restore"`
 	Mirror          MirrorConfig          `yaml:"mirror"`
-	Slice           SliceConfig           `yaml:"slice"`
 }
 
 type CaptureConfig struct {
@@ -84,57 +81,6 @@ type MirrorClipboardConfig struct {
 	MIMETypes    []string `yaml:"mimeTypes"`
 }
 
-// These variables are replaced with store paths by the Nix package. Plain
-// names keep source builds usable while execution still uses direct argv.
-var (
-	DefaultSelfExecutable      = "redeem"
-	DefaultKittyExecutable     = "kitty"
-	DefaultTransportExecutable = "ssh"
-	DefaultZellijExecutable    = "zellij"
-	DefaultNiriExecutable      = "niri"
-	DefaultSystemctlExecutable = "systemctl"
-)
-
-type SliceConfig struct {
-	LeechModeEnabled     bool          `yaml:"leechModeEnabled"`
-	SourceHost           string        `yaml:"sourceHost"`
-	SelfCommand          string        `yaml:"selfCommand"`
-	KittyCommand         string        `yaml:"kittyCommand"`
-	TransportCommand     string        `yaml:"transportCommand"`
-	TransportOptions     []string      `yaml:"transportOptions"`
-	RPCCommand           []string      `yaml:"rpcCommand"`
-	ZellijCommand        string        `yaml:"zellijCommand"`
-	NiriCommand          string        `yaml:"niriCommand"`
-	SystemctlCommand     string        `yaml:"systemctlCommand"`
-	ExpectedNiriVersion  string        `yaml:"expectedNiriVersion"`
-	RequestTimeout       time.Duration `yaml:"requestTimeout"`
-	KeepaliveInterval    time.Duration `yaml:"keepaliveInterval"`
-	KeepaliveCount       int           `yaml:"keepaliveCount"`
-	RetryMaxAttempts     int           `yaml:"retryMaxAttempts"`
-	RetryInitialBackoff  time.Duration `yaml:"retryInitialBackoff"`
-	RetryMaxBackoff      time.Duration `yaml:"retryMaxBackoff"`
-	AttachPrivateRoot    string        `yaml:"attachPrivateRoot"`
-	AttachShimCache      string        `yaml:"attachShimCache"`
-	GraphicalContextKeys []string      `yaml:"graphicalContextKeys"`
-	Clipboard            struct {
-		Enabled bool `yaml:"enabled"`
-	} `yaml:"clipboard"`
-	Controller SliceControllerConfig `yaml:"controller"`
-}
-
-type SliceControllerConfig struct {
-	Enabled                 bool          `yaml:"enabled"`
-	HostID                  string        `yaml:"hostID"`
-	LeechID                 string        `yaml:"leechID"`
-	PollInterval            time.Duration `yaml:"pollInterval"`
-	ControlTimeout          time.Duration `yaml:"controlTimeout"`
-	RetryWindow             time.Duration `yaml:"retryWindow"`
-	SourceGoneGrace         time.Duration `yaml:"sourceGoneGrace"`
-	SourceGoneConfirmations int           `yaml:"sourceGoneConfirmations"`
-	AuthorityMode           string        `yaml:"authorityMode"`
-	LeechWriteAuthorized    bool          `yaml:"leechWriteAuthorized"`
-}
-
 func DefaultStateDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -186,29 +132,6 @@ func Defaults() Config {
 			Terminal: TerminalConfig{
 				Command:              "kitty",
 				ZellijAttachOrCreate: true,
-			},
-		},
-		Slice: SliceConfig{
-			SelfCommand:          DefaultSelfExecutable,
-			KittyCommand:         DefaultKittyExecutable,
-			TransportCommand:     DefaultTransportExecutable,
-			TransportOptions:     []string{},
-			RPCCommand:           []string{DefaultSelfExecutable, "slice", "rpc"},
-			ZellijCommand:        DefaultZellijExecutable,
-			NiriCommand:          DefaultNiriExecutable,
-			SystemctlCommand:     DefaultSystemctlExecutable,
-			ExpectedNiriVersion:  niriipc.SupportedVersion,
-			RequestTimeout:       15 * time.Second,
-			KeepaliveInterval:    15 * time.Second,
-			KeepaliveCount:       3,
-			RetryMaxAttempts:     3,
-			RetryInitialBackoff:  200 * time.Millisecond,
-			RetryMaxBackoff:      2 * time.Second,
-			GraphicalContextKeys: []string{"NIRI_SOCKET", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"},
-			Controller: SliceControllerConfig{
-				Enabled: false, HostID: "host", LeechID: "leech", PollInterval: 2 * time.Second,
-				ControlTimeout: 5 * time.Second, RetryWindow: 30 * time.Second,
-				SourceGoneGrace: 5 * time.Second, SourceGoneConfirmations: 2, AuthorityMode: "host_location",
 			},
 		},
 		Mirror: MirrorConfig{
@@ -281,15 +204,6 @@ func Load(path string, explicitPath bool) (Config, error) {
 	if cfg.Mirror.Clipboard.MIMETypes == nil {
 		cfg.Mirror.Clipboard.MIMETypes = []string{}
 	}
-	if cfg.Slice.TransportOptions == nil {
-		cfg.Slice.TransportOptions = []string{}
-	}
-	if cfg.Slice.RPCCommand == nil {
-		cfg.Slice.RPCCommand = []string{}
-	}
-	if cfg.Slice.GraphicalContextKeys == nil {
-		cfg.Slice.GraphicalContextKeys = []string{}
-	}
 	if err := Validate(cfg); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
@@ -337,83 +251,6 @@ func Validate(cfg Config) error {
 		if !filepath.IsAbs(cfg.Mirror.Clipboard.TempDir) {
 			return fmt.Errorf("mirror.clipboard.tempDir must be absolute")
 		}
-	}
-	if err := validateSlice(cfg.Slice); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateSlice(cfg SliceConfig) error {
-	for name, value := range map[string]string{
-		"selfCommand": cfg.SelfCommand, "kittyCommand": cfg.KittyCommand,
-		"transportCommand": cfg.TransportCommand, "zellijCommand": cfg.ZellijCommand,
-		"niriCommand": cfg.NiriCommand, "systemctlCommand": cfg.SystemctlCommand,
-	} {
-		if strings.TrimSpace(value) == "" || len(value) > slicecontroller.MaxProjectionArgvEntryBytes || strings.ContainsAny(value, "\x00\r\n") {
-			return fmt.Errorf("slice.%s must be a bounded non-empty executable without control characters", name)
-		}
-	}
-	if cfg.SourceHost != "" && (strings.TrimSpace(cfg.SourceHost) == "" || len(cfg.SourceHost) > slicecontroller.MaxProjectionArgvEntryBytes || strings.ContainsAny(cfg.SourceHost, "\x00\r\n")) {
-		return fmt.Errorf("slice.sourceHost must be bounded and contain no control characters when set")
-	}
-	if len(cfg.RPCCommand) == 0 || len(cfg.RPCCommand) > 16 {
-		return fmt.Errorf("slice.rpcCommand must contain 1 to 16 argv entries")
-	}
-	for _, value := range cfg.RPCCommand {
-		if value == "" || len(value) > slicecontroller.MaxProjectionArgvEntryBytes || strings.ContainsAny(value, "\x00\r\n") {
-			return fmt.Errorf("slice rpc argv entries must be bounded and contain no control characters")
-		}
-	}
-	if err := slicecontroller.ValidateProjectionTransportOptions(cfg.TransportOptions); err != nil {
-		return fmt.Errorf("slice.transportOptions: %w", err)
-	}
-	if cfg.ExpectedNiriVersion != niriipc.SupportedVersion {
-		return fmt.Errorf("slice.expectedNiriVersion must be %s", niriipc.SupportedVersion)
-	}
-	if cfg.RequestTimeout <= 0 || cfg.KeepaliveInterval <= 0 || cfg.RetryInitialBackoff <= 0 || cfg.RetryMaxBackoff <= 0 {
-		return fmt.Errorf("slice timeout, keepalive, and retry durations must be positive")
-	}
-	if cfg.KeepaliveCount < 1 || cfg.KeepaliveCount > 10 || cfg.RetryMaxAttempts < 1 || cfg.RetryMaxAttempts > 10 || cfg.RetryInitialBackoff > cfg.RetryMaxBackoff {
-		return fmt.Errorf("slice keepalive/retry bounds are invalid")
-	}
-	allowed := map[string]bool{"NIRI_SOCKET": true, "WAYLAND_DISPLAY": true, "XDG_RUNTIME_DIR": true}
-	if len(cfg.GraphicalContextKeys) != len(allowed) {
-		return fmt.Errorf("slice.graphicalContextKeys must contain exactly NIRI_SOCKET, WAYLAND_DISPLAY, and XDG_RUNTIME_DIR")
-	}
-	seen := map[string]bool{}
-	for _, key := range cfg.GraphicalContextKeys {
-		if !allowed[key] || seen[key] {
-			return fmt.Errorf("slice.graphicalContextKeys contains unsupported or duplicate key %q", key)
-		}
-		seen[key] = true
-	}
-	if cfg.Clipboard.Enabled {
-		return fmt.Errorf("slice.clipboard.enabled must remain false for the first rollout")
-	}
-	if cfg.AttachPrivateRoot != "" && !filepath.IsAbs(cfg.AttachPrivateRoot) {
-		return fmt.Errorf("slice.attachPrivateRoot must be absolute when set")
-	}
-	if cfg.AttachShimCache != "" && !filepath.IsAbs(cfg.AttachShimCache) {
-		return fmt.Errorf("slice.attachShimCache must be absolute when set")
-	}
-	controller := cfg.Controller
-	for name, value := range map[string]string{"hostID": controller.HostID, "leechID": controller.LeechID} {
-		if strings.TrimSpace(value) == "" || len(value) > 128 || strings.ContainsAny(value, "\x00\r\n/") {
-			return fmt.Errorf("slice.controller.%s must be a bounded namespace identity", name)
-		}
-	}
-	if controller.PollInterval <= 0 || controller.ControlTimeout <= 0 || controller.RetryWindow <= 0 || controller.SourceGoneGrace <= 0 {
-		return fmt.Errorf("slice.controller timing values must be positive")
-	}
-	if controller.SourceGoneConfirmations < 2 || controller.SourceGoneConfirmations > 20 {
-		return fmt.Errorf("slice.controller.sourceGoneConfirmations must be between 2 and 20")
-	}
-	if controller.AuthorityMode != "host_location" {
-		return fmt.Errorf("slice.controller.authorityMode must be host_location in v1")
-	}
-	if controller.LeechWriteAuthorized {
-		return fmt.Errorf("slice.controller.leechWriteAuthorized must be false in v1")
 	}
 	return nil
 }

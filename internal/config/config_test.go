@@ -207,3 +207,13 @@ func TestLoadRejectsInvalidMirrorConfig(t *testing.T) {
 		t.Fatal("expected invalid mirror mode error")
 	}
 }
+
+func TestLoadRejectsRemovedSliceConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("slice: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, true); err == nil {
+		t.Fatal("expected removed slice config to be rejected")
+	}
+}

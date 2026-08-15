@@ -1,7 +1,0 @@
-{
-  "source_output": {"name":"HOST-1","logical_x":0,"logical_y":0,"logical_width":1920,"logical_height":1080,"scale":1,"transform":"Normal"},
-  "target_output": {"name":"LEECH-1","logical_x":0,"logical_y":0,"logical_width":1440,"logical_height":900,"scale":1.5,"transform":"Normal"},
-  "source_window": [960,540],
-  "target_window": [576,540],
-  "expected_percent": [50,50]
-}
