@@ -67,6 +67,27 @@ func TestSchema2AllowsOnlyOutputGeometryToBeAbsent(t *testing.T) {
 	}
 }
 
+func TestValidateAuthoritativeRequiresCoherentOutputPresence(t *testing.T) {
+	authority := fixtureAuthority("11111111-1111-4111-8111-111111111111", 1, time.Unix(1, 0).UTC())
+	second := authority.Sources[0]
+	second.SourceID = "src_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	second.Session.ID = "ses_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	authority.Sources = append(authority.Sources, second)
+	authority.LiveSessionIDs = append(authority.LiveSessionIDs, second.Session.ID)
+
+	if err := ValidateAuthoritative(authority); err != nil {
+		t.Fatalf("coherent outputful authority rejected: %v", err)
+	}
+	authority.Sources[0].Output = nil
+	if err := ValidateAuthoritative(authority); err == nil {
+		t.Fatal("authority with mixed output presence accepted")
+	}
+	authority.Sources[1].Output = nil
+	if err := ValidateAuthoritative(authority); err != nil {
+		t.Fatalf("coherent headless authority rejected: %v", err)
+	}
+}
+
 func TestDecodeRejectsDuplicateKeysLegacyAndUnknownEnums(t *testing.T) {
 	cases := []string{
 		`{"schema_version":1,"schema_version":1}`,

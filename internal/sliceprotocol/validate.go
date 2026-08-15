@@ -83,9 +83,12 @@ func ValidateAuthoritative(authority Authoritative) error {
 	}
 	sourceIDs := make(map[string]struct{}, len(authority.Sources))
 	sessionIDs := make(map[string]struct{}, len(authority.Sources))
-	for _, source := range authority.Sources {
+	for i, source := range authority.Sources {
 		if err := validateSource(source); err != nil {
 			return err
+		}
+		if i > 0 && (source.Output != nil) != (authority.Sources[0].Output != nil) {
+			return fmt.Errorf("%w: sources must consistently include or omit output geometry", ErrInvalid)
 		}
 		if _, found := sourceIDs[source.SourceID]; found {
 			return fmt.Errorf("%w: duplicate source_id", ErrInvalid)
