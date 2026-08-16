@@ -105,6 +105,9 @@ func TestCaptureOrdersWindowsAndIncludesZellijSession(t *testing.T) {
 	if first.Terminal == nil || first.Terminal.CWD != "/home/jmo/one" || first.Terminal.ZellijSession != "one" {
 		t.Fatalf("unexpected terminal metadata: %#v", first.Terminal)
 	}
+	if len(first.Terminal.Project) != 1 || first.Terminal.Project[0].Label != "one" {
+		t.Fatalf("visible project identity = %#v", first.Terminal.Project)
+	}
 	if snapshot.Windows[2].Terminal != nil {
 		t.Fatalf("expected non-terminal browser to omit terminal metadata: %#v", snapshot.Windows[2].Terminal)
 	}
@@ -145,6 +148,9 @@ func TestCaptureExtractsVerifiedSessionFromTitle(t *testing.T) {
 	}
 	if window.Terminal == nil || window.Terminal.CWD != "/home/jmo/project" {
 		t.Fatalf("expected resolver-upgraded cwd, got %#v", window.Terminal)
+	}
+	if len(window.Terminal.Project) != 1 || window.Terminal.Project[0].Label != "project" {
+		t.Fatalf("project identity did not follow resolver-upgraded cwd: %#v", window.Terminal.Project)
 	}
 }
 
@@ -198,6 +204,9 @@ func TestCaptureAddsHeadlessSessionsWithoutExactDuplicates(t *testing.T) {
 	if !headless.Headless || headless.SourceWindowID != 0 || headless.AppID != "zellij" || headless.Terminal == nil || headless.Terminal.CWD != "/headless/project" {
 		t.Fatalf("headless metadata = %#v", headless)
 	}
+	if len(headless.Terminal.Project) != 1 || headless.Terminal.Project[0].Label != "project" {
+		t.Fatalf("headless project identity = %#v", headless.Terminal.Project)
+	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +228,9 @@ func TestLegacySnapshotFixtureRemainsUnversionedAndSeparate(t *testing.T) {
 	}
 	if snapshot.Host != "legacy-host" || len(Discover(snapshot)) != 1 {
 		t.Fatalf("unexpected legacy fixture: %+v", snapshot)
+	}
+	if terminal := Discover(snapshot)[0].Terminal; terminal == nil || len(terminal.Project) != 0 {
+		t.Fatalf("legacy snapshot unexpectedly requires project metadata: %#v", terminal)
 	}
 	var shape map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &shape); err != nil {

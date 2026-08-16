@@ -146,12 +146,17 @@ func (m *Model) refilter(preferred int) {
 	needle := strings.ToLower(m.query)
 	matched := make([]int, 0, len(m.windows))
 	for i, window := range m.windows {
-		cwd := ""
+		cwd, projects := "", ""
 		if window.Terminal != nil {
 			cwd = window.Terminal.CWD
+			labels := make([]string, 0, len(window.Terminal.Project))
+			for _, segment := range window.Terminal.Project {
+				labels = append(labels, segment.Label)
+			}
+			projects = strings.Join(labels, "/")
 		}
 		haystack := strings.ToLower(strings.Join([]string{
-			mirror.SessionName(window), window.Title, window.WorkspaceName, cwd,
+			mirror.SessionName(window), window.Title, window.WorkspaceName, cwd, projects,
 		}, "\x00"))
 		if needle == "" || strings.Contains(haystack, needle) {
 			matched = append(matched, i)
@@ -382,12 +387,20 @@ func (m *Model) windowLines(index int, window mirror.Window, width int, active b
 
 	if width >= 72 {
 		projectWidth, activityWidth, sessionWidth := columnWidths(width)
-		line := prefix + m.inline(roleAccent, padPath(project, projectWidth)) + "  " + padCell(activity, activityWidth) + "  " + m.inline(roleDim, fit(session, sessionWidth))
+		projectCell := m.projectCell(window, projectWidth, active)
+		if projectCell == "" {
+			projectCell = m.inline(roleAccent, padPath(project, projectWidth))
+		}
+		line := prefix + projectCell + "  " + padCell(activity, activityWidth) + "  " + m.inline(roleDim, fit(session, sessionWidth))
 		return []renderedLine{{text: line, role: roleText, selected: active, active: active}}
 	}
 
 	projectWidth := width - ansi.StringWidth(prefix)
-	lines := []renderedLine{{text: prefix + m.inline(roleAccent, fitPath(project, projectWidth)), role: roleText, selected: active, active: active}}
+	projectCell := m.projectCell(window, projectWidth, active)
+	if projectCell == "" {
+		projectCell = m.inline(roleAccent, fitPath(project, projectWidth))
+	}
+	lines := []renderedLine{{text: prefix + projectCell, role: roleText, selected: active, active: active}}
 	indent := strings.Repeat(" ", ansi.StringWidth(prefix))
 	if activity != "" {
 		lines = append(lines, renderedLine{text: indent + m.inline(roleMuted, "activity: ") + activity, role: roleText, selected: active, active: active})
@@ -403,6 +416,104 @@ func projectDirectory(window mirror.Window) string {
 		return "(unknown)"
 	}
 	return shortenHome(window.Terminal.CWD)
+}
+
+func (m *Model) projectCell(window mirror.Window, width int, selected bool) string {
+	if width <= 0 || window.Terminal == nil || len(window.Terminal.Project) == 0 {
+		return ""
+	}
+	segments := window.Terminal.Project
+	labels := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		label := strings.TrimSpace(segment.Label)
+		if label != "" {
+			labels = append(labels, label)
+		}
+	}
+	if len(labels) == 0 {
+		return ""
+	}
+	if !m.color {
+		return padPath(strings.Join(labels, "/"), width)
+	}
+	labels = fitChipLabels(labels, width)
+	if len(labels) == 0 {
+		return m.inline(roleAccent, fitPath(strings.Join(projectLabels(window), "/"), width))
+	}
+	var out strings.Builder
+	segmentIndex := 0
+	for _, segment := range segments {
+		if strings.TrimSpace(segment.Label) == "" {
+			continue
+		}
+		if segmentIndex > 0 {
+			out.WriteByte('/')
+		}
+		label := labels[segmentIndex]
+		out.WriteString(rgbANSI("48", segment.Background.R, segment.Background.G, segment.Background.B))
+		out.WriteString(rgbANSI("38", segment.Foreground.R, segment.Foreground.G, segment.Foreground.B))
+		out.WriteString("\x1b[1m ")
+		out.WriteString(label)
+		out.WriteString(" \x1b[0m")
+		out.WriteString(foregroundANSI(textColor))
+		if selected {
+			out.WriteString(backgroundANSI(selectedBgColor))
+		}
+		segmentIndex++
+	}
+	return padCell(out.String(), width)
+}
+
+func projectLabels(window mirror.Window) []string {
+	if window.Terminal == nil {
+		return nil
+	}
+	labels := make([]string, 0, len(window.Terminal.Project))
+	for _, segment := range window.Terminal.Project {
+		if label := strings.TrimSpace(segment.Label); label != "" {
+			labels = append(labels, label)
+		}
+	}
+	return labels
+}
+
+func fitChipLabels(labels []string, width int) []string {
+	overhead := len(labels)*2 + len(labels) - 1
+	available := width - overhead
+	if available < len(labels) {
+		return nil
+	}
+	result := append([]string(nil), labels...)
+	total := 0
+	for _, label := range labels {
+		total += ansi.StringWidth(label)
+	}
+	if total <= available {
+		return result
+	}
+	remainingWidth, remainingTotal := available, total
+	for i, label := range labels {
+		remainingSegments := len(labels) - i
+		allocation := remainingWidth / remainingSegments
+		if remainingTotal > 0 {
+			proportional := remainingWidth * ansi.StringWidth(label) / remainingTotal
+			if proportional > allocation {
+				allocation = proportional
+			}
+		}
+		maxForRest := remainingWidth - (remainingSegments - 1)
+		if allocation > maxForRest {
+			allocation = maxForRest
+		}
+		if allocation < 1 {
+			allocation = 1
+		}
+		result[i] = fitPath(label, allocation)
+		used := ansi.StringWidth(result[i])
+		remainingWidth -= used
+		remainingTotal -= ansi.StringWidth(label)
+	}
+	return result
 }
 
 func displayActivity(window mirror.Window) string {
@@ -593,5 +704,9 @@ func backgroundANSI(hex string) string { return colorANSI("48", hex) }
 func colorANSI(layer, hex string) string {
 	var red, green, blue int
 	_, _ = fmt.Sscanf(hex, "#%02x%02x%02x", &red, &green, &blue)
+	return rgbANSI(layer, uint8(red), uint8(green), uint8(blue))
+}
+
+func rgbANSI(layer string, red, green, blue uint8) string {
 	return fmt.Sprintf("\x1b[%s;2;%d;%d;%dm", layer, red, green, blue)
 }

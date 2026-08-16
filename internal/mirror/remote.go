@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 var sshDestinationPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@:\[\]-]*$`)
@@ -71,6 +72,17 @@ func DecodeSnapshot(raw []byte) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: windows is missing")
 	}
 	for i, window := range snapshot.Windows {
+		if window.Terminal != nil {
+			if len(window.Terminal.Project) > 2 {
+				return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: window %d has too many project segments", i)
+			}
+			for _, segment := range window.Terminal.Project {
+				label := strings.TrimSpace(segment.Label)
+				if label == "" || len(label) > 4096 || strings.IndexFunc(label, unicode.IsControl) >= 0 {
+					return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: window %d has unsafe project label", i)
+				}
+			}
+		}
 		if window.Headless {
 			if window.SourceWindowID != 0 || strings.TrimSpace(window.AppID) != "zellij" || SessionName(window) == "" {
 				return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: headless session %d is invalid", i)

@@ -233,6 +233,18 @@ func TestFilterSessionsReportsMissingDeterministically(t *testing.T) {
 	}
 }
 
+func TestDecodeSnapshotRejectsUnsafeProjectMetadata(t *testing.T) {
+	for _, project := range []string{
+		`[{"label":"bad\u001b[31m","background":{"r":1,"g":2,"b":3},"foreground":{"r":255,"g":255,"b":255}}]`,
+		`[{"label":"one"},{"label":"two"},{"label":"three"}]`,
+	} {
+		payload := `{"host":"source","generated_at":"2026-07-10T12:00:00Z","windows":[{"source_window_id":1,"app_id":"kitty","zellij_session":"s","terminal":{"zellij_session":"s","project":` + project + `}}]}`
+		if _, err := DecodeSnapshot([]byte(payload)); err == nil || !strings.Contains(err.Error(), "project") {
+			t.Fatalf("unsafe project metadata accepted: %s err=%v", payload, err)
+		}
+	}
+}
+
 func TestDecodeSnapshotValidTimestamp(t *testing.T) {
 	snapshot, err := DecodeSnapshot(validRemoteSnapshot())
 	if err != nil || !snapshot.GeneratedAt.Equal(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)) {

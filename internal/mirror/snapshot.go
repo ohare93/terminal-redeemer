@@ -13,6 +13,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
+	"github.com/jmo/terminal-redeemer/internal/projectidentity"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
@@ -87,9 +88,10 @@ type Window struct {
 }
 
 type Terminal struct {
-	CWD           string   `json:"cwd,omitempty"`
-	ProcessTags   []string `json:"process_tags,omitempty"`
-	ZellijSession string   `json:"zellij_session,omitempty"`
+	CWD           string                    `json:"cwd,omitempty"`
+	ProcessTags   []string                  `json:"process_tags,omitempty"`
+	ZellijSession string                    `json:"zellij_session,omitempty"`
+	Project       []projectidentity.Segment `json:"project,omitempty"`
 }
 
 type payload struct {
@@ -207,6 +209,7 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 				CWD:           enriched.Terminal.CWD,
 				ProcessTags:   append([]string(nil), enriched.Terminal.ProcessTags...),
 				ZellijSession: enriched.Terminal.SessionTag,
+				Project:       projectidentity.Resolve(enriched.Terminal.CWD),
 			}
 			out.Terminal = terminal
 			out.ZellijSession = terminal.ZellijSession
@@ -252,6 +255,7 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 			}
 			added[session] = struct{}{}
 			cwd, _ := resolver.Resolve(session)
+			cwd = strings.TrimSpace(cwd)
 			windows = append(windows, Window{
 				Order:         len(windows),
 				Key:           "zellij:" + session,
@@ -259,7 +263,7 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 				Title:         session,
 				Headless:      true,
 				ZellijSession: session,
-				Terminal:      &Terminal{CWD: strings.TrimSpace(cwd), ZellijSession: session},
+				Terminal:      &Terminal{CWD: cwd, ZellijSession: session, Project: projectidentity.Resolve(cwd)},
 			})
 		}
 	}

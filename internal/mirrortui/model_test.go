@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
+	"github.com/jmo/terminal-redeemer/internal/projectidentity"
 )
 
 func pickerWindows() []mirror.Window {
@@ -132,6 +133,24 @@ func TestFilteringCheckedPersistenceAndFilteredToggleAll(t *testing.T) {
 	update(m, "esc")
 	if m.checkedCount() != 0 {
 		t.Fatalf("filtered toggle did not clear filtered checks: %#v", m.checked)
+	}
+}
+
+func TestFilteringIncludesSourceProjectIdentity(t *testing.T) {
+	windows := pickerWindows()
+	windows[0].Terminal.Project = []projectidentity.Segment{
+		{Label: "mono/agent"},
+		{Label: "agentleman-real"},
+	}
+	m := NewModel(windows, false)
+	update(m, "mono/agent")
+	if len(m.visible) != 1 || m.visible[0] != 0 {
+		t.Fatalf("repository chip label filter visible=%v", m.visible)
+	}
+	m = NewModel(windows, false)
+	update(m, "agentleman-real")
+	if len(m.visible) != 1 || m.visible[0] != 0 {
+		t.Fatalf("workspace chip label filter visible=%v", m.visible)
 	}
 }
 
@@ -263,6 +282,44 @@ func TestProjectFirstWideAndNarrowRendering(t *testing.T) {
 		if ansi.StringWidth(line) > narrow.width {
 			t.Fatalf("narrow line exceeds display width: width=%d line=%q", ansi.StringWidth(line), line)
 		}
+	}
+}
+
+func TestProjectChipsMatchMonoTreatmentAndTruncateSafely(t *testing.T) {
+	segments := []projectidentity.Segment{
+		{Label: "mono/agent", Background: projectidentity.RGB{R: 192, G: 175, B: 22}, Foreground: projectidentity.RGB{R: 255, G: 255, B: 255}},
+		{Label: "agentleman-real", Background: projectidentity.RGB{R: 177, G: 73, B: 32}, Foreground: projectidentity.RGB{R: 255, G: 255, B: 255}},
+	}
+	window := mirror.Window{SourceWindowID: 1, AppID: "kitty", WorkspaceID: "ws", ZellijSession: "session", Terminal: &mirror.Terminal{CWD: "/remote", Project: segments}}
+	colored := NewModel([]mirror.Window{window}, true)
+	colored.width, colored.height = 100, 10
+	view := colored.View()
+	for _, want := range []string{
+		"\x1b[48;2;192;175;22m\x1b[38;2;255;255;255m\x1b[1m mono/agent \x1b[0m",
+		"/\x1b[48;2;177;73;32m\x1b[38;2;255;255;255m\x1b[1m agentleman-real \x1b[0m",
+		"\x1b[0m" + foregroundANSI(textColor) + backgroundANSI(selectedBgColor) + "/",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("colored project chip missing %q:\n%q", want, view)
+		}
+	}
+
+	plain := NewModel([]mirror.Window{window}, false)
+	plain.width, plain.height = 32, 10
+	view = plain.View()
+	if strings.Contains(view, "\x1b[") || !strings.Contains(view, "agentleman-real") {
+		t.Fatalf("NO_COLOR chip fallback is not readable: %q", view)
+	}
+
+	colored.width, colored.height = 32, 10
+	view = colored.View()
+	for _, line := range strings.Split(view, "\n") {
+		if ansi.StringWidth(line) > 32 {
+			t.Fatalf("narrow chip line width=%d: %q", ansi.StringWidth(line), line)
+		}
+	}
+	if !strings.Contains(view, "\x1b[0m") {
+		t.Fatalf("truncated colored chips do not close SGR state: %q", view)
 	}
 }
 
