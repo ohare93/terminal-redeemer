@@ -58,6 +58,9 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bo
 	if err := ValidateDestination(cfg.SourceHost); err != nil {
 		return LaunchPlan{}, err
 	}
+	if err := ValidateSession(session); err != nil {
+		return LaunchPlan{}, err
+	}
 	if strings.TrimSpace(cfg.LauncherCommand) == "" || strings.TrimSpace(cfg.SSHCommand) == "" || strings.TrimSpace(cfg.AppID) == "" {
 		return LaunchPlan{}, fmt.Errorf("launcher, SSH command, and app ID must not be empty")
 	}
@@ -85,7 +88,9 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bo
 		titlePart = session
 	}
 	titlePart = strings.NewReplacer("\n", " ", "\r", " ").Replace(titlePart)
-	title := fmt.Sprintf("%s[%d]: %s", cfg.SourceHost, window.Order, titlePart)
+	// The exact session is immutable launch-time presentation metadata. Live
+	// process evidence, never this title, remains projection authority.
+	title := fmt.Sprintf("%s[%d|%s]: %s", cfg.SourceHost, window.Order, session, titlePart)
 
 	args := []string{"--detach", "--class", cfg.AppID, "--override", "confirm_os_window_close=0", "--title", title}
 	if cfg.Clipboard {
@@ -114,11 +119,26 @@ func RenderCommand(command Command) string {
 }
 
 type OwnedWindow struct {
-	ID          int    `json:"id"`
-	PID         int    `json:"pid,omitempty"`
-	Title       string `json:"title"`
-	WorkspaceID any    `json:"workspace_id,omitempty"`
-	AppID       string `json:"app_id"`
+	ID          int         `json:"id"`
+	PID         int         `json:"pid,omitempty"`
+	Title       string      `json:"title"`
+	WorkspaceID any         `json:"workspace_id,omitempty"`
+	AppID       string      `json:"app_id"`
+	IsFloating  bool        `json:"is_floating,omitempty"`
+	Layout      OwnedLayout `json:"layout,omitempty"`
+}
+
+type OwnedLayout struct {
+	Position   []float64 `json:"pos_in_scrolling_layout,omitempty"`
+	TileSize   []float64 `json:"tile_size,omitempty"`
+	WindowSize []int     `json:"window_size,omitempty"`
+}
+
+type OwnedWorkspace struct {
+	ID     any    `json:"id"`
+	Index  int    `json:"idx"`
+	Name   any    `json:"name"`
+	Output string `json:"output"`
 }
 
 type niriWindowsPayload struct {
@@ -169,6 +189,25 @@ func (manager WindowManager) List(ctx context.Context, appID string, sourceHost 
 		return nil, fmt.Errorf("list Niri windows (Niri/Wayland session required): %w", err)
 	}
 	return DecodeOwnedWindows(raw, appID, sourceHost)
+}
+
+func (manager WindowManager) Workspaces(ctx context.Context) ([]OwnedWorkspace, error) {
+	runner := manager.Runner
+	if runner == nil {
+		runner = ExecRunner{}
+	}
+	if strings.TrimSpace(manager.NiriCommand) == "" {
+		return nil, fmt.Errorf("niri command is empty")
+	}
+	raw, err := runner.Output(ctx, Command{Name: manager.NiriCommand, Args: []string{"msg", "-j", "workspaces"}})
+	if err != nil {
+		return nil, fmt.Errorf("list Niri workspaces: %w", err)
+	}
+	var workspaces []OwnedWorkspace
+	if err := json.Unmarshal(raw, &workspaces); err != nil {
+		return nil, fmt.Errorf("decode Niri workspaces JSON: %w", err)
+	}
+	return workspaces, nil
 }
 
 func (manager WindowManager) Close(ctx context.Context, windows []OwnedWindow, dryRun bool) error {

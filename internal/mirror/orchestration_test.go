@@ -95,7 +95,7 @@ func TestPlanLaunchAttachMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan attach: %v", err)
 	}
-	if plan.Title != "source[4]: Project Title" || plan.RemoteCWD != "/tmp/a'b" {
+	if plan.Title != "source[4|bad'; echo owned]: Project Title" || plan.RemoteCWD != "/tmp/a'b" {
 		t.Fatalf("metadata lost: %#v", plan)
 	}
 	rendered := strings.Join(plan.Command.Args, " ")

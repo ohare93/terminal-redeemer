@@ -487,6 +487,71 @@ func TestDoctorPassExitCode(t *testing.T) {
 	}
 }
 
+func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(snapshotPath, []byte(`{"host":"lattice","profile":"default","generated_at":"2026-01-01T00:00:00Z","windows":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	niri := filepath.Join(dir, "niri")
+	if err := os.WriteFile(niri, []byte("#!/bin/sh\nprintf '[]'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(dir, "absent-state")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"mirror", "save", "--host", "lattice", "--snapshot-file", snapshotPath, "--niri-command", niri, "--state-dir", stateDir, "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(stateDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry-run created state: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "would_save=0") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+}
+
+func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(snapshotPath, []byte(`{"host":"lattice","profile":"default","generated_at":"2026-01-01T00:00:00Z","windows":[{"order":0,"app_id":"zellij","title":"A","headless":true,"zellij_session":"A"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	niri := filepath.Join(dir, "niri")
+	if err := os.WriteFile(niri, []byte("#!/bin/sh\nprintf '[]'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(dir, "state")
+	store, err := mirror.NewPinStore(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := mirror.Pin{V: 1, SourceHost: "lattice", SourceProfile: "default", Projections: []mirror.PinnedProjection{{Session: "A", Workspace: mirror.WorkspaceSelector{Index: 1}, Order: 0}}}
+	path, err := store.Write(pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"mirror", "apply", "--host", "lattice", "--snapshot-file", snapshotPath, "--niri-command", niri, "--state-dir", stateDir, "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("dry-run changed pin")
+	}
+	if !strings.Contains(stdout.String(), `session="A" order=0 status=ready`) {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+}
+
 func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	root := t.TempDir()
 	snapshotPath := filepath.Join(root, "snapshot.json")
@@ -500,7 +565,7 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, part := range []string{"'kitty'", "'source[0]: work'", "'ssh'", "'attach'", "'session-a'", "'/tmp/project'"} {
+	for _, part := range []string{"'kitty'", "'source[0|session-a]: work'", "'ssh'", "'attach'", "'session-a'", "'/tmp/project'"} {
 		if !strings.Contains(out.String(), part) {
 			t.Fatalf("dry-run missing %q: %s", part, out.String())
 		}

@@ -134,11 +134,11 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 
 func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|new|status|close|paste-image> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|new|save|apply|status|close|paste-image> [flags]")
 		return 2
 	}
 	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|new|status|close|paste-image> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|new|save|apply|status|close|paste-image> [flags]")
 		return 0
 	}
 	switch args[0] {
@@ -152,6 +152,10 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return runMirrorNew(args[1:], resolvedConfig, stdout, stderr)
 	case "attach-local":
 		return runMirrorAttachLocal(args[1:], resolvedConfig, stdout, stderr)
+	case "save":
+		return runMirrorSave(args[1:], resolvedConfig, stdout, stderr)
+	case "apply":
+		return runMirrorApply(args[1:], resolvedConfig, stdout, stderr)
 	case "status":
 		return runMirrorStatus(args[1:], resolvedConfig, stdout, stderr)
 	case "close":
@@ -517,6 +521,164 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 		}
 	}
 	return 0
+}
+
+func runMirrorSave(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror save", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
+	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
+	niriCommand := fs.String("niri-command", resolvedConfig.Mirror.NiriCommand, "Niri executable")
+	timeout := fs.Duration("timeout", resolvedConfig.Resume.Timeout, "maximum live inventory time")
+	dryRun := fs.Bool("dry-run", false, "inspect and print without replacing the pin")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *timeout <= 0 {
+		_, _ = fmt.Fprintln(stderr, "mirror save failed: --timeout must be positive")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	snapshot, host, err := acquireMirrorSnapshotContext(ctx, source)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	manager := mirror.WindowManager{Runner: mirror.ExecRunner{}, NiriCommand: *niriCommand}
+	windows, err := manager.List(ctx, *appID, "")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	workspaces, err := manager.Workspaces(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	inventory, err := (mirror.ProcProjectionInspector{SSHCommand: *source.sshCommand}).Inspect(ctx, windows)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	result, err := mirror.BuildPin(snapshot, host, windows, workspaces, inventory)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	if *dryRun {
+		_, _ = fmt.Fprintf(stdout, "would_save=%d host=%s profile=%s untracked=%d ambiguous=%d\n", len(result.Pin.Projections), host, result.Pin.SourceProfile, result.Untracked, result.Ambiguous)
+		return 0
+	}
+	store, err := mirror.NewPinStore(*stateDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	path, err := store.Write(result.Pin)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(stdout, "saved=%d pin=%s untracked=%d ambiguous=%d\n", len(result.Pin.Projections), path, result.Untracked, result.Ambiguous)
+	return 0
+}
+
+func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror apply", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
+	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
+	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
+	niriCommand := fs.String("niri-command", resolvedConfig.Mirror.NiriCommand, "Niri executable")
+	timeout := fs.Duration("timeout", resolvedConfig.Resume.Timeout, "per-launch correlation/action timeout")
+	pollInterval := fs.Duration("poll-interval", resolvedConfig.Resume.PollInterval, "projection evidence poll interval")
+	dryRun := fs.Bool("dry-run", false, "preflight and print without launching or mutating")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *timeout <= 0 || *pollInterval <= 0 || *pollInterval > *timeout {
+		_, _ = fmt.Fprintln(stderr, "mirror apply failed: timeout and poll interval must be positive, and poll interval must not exceed timeout")
+		return 2
+	}
+	preflightCtx, cancel := context.WithTimeout(context.Background(), *timeout)
+	snapshot, host, err := acquireMirrorSnapshotContext(preflightCtx, source)
+	cancel()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
+		return 1
+	}
+	store, err := mirror.OpenPinStore(*stateDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
+		return 1
+	}
+	pin, err := store.Read(host, snapshot.Profile)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
+		return 1
+	}
+	phases := len(pin.Projections) + 2
+	overall := time.Duration(phases) * *timeout
+	if overall > 5*time.Minute {
+		overall = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), overall)
+	defer cancel()
+	runner := mirror.ExecRunner{}
+	manager := mirror.WindowManager{Runner: runner, NiriCommand: *niriCommand}
+	result, err := mirror.ApplyPinned(ctx, mirror.ApplyConfig{
+		Pin: pin, Snapshot: snapshot, SourceHost: host, SSHCommand: *source.sshCommand,
+		SSHOptions: source.sshOptions.values, LauncherCommand: *launcher, AppID: *appID,
+		NiriCommand: *niriCommand, Timeout: *timeout, PollInterval: *pollInterval, DryRun: *dryRun,
+	}, mirror.ApplyDeps{Runner: runner, Manager: manager, Inspector: mirror.ProcProjectionInspector{SSHCommand: *source.sshCommand}})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
+		return 1
+	}
+	failed := false
+	for _, item := range result.Items {
+		_, _ = fmt.Fprintf(stdout, "session=%q order=%d status=%s", item.Session, item.Order, item.Status)
+		if item.WindowID > 0 {
+			_, _ = fmt.Fprintf(stdout, " window_id=%d", item.WindowID)
+		}
+		if item.Reason != "" {
+			_, _ = fmt.Fprintf(stdout, " reason=%q", item.Reason)
+		}
+		_, _ = fmt.Fprintln(stdout)
+		if item.Status == mirror.ApplyFailed || item.Status == mirror.ApplyMissing || item.Status == mirror.ApplyAmbiguous {
+			failed = true
+		}
+	}
+	_, _ = fmt.Fprintf(stdout, "untracked=%d\n", result.Untracked)
+	if failed {
+		return 1
+	}
+	return 0
+}
+
+func acquireMirrorSnapshotContext(ctx context.Context, flags *mirrorSourceFlags) (mirror.Snapshot, string, error) {
+	host := strings.TrimSpace(*flags.host)
+	if strings.TrimSpace(*flags.snapshotFile) != "" {
+		snapshot, err := mirror.ReadSnapshot(*flags.snapshotFile)
+		if host == "" {
+			host = snapshot.Host
+		}
+		return snapshot, host, err
+	}
+	if host == "" {
+		return mirror.Snapshot{}, "", fmt.Errorf("source host is required (--host or mirror.sourceHost)")
+	}
+	snapshot, err := mirror.AcquireRemote(ctx, mirror.ExecRunner{}, mirror.RemoteConfig{Host: host, SSHCommand: *flags.sshCommand, SSHOptions: flags.sshOptions.values, SnapshotCommand: flags.snapshotCommand.values})
+	return snapshot, host, err
 }
 
 func safeSocketPart(value string) string {

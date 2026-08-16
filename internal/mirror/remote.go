@@ -21,8 +21,17 @@ type RemoteConfig struct {
 }
 
 func ValidateDestination(host string) error {
-	if !sshDestinationPattern.MatchString(host) {
+	if len(host) > 255 || !sshDestinationPattern.MatchString(host) {
 		return fmt.Errorf("invalid SSH host %q", host)
+	}
+	return nil
+}
+
+// ValidateSession preserves exact case and leading dashes while rejecting
+// values that cannot safely be stored or presented as one typed identity.
+func ValidateSession(session string) error {
+	if session == "" || len(session) > 256 || strings.TrimSpace(session) != session || strings.IndexFunc(session, unicode.IsControl) >= 0 {
+		return fmt.Errorf("invalid Zellij session %q", session)
 	}
 	return nil
 }

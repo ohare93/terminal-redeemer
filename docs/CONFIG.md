@@ -59,6 +59,8 @@ mirror:
 
 `host` partitions local checkpoints. `mirror.sourceHost` is instead the SSH destination for remote terminal access. `mirror new` creates the persistent session only through the local viewer, then best-effort asks the source-side Redeem to open one attach-only Kitty. Pass `--source-workspace NAME_OR_NUMBER` to place that source window once; there is no persistent workspace setting or hardcoded workspace in Redeem. Source-helper failure is a warning and never rolls back the created session.
 
+`redeem mirror save --host HOST` and `redeem mirror apply --host HOST` use the existing mirror SSH, snapshot, launcher, app-ID, and Niri settings. The single replaceable pin for the fresh source snapshot's profile is stored under `stateDir/mirror/pins/`, not `checkpoints/`, and is therefore outside rolling capture and retention pruning. No command argv or shell payload is persisted.
+
 ## Resume policy
 
 `resume.onStartup` is consumed by the Home Manager module. Setting it in a hand-written YAML file does not install a service.

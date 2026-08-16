@@ -15,9 +15,13 @@ The Home Manager module exports these bindings as an opt-in Niri fragment. It do
 redeem mirror new --host lattice --source-workspace agentleman  # create once, view on both hosts
 redeem mirror open --host lattice                               # project-first picker
 redeem mirror list --host lattice      # non-interactive live inventory
+redeem mirror save --host lattice      # replace the pinned live projection set
+redeem mirror apply --host lattice     # manually reopen that pinned set
 ```
 
 Closing an Overton mirror window detaches it; the Zellij session continues on Lattice and remains discoverable. Existing sessions are exact attach-only. `mirror new` uses attach-or-create only for its newly generated safe identity.
+
+`mirror save` trusts only fresh descendant SSH/Zellij argv evidence below owned Niri window PIDs; titles are presentation, so ambiguous or untracked windows are reported and excluded. It atomically replaces one mode-0600 pin per source host/profile under `STATE_DIR/mirror/pins/`, outside rolling checkpoints. `mirror apply` preflights exact ACTIVE sessions, skips already projected sessions, never creates missing sessions, and opens the rest in captured order. Each new window is moved once and receives supported floating/tiled size actions; exact Niri column/stack reconstruction is intentionally unsupported. Both commands support side-effect-free `--dry-run`.
 
 ### Picker controls
 

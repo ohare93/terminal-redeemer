@@ -48,6 +48,10 @@ redeem prune run --days 30
 
 Prune shares the writer lock, preserves the current boot and newest usable prior checkpoint for each host/profile, removes eligible older checkpoints, and fsyncs the checkpoint directory.
 
+## Manual mirror continuity
+
+Run `redeem mirror save --host lattice` while the desired Overton projections are open. Save uses current Niri PID plus exact descendant SSH/Zellij argv evidence, reports title-only/ambiguous windows as untracked, and atomically replaces the host/profile pin outside `checkpoints/`. Run `redeem mirror apply --host lattice` after a disconnect or restart. Apply reports missing source sessions without creating them, skips exact already-open projections, and attaches the rest in captured order before one-time workspace/floating/size actions. Placement degradation leaves the attached window open. Use `--dry-run` on either command to inspect without writes, launches, or Niri actions.
+
 ## User-owned physical smoke checklist
 
 Do not activate hosts from repository automation. After the user activates the approved package and configuration on Lattice and Overton:
