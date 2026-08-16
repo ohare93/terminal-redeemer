@@ -298,9 +298,6 @@ func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer
 
 var chooseMirrorSessions = mirrortui.Run
 var newMirrorSessionName = mirror.NewSessionName
-var newMirrorRunner mirror.Runner = mirror.ExecRunner{}
-var newMirrorAcquire = mirror.AcquireRemote
-var newMirrorWait mirror.WaitFunc
 
 func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mirror new", flag.ContinueOnError)
@@ -319,6 +316,10 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 		if err == flag.ErrHelp {
 			return 0
 		}
+		return 2
+	}
+	if err := mirror.ValidateWorkspaceReference(*sourceWorkspace); err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
 		return 2
 	}
 
@@ -342,44 +343,44 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 		_, _ = fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
 		return 1
 	}
-	remoteRedeem := ""
-	if len(resolvedConfig.Mirror.SnapshotCommand) > 0 {
-		remoteRedeem = resolvedConfig.Mirror.SnapshotCommand[0]
-	}
-	helper, err := mirror.PlanSourceAttach(mirror.SourceAttachConfig{
+	helper, helperPlanErr := mirror.PlanSourceAttach(mirror.SourceAttachConfig{
 		SourceHost: strings.TrimSpace(*host), SSHCommand: *sshCommand, SSHOptions: sshOptions.values,
-		RemoteCommand: remoteRedeem, Session: session, Workspace: *sourceWorkspace,
+		SnapshotCommand: resolvedConfig.Mirror.SnapshotCommand, Session: session, Workspace: *sourceWorkspace,
 	})
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
-		return 1
-	}
 	if *dryRun {
 		_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(plan.Command))
-		_, _ = fmt.Fprintln(stdout, "# after exact source-session readiness (best effort)")
-		_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(helper))
+		if helperPlanErr != nil {
+			_, _ = fmt.Fprintf(stdout, "# source Kitty unavailable (best effort): %v\n", helperPlanErr)
+		} else {
+			_, _ = fmt.Fprintln(stdout, "# source-local helper waits for exact ACTIVE session (best effort)")
+			_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(helper))
+		}
 		return 0
 	}
-	ctx := context.Background()
-	coordinator := mirror.DualNewCoordinator{
-		Runner: newMirrorRunner,
-		Acquire: func(ctx context.Context) (mirror.Snapshot, error) {
-			return newMirrorAcquire(ctx, newMirrorRunner, mirror.RemoteConfig{
-				Host: strings.TrimSpace(*host), SSHCommand: *sshCommand, SSHOptions: sshOptions.values,
-				SnapshotCommand: resolvedConfig.Mirror.SnapshotCommand,
-			})
-		},
-		Wait: newMirrorWait,
-	}
-	result, err := coordinator.Run(ctx, plan, helper)
+	sourceErr, err := executeMirrorNew(context.Background(), mirror.ExecRunner{}, plan, helper, helperPlanErr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror new failed for %s: %v\n", plan.Session, err)
 		return 1
 	}
-	if result.SourceError != nil {
-		_, _ = fmt.Fprintf(stderr, "warning: persistent session %s is available on %s, but source Kitty setup did not complete (the detached view may still be open): %v\n", plan.Session, strings.TrimSpace(*host), result.SourceError)
+	if sourceErr != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: persistent-session creator %s was launched for %s, but source Kitty setup did not complete (the detached view may still be open): %v\n", plan.Session, strings.TrimSpace(*host), sourceErr)
 	}
 	return 0
+}
+
+func executeMirrorNew(ctx context.Context, runner mirror.Runner, creator mirror.LaunchPlan, helper mirror.Command, helperPlanErr error) (error, error) {
+	if err := runner.Run(ctx, creator.Command); err != nil {
+		return nil, err
+	}
+	if helperPlanErr != nil {
+		return helperPlanErr, nil
+	}
+	helperCtx, cancel := context.WithTimeout(ctx, mirror.DefaultSourceHelperTimeout)
+	defer cancel()
+	if err := runner.Run(helperCtx, helper); err != nil {
+		return fmt.Errorf("launch source Kitty helper: %w", err), nil
+	}
+	return nil, nil
 }
 
 func runMirrorAttachLocal(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -389,6 +390,7 @@ func runMirrorAttachLocal(args []string, resolvedConfig config.Config, stdout io
 	workspace := fs.String("workspace", "", "optional local Niri workspace name or number")
 	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
 	niriCommand := fs.String("niri-command", resolvedConfig.Mirror.NiriCommand, "Niri executable")
+	timeout := fs.Duration("timeout", mirror.DefaultLocalAttachTimeout, "maximum source readiness and launch time")
 	dryRun := fs.Bool("dry-run", false, "print the local source launch without executing")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -401,16 +403,20 @@ func runMirrorAttachLocal(args []string, resolvedConfig config.Config, stdout io
 		_, _ = fmt.Fprintf(stderr, "mirror attach-local failed: %v\n", err)
 		return 2
 	}
+	if *timeout <= 0 {
+		_, _ = fmt.Fprintln(stderr, "mirror attach-local failed: --timeout must be positive")
+		return 2
+	}
 	if *dryRun {
 		_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(plan.Command))
 		return 0
 	}
-	runner := mirror.ExecRunner{Env: mirror.GraphicalEnvironment(os.Environ())}
-	result, err := (mirror.LocalAttacher{
-		Runner:  runner,
-		Windows: mirror.KittyWindowLister{Manager: mirror.WindowManager{Runner: runner, NiriCommand: *niriCommand}},
-		Probe:   mirror.LocalProcAttachmentProbe{}, Sessions: mirror.LiveSessionChecker{}, NiriCommand: *niriCommand,
-	}).Attach(context.Background(), plan)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	result, err := mirror.AttachLocal(ctx, mirror.AttachLocalConfig{
+		Session: *session, Workspace: *workspace, LauncherCommand: *launcher,
+		NiriCommand: *niriCommand, StateDir: resolvedConfig.StateDir, Environment: os.Environ(),
+	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror attach-local failed: %v\n", err)
 		return 1

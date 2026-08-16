@@ -57,7 +57,7 @@ mirror:
 
 `capture.interval` controls the Home Manager timer and `capture.niriCommand` controls the complete Niri windows/workspaces query. Every successful capture refreshes one deterministic checkpoint for the current boot/host/profile identity. Window titles remain in the checkpoint, while the state hash excludes volatile titles.
 
-`host` partitions local checkpoints. `mirror.sourceHost` is instead the SSH destination for remote terminal access. A new remote session runs on that host and is projected in a local Kitty; it does not create a visible Kitty on the source host.
+`host` partitions local checkpoints. `mirror.sourceHost` is instead the SSH destination for remote terminal access. `mirror new` creates the persistent session only through the local viewer, then best-effort asks the source-side Redeem to open one attach-only Kitty. Pass `--source-workspace NAME_OR_NUMBER` to place that source window once; there is no persistent workspace setting or hardcoded workspace in Redeem. Source-helper failure is a warning and never rolls back the created session.
 
 ## Resume policy
 
@@ -88,5 +88,7 @@ programs.terminal-redeemer = {
   mirror.sourceHost = "lattice";
 };
 ```
+
+`mirror.snapshotCommand` is also the trusted source-helper prefix. For dual-visible `mirror new`, it must end with the exact argv suffix `[mirror, snapshot]`; Redeem preserves any preceding wrapper argv and replaces only that suffix with `mirror attach-local`. Unsupported wrappers degrade after creation with a warning. Lattice and Overton should run compatible Redeem and pinned Zellij versions; version skew leaves the persistent Overton-created session intact but may prevent the source view.
 
 Disable competing startup terminal restorers before enabling `resume.onStartup`.

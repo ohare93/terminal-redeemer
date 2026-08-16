@@ -519,7 +519,7 @@ func TestMirrorNewDryRunShowsCreatorAndBestEffortSourceHelper(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "--create", "redeem-0123456789abcdef0123456789abcdef", "--on-force-close", "detach", "attach-local", "--workspace", "agentleman", "after exact source-session readiness"} {
+	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "--create", "redeem-0123456789abcdef0123456789abcdef", "--on-force-close", "detach", "attach-local", "--workspace", "agentleman", "waits for exact ACTIVE session"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("dry-run missing %q: %s", want, out.String())
 		}
@@ -535,42 +535,64 @@ func TestMirrorNewDryRunShowsCreatorAndBestEffortSourceHelper(t *testing.T) {
 }
 
 type newCLIRunner struct {
-	runs []mirror.Command
+	runs        []mirror.Command
+	helperError error
+	blockHelper bool
 }
 
 func (runner *newCLIRunner) Output(context.Context, mirror.Command) ([]byte, error) {
 	return nil, errors.New("unexpected output")
 }
 
-func (runner *newCLIRunner) Run(_ context.Context, command mirror.Command) error {
+func (runner *newCLIRunner) Run(ctx context.Context, command mirror.Command) error {
 	runner.runs = append(runner.runs, command)
-	if len(runner.runs) == 2 {
-		return errors.New("source helper unavailable")
+	if len(runner.runs) != 2 {
+		return nil
 	}
-	return nil
+	if runner.blockHelper {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return runner.helperError
 }
 
-func TestMirrorNewSourceHelperFailureIsWarningAfterPersistentCreator(t *testing.T) {
-	originalName, originalRunner, originalAcquire, originalWait := newMirrorSessionName, newMirrorRunner, newMirrorAcquire, newMirrorWait
-	defer func() {
-		newMirrorSessionName, newMirrorRunner, newMirrorAcquire, newMirrorWait = originalName, originalRunner, originalAcquire, originalWait
-	}()
+func TestExecuteMirrorNewRunsCreatorThenOneBoundedBestEffortHelper(t *testing.T) {
 	const session = "redeem-0123456789abcdef0123456789abcdef"
-	newMirrorSessionName = func() (string, error) { return session, nil }
-	runner := &newCLIRunner{}
-	newMirrorRunner = runner
-	newMirrorAcquire = func(context.Context, mirror.Runner, mirror.RemoteConfig) (mirror.Snapshot, error) {
-		return mirror.Snapshot{Windows: []mirror.Window{{ZellijSession: session}}}, nil
+	creator, err := mirror.PlanNew(session, mirror.LaunchConfig{
+		SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	newMirrorWait = func(context.Context, time.Duration) error { return nil }
-
-	var out, stderr bytes.Buffer
-	code := run([]string{"mirror", "new", "--host", "lattice", "--no-clipboard"}, &out, &stderr)
-	if code != 0 || len(runner.runs) != 2 || !strings.Contains(stderr.String(), "persistent session") || !strings.Contains(stderr.String(), "source helper unavailable") {
-		t.Fatalf("code=%d calls=%#v stdout=%q stderr=%q", code, runner.runs, out.String(), stderr.String())
+	helper, err := mirror.PlanSourceAttach(mirror.SourceAttachConfig{
+		SourceHost: "lattice", SSHCommand: "ssh", SnapshotCommand: []string{"redeem", "mirror", "snapshot"}, Session: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &newCLIRunner{helperError: errors.New("source helper unavailable")}
+	sourceErr, creatorErr := executeMirrorNew(context.Background(), runner, creator, helper, nil)
+	if creatorErr != nil || sourceErr == nil || len(runner.runs) != 2 || !strings.Contains(sourceErr.Error(), "source helper unavailable") {
+		t.Fatalf("creatorErr=%v sourceErr=%v calls=%#v", creatorErr, sourceErr, runner.runs)
 	}
 	if !strings.Contains(strings.Join(runner.runs[0].Args, " "), "--create") || strings.Contains(strings.Join(runner.runs[1].Args, " "), "--create") {
 		t.Fatalf("creation boundary violated: %#v", runner.runs)
+	}
+
+	blocking := &newCLIRunner{blockHelper: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	sourceErr, creatorErr = executeMirrorNew(ctx, blocking, creator, helper, nil)
+	if creatorErr != nil || sourceErr == nil || !errors.Is(sourceErr, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("bounded helper creatorErr=%v sourceErr=%v elapsed=%s", creatorErr, sourceErr, time.Since(started))
+	}
+
+	unsupported := &newCLIRunner{}
+	planErr := errors.New("unsupported snapshot wrapper")
+	sourceErr, creatorErr = executeMirrorNew(context.Background(), unsupported, creator, mirror.Command{}, planErr)
+	if creatorErr != nil || !errors.Is(sourceErr, planErr) || len(unsupported.runs) != 1 {
+		t.Fatalf("post-creator planning warning creatorErr=%v sourceErr=%v calls=%#v", creatorErr, sourceErr, unsupported.runs)
 	}
 }
 

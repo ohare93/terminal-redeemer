@@ -8,32 +8,45 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
-func TestPlanSourceAttachUsesExactQuotedArgvAndOptionalWorkspace(t *testing.T) {
-	command, err := PlanSourceAttach(SourceAttachConfig{
-		SourceHost: "user@lattice", SSHCommand: "ssh", SSHOptions: []string{"-p", "2222"},
-		RemoteCommand: "/nix/store/redeem bin", Session: "redeem-0123456789abcdef0123456789abcdef", Workspace: "agentleman's",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if command.Name != "ssh" || !reflect.DeepEqual(command.Args[:4], []string{"-p", "2222", "--", "user@lattice"}) {
-		t.Fatalf("SSH boundary: %#v", command)
-	}
-	want := `'/nix/store/redeem bin' 'mirror' 'attach-local' '--session' 'redeem-0123456789abcdef0123456789abcdef' '--workspace' 'agentleman'"'"'s'`
-	if command.Args[4] != want {
-		t.Fatalf("remote argv = %q, want %q", command.Args[4], want)
-	}
+const generatedTestSession = "redeem-0123456789abcdef0123456789abcdef"
 
-	withoutWorkspace, err := PlanSourceAttach(SourceAttachConfig{
-		SourceHost: "lattice", SSHCommand: "ssh", RemoteCommand: "redeem",
-		Session: "redeem-0123456789abcdef0123456789abcdef",
-	})
-	if err != nil || strings.Contains(withoutWorkspace.Args[len(withoutWorkspace.Args)-1], "--workspace") {
-		t.Fatalf("optional workspace changed helper argv: %#v err=%v", withoutWorkspace, err)
+func TestPlanSourceAttachPreservesDirectAndWrappedSnapshotPrefixes(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot []string
+		want     []string
+	}{
+		{name: "direct", snapshot: []string{"/nix/store/redeem bin", "mirror", "snapshot"}, want: []string{"/nix/store/redeem bin", "mirror", "attach-local", "--session", generatedTestSession, "--workspace", "agentleman's"}},
+		{name: "wrapped", snapshot: []string{"env", "REDEEM_PROFILE=remote", "/nix/store/redeem", "mirror", "snapshot"}, want: []string{"env", "REDEEM_PROFILE=remote", "/nix/store/redeem", "mirror", "attach-local", "--session", generatedTestSession, "--workspace", "agentleman's"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			command, err := PlanSourceAttach(SourceAttachConfig{
+				SourceHost: "user@lattice", SSHCommand: "ssh", SSHOptions: []string{"-p", "2222"},
+				SnapshotCommand: tc.snapshot, Session: generatedTestSession, Workspace: "agentleman's",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command.Name != "ssh" || !reflect.DeepEqual(command.Args[:4], []string{"-p", "2222", "--", "user@lattice"}) {
+				t.Fatalf("SSH boundary: %#v", command)
+			}
+			if command.Args[4] != QuoteCommand(tc.want) {
+				t.Fatalf("remote argv = %q, want %q", command.Args[4], QuoteCommand(tc.want))
+			}
+		})
+	}
+	for _, unsupported := range [][]string{{"redeem"}, {"redeem", "mirror", "list"}, {"mirror", "snapshot"}} {
+		if _, err := PlanSourceAttach(SourceAttachConfig{SourceHost: "lattice", SSHCommand: "ssh", SnapshotCommand: unsupported, Session: generatedTestSession}); err == nil {
+			t.Fatalf("unsupported snapshot command accepted: %#v", unsupported)
+		}
 	}
 }
 
@@ -48,79 +61,13 @@ func TestWorkspaceAndGeneratedSessionValidation(t *testing.T) {
 			t.Errorf("invalid workspace accepted: %q", invalid)
 		}
 	}
-	if _, err := PlanSourceAttach(SourceAttachConfig{SourceHost: "lattice", SSHCommand: "ssh", RemoteCommand: "redeem", Session: "existing"}); err == nil {
+	if _, err := PlanLocalAttach("existing", "", "kitty"); err == nil {
 		t.Fatal("source helper accepted arbitrary existing session")
 	}
 }
 
-func TestDualNewCoordinatorRunsCreatorOnceThenHelperAfterExactReadiness(t *testing.T) {
-	runner := &recordingRunner{}
-	acquisitions := 0
-	waits := 0
-	coordinator := DualNewCoordinator{
-		Runner: runner,
-		Acquire: func(context.Context) (Snapshot, error) {
-			acquisitions++
-			if acquisitions == 1 {
-				return Snapshot{Windows: []Window{{ZellijSession: "other"}}}, nil
-			}
-			return Snapshot{Windows: []Window{{ZellijSession: "redeem-0123456789abcdef0123456789abcdef"}}}, nil
-		},
-		Wait:    func(context.Context, time.Duration) error { waits++; return nil },
-		Timeout: 2 * time.Second, PollInterval: time.Second,
-	}
-	creator := LaunchPlan{Session: "redeem-0123456789abcdef0123456789abcdef", Command: Command{Name: "kitty", Args: []string{"--detach"}}}
-	helper := Command{Name: "ssh", Args: []string{"lattice", "helper"}}
-	result, err := coordinator.Run(context.Background(), creator, helper)
-	if err != nil || result.SourceError != nil {
-		t.Fatalf("run = %#v err=%v", result, err)
-	}
-	if acquisitions != 2 || waits != 1 || len(runner.runCalls) != 2 || runner.runCalls[0].Name != "kitty" || runner.runCalls[1].Name != "ssh" {
-		t.Fatalf("ordering calls=%#v acquisitions=%d waits=%d", runner.runCalls, acquisitions, waits)
-	}
-}
-
-func TestDualNewCoordinatorTreatsReadinessAndHelperFailuresAsNonfatal(t *testing.T) {
-	creator := LaunchPlan{Session: "redeem-0123456789abcdef0123456789abcdef", Command: Command{Name: "kitty"}}
-	helper := Command{Name: "ssh"}
-
-	t.Run("timeout does not retry creator", func(t *testing.T) {
-		runner := &recordingRunner{}
-		coordinator := DualNewCoordinator{
-			Runner:  runner,
-			Acquire: func(context.Context) (Snapshot, error) { return Snapshot{}, errors.New("offline") },
-			Wait:    func(context.Context, time.Duration) error { return nil }, Timeout: time.Second, PollInterval: time.Second,
-		}
-		result, err := coordinator.Run(context.Background(), creator, helper)
-		if err != nil || result.SourceError == nil || len(runner.runCalls) != 1 || runner.runCalls[0].Name != "kitty" {
-			t.Fatalf("result=%#v err=%v calls=%#v", result, err, runner.runCalls)
-		}
-	})
-
-	t.Run("helper failure", func(t *testing.T) {
-		runner := &recordingRunner{runErr: errors.New("old source")}
-		// Only the helper should fail; make creator succeed through a dedicated runner.
-		calls := 0
-		runner.onRun = func(Command) {
-			calls++
-			if calls == 1 {
-				runner.runErr = nil
-			} else {
-				runner.runErr = errors.New("old source")
-			}
-		}
-		coordinator := DualNewCoordinator{Runner: runner, Acquire: func(context.Context) (Snapshot, error) {
-			return Snapshot{Windows: []Window{{ZellijSession: creator.Session}}}, nil
-		}}
-		result, err := coordinator.Run(context.Background(), creator, helper)
-		if err != nil || result.SourceError == nil || len(runner.runCalls) != 2 {
-			t.Fatalf("result=%#v err=%v calls=%#v", result, err, runner.runCalls)
-		}
-	})
-}
-
 func TestPlanLocalAttachIsDetachedAttachOnly(t *testing.T) {
-	plan, err := PlanLocalAttach("redeem-0123456789abcdef0123456789abcdef", "agentleman", "kitty")
+	plan, err := PlanLocalAttach(generatedTestSession, "agentleman", "kitty")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,125 +82,230 @@ func TestPlanLocalAttachIsDetachedAttachOnly(t *testing.T) {
 	}
 }
 
-type sequenceWindowLister struct {
-	windows [][]OwnedWindow
-	calls   int
+type catalogSequence struct {
+	mu       sync.Mutex
+	statuses []zellijlive.Status
+	block    bool
 }
 
-func (lister *sequenceWindowLister) List(context.Context) ([]OwnedWindow, error) {
-	index := lister.calls
-	lister.calls++
-	if index >= len(lister.windows) {
-		index = len(lister.windows) - 1
+func (catalog *catalogSequence) Observe(ctx context.Context) (zellijlive.Catalog, error) {
+	if catalog.block {
+		<-ctx.Done()
+		return zellijlive.Catalog{}, ctx.Err()
 	}
-	return append([]OwnedWindow(nil), lister.windows[index]...), nil
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	status := zellijlive.StatusMissing
+	if len(catalog.statuses) > 0 {
+		status = catalog.statuses[0]
+		if len(catalog.statuses) > 1 {
+			catalog.statuses = catalog.statuses[1:]
+		}
+	}
+	return zellijlive.Catalog{Sessions: map[string]zellijlive.Session{generatedTestSession: {Name: generatedTestSession, Status: status}}, Names: []string{generatedTestSession}}, nil
 }
 
-type sessionCheckerStub struct {
-	active bool
-	err    error
+type concurrentAttachFixture struct {
+	mu       sync.Mutex
+	window   bool
+	launches int
 }
 
-func (checker sessionCheckerStub) Active(context.Context, string) (bool, error) {
-	return checker.active, checker.err
+func (fixture *concurrentAttachFixture) list(context.Context) ([]OwnedWindow, error) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.window {
+		return []OwnedWindow{{ID: 11, PID: 110, AppID: "kitty"}}, nil
+	}
+	return nil, nil
 }
 
-type probeStub struct {
-	attached map[int]bool
+func (fixture *concurrentAttachFixture) attached(_ context.Context, pid int, session string) (bool, error) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return fixture.window && pid == 110 && session == generatedTestSession, nil
 }
 
-func (probe probeStub) Attached(_ context.Context, pid int, _ string) (bool, error) {
-	return probe.attached[pid], nil
+func (fixture *concurrentAttachFixture) Run(_ context.Context, command Command) error {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if command.Name == "kitty" {
+		fixture.launches++
+		fixture.window = true
+	}
+	return nil
 }
 
-func TestLocalAttacherSuppressesDuplicateAndMovesNewExactWindowOnce(t *testing.T) {
-	plan, _ := PlanLocalAttach("redeem-0123456789abcdef0123456789abcdef", "agentleman", "kitty")
+func (fixture *concurrentAttachFixture) Output(context.Context, Command) ([]byte, error) {
+	return nil, errors.New("unexpected output")
+}
 
-	t.Run("already attached", func(t *testing.T) {
-		runner := &recordingRunner{}
-		lister := &sequenceWindowLister{windows: [][]OwnedWindow{{{ID: 9, PID: 90}}}}
-		result, err := (LocalAttacher{Runner: runner, Windows: lister, Probe: probeStub{attached: map[int]bool{90: true}}, Sessions: sessionCheckerStub{active: true}}).Attach(context.Background(), plan)
-		if err != nil || !result.AlreadyOpen || result.WindowID != 9 || len(runner.runCalls) != 0 {
-			t.Fatalf("result=%#v err=%v calls=%#v", result, err, runner.runCalls)
+func TestAttachLocalConcurrentProcessesLaunchOnceAndMoveByExactID(t *testing.T) {
+	plan, _ := PlanLocalAttach(generatedTestSession, "agentleman", "kitty")
+	fixture := &concurrentAttachFixture{}
+	deps := localAttachDeps{
+		runner: fixture, listWindows: fixture.list, attached: fixture.attached,
+		catalog:     &catalogSequence{statuses: []zellijlive.Status{zellijlive.StatusActive}},
+		niriCommand: "niri", pollInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stateDir := t.TempDir()
+	results := make(chan LocalAttachResult, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			result, err := attachLocal(ctx, plan, stateDir, deps)
+			results <- result
+			errs <- err
+		}()
+	}
+	alreadyOpen := 0
+	for range 2 {
+		result, err := <-results, <-errs
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.AlreadyOpen {
+			alreadyOpen++
+		}
+	}
+	fixture.mu.Lock()
+	launches := fixture.launches
+	fixture.mu.Unlock()
+	if launches != 1 || alreadyOpen != 1 {
+		t.Fatalf("launches=%d alreadyOpen=%d", launches, alreadyOpen)
+	}
+}
+
+func TestAttachLocalRequiresVerifiedActiveCatalogAndRealDeadline(t *testing.T) {
+	plan, _ := PlanLocalAttach(generatedTestSession, "", "kitty")
+	runner := &recordingRunner{}
+	deps := localAttachDeps{
+		runner: runner, listWindows: func(context.Context) ([]OwnedWindow, error) { return nil, nil },
+		attached: func(context.Context, int, string) (bool, error) { return false, nil },
+		catalog:  &catalogSequence{statuses: []zellijlive.Status{zellijlive.StatusMissing}}, pollInterval: time.Millisecond,
+	}
+	if _, err := attachLocal(context.Background(), plan, t.TempDir(), deps); err == nil || !strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("missing deadline accepted: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := attachLocal(ctx, plan, t.TempDir(), deps); err == nil || !strings.Contains(err.Error(), "did not become active") {
+		t.Fatalf("name-only catalog accepted: %v", err)
+	}
+	if len(runner.runCalls) != 0 {
+		t.Fatalf("inactive session launched Kitty: %#v", runner.runCalls)
+	}
+
+	blocking := deps
+	blocking.catalog = &catalogSequence{block: true}
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := attachLocal(ctx, plan, t.TempDir(), blocking); err == nil || time.Since(started) > time.Second {
+		t.Fatalf("blocking catalog was not bounded: %v", err)
+	}
+}
+
+type blockingCommandRunner struct{}
+
+func (blockingCommandRunner) Output(ctx context.Context, _ Command) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (blockingCommandRunner) Run(ctx context.Context, _ Command) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestAttachLocalBoundsBlockingWindowAndKittyOperations(t *testing.T) {
+	plan, _ := PlanLocalAttach(generatedTestSession, "", "kitty")
+	active := &catalogSequence{statuses: []zellijlive.Status{zellijlive.StatusActive}}
+	t.Run("window observation", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		_, err := attachLocal(ctx, plan, t.TempDir(), localAttachDeps{
+			runner:      &recordingRunner{},
+			listWindows: func(ctx context.Context) ([]OwnedWindow, error) { <-ctx.Done(); return nil, ctx.Err() },
+			attached:    func(context.Context, int, string) (bool, error) { return false, nil },
+			catalog:     active, pollInterval: time.Millisecond,
+		})
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("blocking window observation not bounded: %v", err)
 		}
 	})
-
-	t.Run("launch then move", func(t *testing.T) {
-		runner := &recordingRunner{}
-		lister := &sequenceWindowLister{windows: [][]OwnedWindow{{}, {}, {{ID: 11, PID: 110}}}}
-		result, err := (LocalAttacher{
-			Runner: runner, Windows: lister, Probe: probeStub{attached: map[int]bool{110: true}}, Sessions: sessionCheckerStub{active: true}, NiriCommand: "niri",
-			Wait: func(context.Context, time.Duration) error { return nil }, Timeout: 2 * time.Second, PollInterval: time.Second,
-		}).Attach(context.Background(), plan)
-		if err != nil || result.WindowID != 11 || result.PlacementError != nil {
-			t.Fatalf("result=%#v err=%v", result, err)
-		}
-		if len(runner.runCalls) != 2 || runner.runCalls[0].Name != "kitty" || strings.Join(runner.runCalls[1].Args, " ") != "msg action move-window-to-workspace --window-id 11 --focus false agentleman" {
-			t.Fatalf("calls=%#v", runner.runCalls)
+	t.Run("Kitty launch", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		_, err := attachLocal(ctx, plan, t.TempDir(), localAttachDeps{
+			runner:      blockingCommandRunner{},
+			listWindows: func(context.Context) ([]OwnedWindow, error) { return nil, nil },
+			attached:    func(context.Context, int, string) (bool, error) { return false, nil },
+			catalog:     active, pollInterval: time.Millisecond,
+		})
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("blocking Kitty launch not bounded: %v", err)
 		}
 	})
 }
 
-func TestLocalAttacherPlacementFailureKeepsAttachedResult(t *testing.T) {
-	plan, _ := PlanLocalAttach("redeem-0123456789abcdef0123456789abcdef", "agentleman", "kitty")
-	runner := &recordingRunner{runErr: errors.New("move unsupported")}
-	calls := 0
-	runner.onRun = func(Command) {
-		calls++
-		if calls == 1 {
-			runner.runErr = nil
-		} else {
-			runner.runErr = errors.New("move unsupported")
-		}
-	}
-	lister := &sequenceWindowLister{windows: [][]OwnedWindow{{}, {{ID: 11, PID: 110}}}}
-	result, err := (LocalAttacher{
-		Runner: runner, Windows: lister, Probe: probeStub{attached: map[int]bool{110: true}}, Sessions: sessionCheckerStub{active: true}, NiriCommand: "niri",
-	}).Attach(context.Background(), plan)
-	if err != nil || result.WindowID != 11 || result.PlacementError == nil {
-		t.Fatalf("result=%#v err=%v", result, err)
-	}
-}
-
-func TestLocalProcAttachmentProbeRequiresExactDescendantArgv(t *testing.T) {
+func TestLocalProcAttachmentProbeRequiresExactStableDescendantArgv(t *testing.T) {
 	root := t.TempDir()
-	writeProcFixture(t, root, 100, 1, []string{"kitty", "--title", "redeem-0123456789abcdef0123456789abcdef"})
-	writeProcFixture(t, root, 101, 100, []string{"zellij", "attach", "redeem-0123456789abcdef0123456789abcdef", "options", "--on-force-close", "detach"})
-	writeProcFixture(t, root, 102, 100, []string{"zellij", "attach", "redeem-ffffffffffffffffffffffffffffffff", "options", "--on-force-close", "detach"})
-	probe := LocalProcAttachmentProbe{ProcRoot: root}
-	attached, err := probe.Attached(context.Background(), 100, "redeem-0123456789abcdef0123456789abcdef")
+	writeProcFixture(t, root, 100, 1, 10, []string{"kitty", "--title", generatedTestSession})
+	writeProcFixture(t, root, 101, 100, 11, []string{"zellij", "attach", generatedTestSession, "options", "--on-force-close", "detach"})
+	probe := localProcAttachmentProbe{procRoot: root}
+	attached, err := probe.attached(context.Background(), 100, generatedTestSession)
 	if err != nil || !attached {
 		t.Fatalf("attached=%v err=%v", attached, err)
 	}
-	attached, err = probe.Attached(context.Background(), 100, "redeem-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	if err != nil || attached {
-		t.Fatalf("substring/title-only evidence accepted: attached=%v err=%v", attached, err)
-	}
 }
 
-func writeProcFixture(t *testing.T, root string, pid int, ppid int, argv []string) {
+func writeProcFixture(t *testing.T, root string, pid int, ppid int, start int, argv []string) {
 	t.Helper()
 	dir := filepath.Join(root, strconv.Itoa(pid))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stat := strconv.Itoa(pid) + " (proc name) S " + strconv.Itoa(ppid) + " 0 0 0"
-	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeProcStat(t, root, pid, ppid, start)
 	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(strings.Join(argv, "\x00")+"\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestGraphicalEnvironmentPreservesCompleteSession(t *testing.T) {
-	env := []string{"PATH=/bin", "NIRI_SOCKET=/run/niri.sock", "WAYLAND_DISPLAY=wayland-1"}
-	got := GraphicalEnvironment(env)
-	if !reflect.DeepEqual(got, env) {
-		t.Fatalf("environment changed: %#v", got)
+func writeProcStat(t *testing.T, root string, pid int, ppid int, start int) {
+	t.Helper()
+	fields := []string{"S", strconv.Itoa(ppid)}
+	for len(fields) < 19 {
+		fields = append(fields, "0")
 	}
-	got[0] = "changed"
-	if env[0] == "changed" {
-		t.Fatal("environment was not copied")
+	fields = append(fields, strconv.Itoa(start))
+	payload := strconv.Itoa(pid) + " (proc name) " + strings.Join(fields, " ")
+	if err := os.WriteFile(filepath.Join(root, strconv.Itoa(pid), "stat"), []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGraphicalEnvironmentUsesCompleteManagerTupleAuthoritatively(t *testing.T) {
+	runner := &recordingRunner{outputs: []outputResult{{data: []byte("NIRI_SOCKET=/run/new.sock\nWAYLAND_DISPLAY=wayland-new\nXDG_RUNTIME_DIR=/run/user/1000\nDISPLAY=:99\n")}}}
+	env := []string{"PATH=/bin", "NIRI_SOCKET=/run/old.sock", "WAYLAND_DISPLAY=wayland-old", "XDG_RUNTIME_DIR=/tmp/old"}
+	got, err := graphicalEnvironment(context.Background(), env, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := environmentValues(got)
+	if values["NIRI_SOCKET"] != "/run/new.sock" || values["WAYLAND_DISPLAY"] != "wayland-new" || values["XDG_RUNTIME_DIR"] != "/run/user/1000" || values["DISPLAY"] != "" {
+		t.Fatalf("environment=%#v", values)
+	}
+
+	runner = &recordingRunner{outputs: []outputResult{{data: []byte("NIRI_SOCKET=/run/only.sock\n")}}}
+	if _, err := graphicalEnvironment(context.Background(), []string{"PATH=/bin"}, runner); err == nil {
+		t.Fatal("incomplete manager environment accepted")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := graphicalEnvironment(ctx, nil, blockingCommandRunner{}); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocking user-manager query not bounded: %v", err)
 	}
 }

@@ -5,15 +5,15 @@
 | Shortcut or command | Result |
 |---|---|
 | `Mod+Return` | Niri launches a local Kitty directly. |
-| `Mod+Shift+Return` | Create a persistent Zellij session on Lattice and attach from an owned Kitty on Overton. |
+| `Mod+Shift+Return` | Create one persistent Zellij session on Lattice, attach from Overton, and best-effort open an attach-only Lattice Kitty. |
 | `Mod+Ctrl+Return` | Browse and reopen visible or headless live Lattice sessions. |
 | `redeem resume` | Restore exact prior-boot terminal placement. |
 
-The Home Manager module exports the shortcuts as an opt-in Niri fragment. `mirror new` creates no visible Kitty on Lattice; only the persistent shell and Zellij session run there.
+The Home Manager module exports the shortcuts as an opt-in Niri fragment. `mirror new` always preserves the Overton-created session even when the bounded source-local Kitty helper is unavailable. An optional `--source-workspace` name or number moves the source Kitty once without installing a Niri rule or service.
 
 ## Dependencies and diagnostics
 
-Local capture/resume requires a Linux boot ID, Niri, Kitty, and Zellij. Remote access additionally requires SSH and source-side `redeem mirror snapshot`. The optional image bridge requires `wl-paste`, SCP, and Kitty remote control.
+Local capture/resume requires a Linux boot ID, Niri, Kitty, and Zellij. Remote access additionally requires SSH and source-side `redeem mirror snapshot`. Dual-visible creation requires a compatible source-side `redeem mirror attach-local`; deployment/version skew is tolerated as a post-creation warning. The optional image bridge requires `wl-paste`, SCP, and Kitty remote control.
 
 `redeem doctor` is read-only. It validates configuration and existing checkpoints, reads the boot ID, queries Niri readiness, lists Zellij sessions, checks direct launchers, reports resume/service policy, and checks configured mirror executables. It does not create or repair state.
 
@@ -53,9 +53,10 @@ Prune shares the writer lock, preserves the current boot and newest usable prior
 Do not activate hosts from repository automation. After the user activates the approved package and configuration on Lattice and Overton:
 
 1. **Local shortcut:** press `Mod+Return` on Overton; verify a local Kitty opens without SSH or Redeem routing.
-2. **Remote creation:** press `Mod+Shift+Return`; verify the shell hostname/processes are on Lattice and no visible Kitty was created on Lattice.
-3. **Detach persistence:** note the exact Zellij session name, close the Overton Kitty normally, and verify `redeem mirror list --host lattice` still reports that live headless session.
-4. **Picker reopen:** press `Mod+Ctrl+Return`, choose the exact session, and verify its tabs, panes, processes, and CWD are intact.
-5. **Checkpoint:** run `redeem capture once` and `redeem doctor`; confirm both succeed.
-6. **Prior-boot plan:** after the approved reboot or failure simulation, run `redeem resume --dry-run`; verify it selects the expected prior boot and exact sessions.
-7. **Placement:** run `redeem resume`; verify each terminal appears in its captured workspace, then run it again and verify no duplicate Kitty windows.
+2. **Remote creation:** press `Mod+Shift+Return`; verify the Overton shell runs on Lattice and a second attach-only Kitty opens in the requested Lattice workspace. Confirm only the Overton command contains `--create`.
+3. **Zero-output/partial success:** with no Lattice monitor, confirm creation still succeeds on Overton; accept either a retained non-visible Lattice Kitty or a clear source-helper warning. Verify an older/unavailable source helper never removes the session.
+4. **Detach persistence:** note the exact Zellij session name, close either Kitty normally, and verify `redeem mirror list --host lattice` still reports the live session.
+5. **Picker reopen:** press `Mod+Ctrl+Return`, choose the exact session, and verify its tabs, panes, processes, and CWD are intact.
+6. **Checkpoint:** run `redeem capture once` and `redeem doctor`; confirm both succeed.
+7. **Prior-boot plan:** after the approved reboot or failure simulation, run `redeem resume --dry-run`; verify it selects the expected prior boot and exact sessions.
+8. **Placement:** run `redeem resume`; verify each terminal appears in its captured workspace, then run it again and verify no duplicate Kitty windows.

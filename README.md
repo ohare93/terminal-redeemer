@@ -3,7 +3,7 @@
 `terminal-redeemer` provides four terminal workflows for Niri, Kitty, and Zellij:
 
 1. **`Mod+Return` — local terminal.** Niri launches Kitty directly; Redeem is not involved.
-2. **`Mod+Shift+Return` — new Lattice terminal.** Redeem creates a persistent Zellij session on Lattice and attaches to it in an owned Kitty on Overton.
+2. **`Mod+Shift+Return` — new Lattice terminal.** Redeem creates a persistent Zellij session on Lattice, attaches from an owned Kitty on Overton, and best-effort opens an attach-only Kitty on Lattice.
 3. **`Mod+Ctrl+Return` — browse or reopen Lattice terminals.** The project-first picker includes both visible and headless live Zellij sessions.
 4. **Resume after reboot.** Rolling boot checkpoints restore exact live terminal sessions to their captured Niri workspaces.
 
@@ -12,8 +12,8 @@ The Home Manager module exports these bindings as an opt-in Niri fragment. It do
 ## Remote sessions
 
 ```bash
-redeem mirror new --host lattice       # create on Lattice and attach from Overton
-redeem mirror open --host lattice      # project-first picker
+redeem mirror new --host lattice --source-workspace agentleman  # create once, view on both hosts
+redeem mirror open --host lattice                               # project-first picker
 redeem mirror list --host lattice      # non-interactive live inventory
 ```
 
@@ -30,7 +30,7 @@ The picker groups window-backed sessions by exact Niri workspace identity, using
 
 Automation can continue to bypass the picker with `--all`, repeatable `--session NAME`, or one-based `--select N`.
 
-`mirror new` does **not** create a visible Kitty window on Lattice. The persistent shell and Zellij session run there, while the visible Kitty projection is on Overton.
+`mirror new` remains safe under partial failure: the Overton viewer is the sole creator, then one bounded source-local helper waits for the exact session to become actively verified and opens an attach-only Lattice Kitty. `--source-workspace NAME_OR_NUMBER` optionally moves that source window once; omission uses normal Niri placement. A missing display, older source-side Redeem, version skew, or source placement failure is reported as a warning without killing the session or Overton view. With no connected monitor, Niri may retain the source Kitty without making it physically visible.
 
 Source-side and owned-window support commands are:
 

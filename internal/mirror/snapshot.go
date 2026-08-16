@@ -425,6 +425,14 @@ type ShellRunner struct{}
 
 func (ShellRunner) Run(ctx context.Context, command string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
-	cmd.Env = GraphicalEnvironment(os.Environ())
+	env := os.Environ()
+	if !graphicalEnvironmentComplete(environmentValues(env)) {
+		envCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if recovered, err := graphicalEnvironment(envCtx, env, ExecRunner{}); err == nil {
+			env = recovered
+		}
+	}
+	cmd.Env = env
 	return cmd.Output()
 }

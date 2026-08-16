@@ -1,7 +1,6 @@
 package mirror
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,8 +8,9 @@ import (
 )
 
 const (
-	DefaultSourceReadyTimeout = 5 * time.Second
-	DefaultSourcePollInterval = 250 * time.Millisecond
+	DefaultSourceHelperTimeout = 15 * time.Second
+	DefaultLocalAttachTimeout  = 10 * time.Second
+	DefaultSourcePollInterval  = 100 * time.Millisecond
 )
 
 // ValidateWorkspaceReference accepts a bounded Niri workspace name or positive
@@ -34,16 +34,17 @@ func ValidateWorkspaceReference(reference string) error {
 }
 
 type SourceAttachConfig struct {
-	SourceHost    string
-	SSHCommand    string
-	SSHOptions    []string
-	RemoteCommand string
-	Session       string
-	Workspace     string
+	SourceHost      string
+	SSHCommand      string
+	SSHOptions      []string
+	SnapshotCommand []string
+	Session         string
+	Workspace       string
 }
 
-// PlanSourceAttach invokes Redeem on the source. OpenSSH accepts the remote
-// command as one string, so every argv item is deterministically shell-quoted.
+// PlanSourceAttach derives the source-side Redeem invocation only from a
+// configured command ending in the exact `mirror snapshot` suffix. Prefixes
+// such as wrappers or absolute executable paths are preserved unchanged.
 func PlanSourceAttach(cfg SourceAttachConfig) (Command, error) {
 	if err := ValidateDestination(cfg.SourceHost); err != nil {
 		return Command{}, err
@@ -54,102 +55,29 @@ func PlanSourceAttach(cfg SourceAttachConfig) (Command, error) {
 	if err := ValidateWorkspaceReference(cfg.Workspace); err != nil {
 		return Command{}, err
 	}
-	if strings.TrimSpace(cfg.SSHCommand) == "" || strings.TrimSpace(cfg.RemoteCommand) == "" {
-		return Command{}, fmt.Errorf("SSH and remote Redeem commands must not be empty")
+	if strings.TrimSpace(cfg.SSHCommand) == "" {
+		return Command{}, fmt.Errorf("SSH command must not be empty")
 	}
-
-	remoteArgv := []string{cfg.RemoteCommand, "mirror", "attach-local", "--session", cfg.Session}
-	if cfg.Workspace != "" {
-		remoteArgv = append(remoteArgv, "--workspace", cfg.Workspace)
+	remoteArgv, err := sourceAttachArgv(cfg.SnapshotCommand, cfg.Session, cfg.Workspace)
+	if err != nil {
+		return Command{}, err
 	}
 	args := append([]string(nil), cfg.SSHOptions...)
 	args = append(args, "--", cfg.SourceHost, QuoteCommand(remoteArgv))
 	return Command{Name: cfg.SSHCommand, Args: args}, nil
 }
 
-type SnapshotAcquirer func(context.Context) (Snapshot, error)
-type WaitFunc func(context.Context, time.Duration) error
-
-type DualNewCoordinator struct {
-	Runner       Runner
-	Acquire      SnapshotAcquirer
-	Wait         WaitFunc
-	Timeout      time.Duration
-	PollInterval time.Duration
-}
-
-type DualNewResult struct {
-	SourceError error
-}
-
-// Run starts the sole creator exactly once. Source readiness and the source
-// helper are best effort: their failure is returned in SourceError, never as a
-// creator failure.
-func (coordinator DualNewCoordinator) Run(ctx context.Context, creator LaunchPlan, sourceHelper Command) (DualNewResult, error) {
-	runner := coordinator.Runner
-	if runner == nil {
-		runner = ExecRunner{}
+func sourceAttachArgv(snapshotCommand []string, session string, workspace string) ([]string, error) {
+	if len(snapshotCommand) < 3 || snapshotCommand[len(snapshotCommand)-2] != "mirror" || snapshotCommand[len(snapshotCommand)-1] != "snapshot" {
+		return nil, fmt.Errorf("mirror.snapshotCommand must end with exact argv suffix `mirror snapshot` for source Kitty support")
 	}
-	if err := runner.Run(ctx, creator.Command); err != nil {
-		return DualNewResult{}, err
+	prefix := append([]string(nil), snapshotCommand[:len(snapshotCommand)-2]...)
+	if len(prefix) == 0 || strings.TrimSpace(prefix[0]) == "" {
+		return nil, fmt.Errorf("mirror.snapshotCommand has no executable prefix")
 	}
-	if coordinator.Acquire == nil {
-		return DualNewResult{SourceError: fmt.Errorf("source readiness observer is unavailable")}, nil
+	remoteArgv := append(prefix, "mirror", "attach-local", "--session", session)
+	if workspace != "" {
+		remoteArgv = append(remoteArgv, "--workspace", workspace)
 	}
-
-	timeout := coordinator.Timeout
-	if timeout <= 0 {
-		timeout = DefaultSourceReadyTimeout
-	}
-	interval := coordinator.PollInterval
-	if interval <= 0 {
-		interval = DefaultSourcePollInterval
-	}
-	wait := coordinator.Wait
-	if wait == nil {
-		wait = waitContext
-	}
-	attempts := int(timeout/interval) + 1
-	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
-		snapshot, err := coordinator.Acquire(ctx)
-		if err == nil && snapshotHasExactSession(snapshot, creator.Session) {
-			if err := runner.Run(ctx, sourceHelper); err != nil {
-				return DualNewResult{SourceError: fmt.Errorf("launch source Kitty: %w", err)}, nil
-			}
-			return DualNewResult{}, nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-		if attempt+1 < attempts {
-			if err := wait(ctx, interval); err != nil {
-				return DualNewResult{SourceError: err}, nil
-			}
-		}
-	}
-	if lastErr != nil {
-		return DualNewResult{SourceError: fmt.Errorf("source session %q did not become ready: %w", creator.Session, lastErr)}, nil
-	}
-	return DualNewResult{SourceError: fmt.Errorf("source session %q did not become ready within %s", creator.Session, timeout)}, nil
-}
-
-func snapshotHasExactSession(snapshot Snapshot, session string) bool {
-	for _, window := range snapshot.Windows {
-		if SessionName(window) == session {
-			return true
-		}
-	}
-	return false
-}
-
-func waitContext(ctx context.Context, duration time.Duration) error {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return remoteArgv, nil
 }
