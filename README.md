@@ -19,6 +19,17 @@ redeem mirror list --host lattice      # non-interactive live inventory
 
 Closing an Overton mirror window detaches it; the Zellij session continues on Lattice and remains discoverable. Existing sessions are exact attach-only. `mirror new` uses attach-or-create only for its newly generated safe identity.
 
+### Picker controls
+
+The picker groups window-backed sessions by exact Niri workspace identity, using a readable fallback label for unnamed workspaces, and keeps live headless sessions visible in a separate **Headless Zellij** section. Type any printable character—including `j` and `k`—to filter by project, activity, session, workspace, or CWD. Only `↑` and `↓` move the current row.
+
+- `Space` toggles the current session.
+- `Ctrl+A` toggles all sessions matching the current filter.
+- `Enter` opens checked sessions in discovery order, or the current session when none are checked.
+- `Esc` clears a non-empty filter; press it again to cancel.
+
+Automation can continue to bypass the picker with `--all`, repeatable `--session NAME`, or one-based `--select N`.
+
 `mirror new` does **not** create a visible Kitty window on Lattice. The persistent shell and Zellij session run there, while the visible Kitty projection is on Overton.
 
 Source-side and owned-window support commands are:
