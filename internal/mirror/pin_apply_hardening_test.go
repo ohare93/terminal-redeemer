@@ -19,12 +19,12 @@ func TestPrepareApplyFailsClosedOnlyForMatchingAmbiguousCandidate(t *testing.T) 
 			9: {{SourceHost: "lattice", Session: "A"}, {SourceHost: "other", Session: "B"}},
 		},
 	}
-	result := prepareApply(pin, snapshot, inventory, []OwnedWorkspace{{ID: 1, Index: 1, Name: "work"}})
+	result := prepareApply(pin, activeSet(snapshot.ActiveSessions...), inventory, []OwnedWorkspace{{ID: 1, Index: 1, Name: "work"}})
 	if result.Items[0].Status != ApplyAmbiguous {
 		t.Fatalf("matching ambiguous candidate did not block launch: %#v", result)
 	}
 	inventory.AmbiguousCandidates[9] = []Projection{{SourceHost: "lattice", Session: "B"}, {SourceHost: "other", Session: "A"}}
-	result = prepareApply(pin, snapshot, inventory, []OwnedWorkspace{{ID: 1, Index: 1, Name: "work"}})
+	result = prepareApply(pin, activeSet(snapshot.ActiveSessions...), inventory, []OwnedWorkspace{{ID: 1, Index: 1, Name: "work"}})
 	if result.Items[0].Status != ApplyReady {
 		t.Fatalf("unrelated ambiguous candidates globally blocked launch: %#v", result)
 	}

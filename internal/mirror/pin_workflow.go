@@ -157,6 +157,10 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 	if err := validateText("source profile", cfg.Snapshot.Profile, 128, false); err != nil {
 		return ApplyResult{}, err
 	}
+	activeSessions, err := exactActiveSessionInventory(cfg.Snapshot)
+	if err != nil {
+		return ApplyResult{}, err
+	}
 	if cfg.Timeout <= 0 || cfg.PollInterval <= 0 || cfg.PollInterval > cfg.Timeout {
 		return ApplyResult{}, fmt.Errorf("apply timeout and poll interval must be positive, and poll interval must not exceed timeout")
 	}
@@ -205,7 +209,7 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 		return ApplyResult{}, err
 	}
 	workspaces, workspaceErr := deps.Workspaces(ctx)
-	result = prepareApply(pin, cfg.Snapshot, inventory, workspaces)
+	result = prepareApply(pin, activeSessions, inventory, workspaces)
 	if workspaceErr != nil {
 		for i := range result.Items {
 			if result.Items[i].Status == ApplyReady {
@@ -276,11 +280,24 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 	return result, nil
 }
 
-func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, workspaces []OwnedWorkspace) ApplyResult {
-	active := make(map[string]struct{})
-	for _, window := range Discover(snapshot) {
-		active[SessionName(window)] = struct{}{}
+func exactActiveSessionInventory(snapshot Snapshot) (map[string]struct{}, error) {
+	if snapshot.ActiveSessions == nil {
+		return nil, fmt.Errorf("fresh source snapshot has no complete ACTIVE Zellij inventory (source Redeem upgrade required)")
 	}
+	active := make(map[string]struct{}, len(snapshot.ActiveSessions))
+	for i, session := range snapshot.ActiveSessions {
+		if err := ValidateSession(session); err != nil {
+			return nil, fmt.Errorf("malformed ACTIVE Zellij session %d: %w", i, err)
+		}
+		if _, exists := active[session]; exists {
+			return nil, fmt.Errorf("malformed ACTIVE Zellij inventory: duplicate exact session %q", session)
+		}
+		active[session] = struct{}{}
+	}
+	return active, nil
+}
+
+func prepareApply(pin Pin, active map[string]struct{}, inventory ProjectionInventory, workspaces []OwnedWorkspace) ApplyResult {
 	open := make(map[string]int)
 	for _, projection := range inventory.Exact {
 		if projection.SourceHost == pin.SourceHost {
@@ -292,14 +309,14 @@ func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, wor
 		item := ApplyItem{PinnedProjection: pinned}
 		_, isActive := active[pinned.Session]
 		switch {
+		case !isActive:
+			item.Status, item.Reason = ApplyMissing, "exact ACTIVE source session is unavailable"
 		case hasAmbiguousCandidate(inventory, pin.SourceHost, pinned.Session, ""):
 			item.Status, item.Reason = ApplyAmbiguous, "ambiguous owned window contains matching projection evidence"
 		case open[pinned.Session] > 1:
 			item.Status, item.Reason = ApplyAmbiguous, "multiple exact projections are already open"
 		case open[pinned.Session] == 1:
 			item.Status = ApplyAlreadyOpen
-		case !isActive:
-			item.Status, item.Reason = ApplyMissing, "exact ACTIVE source session is unavailable"
 		default:
 			item.Status = ApplyReady
 			item.target = resolveWorkspaceReference(pinned.Workspace, workspaces)

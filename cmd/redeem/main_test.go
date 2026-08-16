@@ -540,7 +540,7 @@ func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
 func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
 	ssh := filepath.Join(dir, "ssh")
-	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"windows\":[{\"order\":0,\"app_id\":\"zellij\",\"title\":\"A\",\"headless\":true,\"zellij_session\":\"A\"}]}'\n"), 0o700); err != nil {
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"active_zellij_sessions\":[\"A\"],\"windows\":[{\"order\":0,\"app_id\":\"zellij\",\"title\":\"A\",\"headless\":true,\"zellij_session\":\"A\"}]}'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	niri := filepath.Join(dir, "niri")

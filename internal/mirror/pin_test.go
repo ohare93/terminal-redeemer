@@ -198,20 +198,20 @@ func TestBuildPinUsesTransportIdentityAndLocalOrderAcrossWorkspaces(t *testing.T
 func TestPrepareApplyMissingDuplicateCaseDistinctAndNoop(t *testing.T) {
 	pin := testPin("Alpha")
 	pin.Projections = append(pin.Projections, pinned("alpha", 1))
-	snapshot := Snapshot{Host: "lattice", Profile: "default", Windows: []Window{{Order: 0, AppID: "zellij", Headless: true, ZellijSession: "Alpha"}}}
+	snapshot := Snapshot{Host: "lattice", Profile: "default", ActiveSessions: []string{"Alpha"}, Windows: []Window{{Order: 0, AppID: "zellij", Headless: true, ZellijSession: "Alpha"}}}
 	inventory := ProjectionInventory{Exact: []Projection{{SourceHost: "other", Session: "Alpha"}}, Ambiguous: []OwnedWindow{{ID: 9}}}
-	result := prepareApply(pin, snapshot, inventory, []OwnedWorkspace{{ID: 1, Index: 1}, {ID: 2, Index: 2}})
+	result := prepareApply(pin, activeSet(snapshot.ActiveSessions...), inventory, []OwnedWorkspace{{ID: 1, Index: 1}, {ID: 2, Index: 2}})
 	if result.Items[0].Status != ApplyReady || result.Items[1].Status != ApplyMissing || result.Ambiguous != 1 {
 		t.Fatalf("items=%#v", result)
 	}
 	inventory.Exact = []Projection{{SourceHost: "lattice", Session: "Alpha"}, {SourceHost: "lattice", Session: "Alpha"}}
-	result = prepareApply(pin, snapshot, inventory, nil)
+	result = prepareApply(pin, activeSet(snapshot.ActiveSessions...), inventory, nil)
 	if result.Items[0].Status != ApplyAmbiguous {
 		t.Fatalf("items=%#v", result.Items)
 	}
 	empty := testPin("unused")
 	empty.Projections = []PinnedProjection{}
-	if got := prepareApply(empty, Snapshot{}, ProjectionInventory{}, nil); len(got.Items) != 0 {
+	if got := prepareApply(empty, activeSet(), ProjectionInventory{}, nil); len(got.Items) != 0 {
 		t.Fatalf("noop=%#v", got)
 	}
 }
@@ -401,11 +401,19 @@ func applyTestConfig(t *testing.T, pin Pin, snapshot Snapshot) ApplyConfig {
 }
 
 func activeSnapshot(host string, sessions ...string) Snapshot {
-	snapshot := Snapshot{Host: host, Profile: "default", Windows: []Window{}}
+	snapshot := Snapshot{Host: host, Profile: "default", ActiveSessions: append([]string{}, sessions...), Windows: []Window{}}
 	for i, session := range sessions {
 		snapshot.Windows = append(snapshot.Windows, Window{Order: i, AppID: "zellij", Headless: true, ZellijSession: session})
 	}
 	return snapshot
+}
+
+func activeSet(sessions ...string) map[string]struct{} {
+	active := make(map[string]struct{}, len(sessions))
+	for _, session := range sessions {
+		active[session] = struct{}{}
+	}
+	return active
 }
 
 func pinned(session string, order int) PinnedProjection {
