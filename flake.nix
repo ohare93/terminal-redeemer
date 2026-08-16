@@ -56,11 +56,22 @@
           ${self.packages.${system}.terminal-redeemer}/bin/redeem --help > root-help
           grep -q "Refresh this boot's rolling terminal checkpoint" root-help
           grep -q "Restore exact prior-boot terminal placement" root-help
-          grep -q "Create, browse, and reopen remote terminal sessions" root-help
+          grep -q "Create, pick, pin, apply, or temporarily follow remote terminals" root-help
           grep -q "Read-only capture/resume/mirror diagnostics" root-help
 
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror --help > mirror-help
+          grep -q "Manually pick and attach visible or headless live sessions" mirror-help
+          grep -q "Replace one pinned projection set from fresh exact evidence" mirror-help
+          grep -q "Temporarily follow one selected source workspace in the foreground" mirror-help
           ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror new --help > /dev/null 2> mirror-new-help
+          grep -q -- "-source-workspace" mirror-new-help
           ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror open --help > /dev/null 2> mirror-open-help
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror save --help > /dev/null 2> mirror-save-help
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror apply --help > /dev/null 2> mirror-apply-help
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror follow --help > /dev/null 2> mirror-follow-help
+          grep -q -- "-max-per-poll" mirror-follow-help
+          grep -q -- "-max-total" mirror-follow-help
+          grep -q -- "minimum 2s" mirror-follow-help
           ${self.packages.${system}.terminal-redeemer}/bin/redeem resume --help > /dev/null 2> resume-help
           touch "$out"
         '';
@@ -94,6 +105,7 @@
                     resume.terminalCommand = "foot";
                     mirror = {
                       sourceHost = "source.example";
+                      sourceWorkspace = "agentleman";
                       sshCommand = "custom-ssh";
                       sshOptions = [ "-p" "2222" ];
                       snapshotCommand = [ "remote-redeem" "mirror" "snapshot" ];
@@ -141,14 +153,19 @@
           assert rendered.resume.timeout == "8s";
           assert rendered.resume.pollInterval == "25ms";
           assert cfg.programs.terminal-redeemer.mirror.localCommand == [ "custom-kitty" ];
-          assert cfg.programs.terminal-redeemer.mirror.newCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "new" "--host" "source.example" ];
+          assert cfg.programs.terminal-redeemer.mirror.newCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "new" "--host" "source.example" "--source-workspace" "agentleman" ];
           assert cfg.programs.terminal-redeemer.mirror.openCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "open" "--host" "source.example" ];
+          assert cfg.programs.terminal-redeemer.mirror.saveCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "save" "--host" "source.example" ];
+          assert cfg.programs.terminal-redeemer.mirror.applyCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "apply" "--host" "source.example" ];
+          assert cfg.programs.terminal-redeemer.mirror.followCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "follow" "--host" "source.example" ];
           assert pkgs.lib.hasInfix ''Mod+Return { spawn "custom-kitty"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert pkgs.lib.hasInfix ''Mod+Shift+Return { spawn '' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
-          assert pkgs.lib.hasInfix ''"mirror" "new" "--host" "source.example"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"mirror" "new" "--host" "source.example" "--source-workspace" "agentleman"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert pkgs.lib.hasInfix ''Mod+Ctrl+Return { spawn '' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert pkgs.lib.hasInfix ''"mirror" "open" "--host" "source.example"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert rendered.mirror.sourceHost == "source.example";
+          assert !(rendered.mirror ? sourceWorkspace);
+          assert !(pkgs.lib.hasInfix ''"mirror" "follow"'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment);
           assert rendered.mirror.sshOptions == [ "-p" "2222" ];
           assert rendered.mirror.snapshotCommand == [ "remote-redeem" "mirror" "snapshot" ];
           assert rendered.mirror.appID == "redeem-owned";
@@ -216,9 +233,17 @@
           assert !(cfg.systemd.user.services ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.timers ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.services ? terminal-redeemer-resume);
+          assert !(cfg.systemd.user.services ? terminal-redeemer-follow);
+          assert !(cfg.systemd.user.timers ? terminal-redeemer-follow);
+          assert cfg.programs.terminal-redeemer.mirror.newCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "new" ];
+          assert cfg.programs.terminal-redeemer.mirror.openCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "open" ];
+          assert cfg.programs.terminal-redeemer.mirror.saveCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "save" ];
+          assert cfg.programs.terminal-redeemer.mirror.applyCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "apply" ];
+          assert cfg.programs.terminal-redeemer.mirror.followCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "mirror" "follow" ];
           assert pkgs.lib.hasInfix ''Mod+Return { spawn "kitty"; }'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert pkgs.lib.hasInfix "Mod+Shift+Return" cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert pkgs.lib.hasInfix "Mod+Ctrl+Return" cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert !(pkgs.lib.hasInfix ''"mirror" "follow"'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment);
           hmCfg.activationPackage;
 
         checks.nixos-module-eval =
@@ -241,6 +266,7 @@
                       resume.onStartup = true;
                       resume.terminalCommand = "foot";
                       mirror.sourceHost = "source.example";
+                      mirror.sourceWorkspace = "agentleman";
                     };
                   };
                 }
@@ -253,7 +279,7 @@
           assert rendered.resume.terminalCommand == "foot";
           assert rendered.mirror.sourceHost == "source.example";
           assert pkgs.lib.hasInfix ''Mod+Return { spawn "kitty"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
-          assert pkgs.lib.hasInfix ''"mirror" "new" "--host" "source.example"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"mirror" "new" "--host" "source.example" "--source-workspace" "agentleman"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert pkgs.lib.hasInfix ''"mirror" "open" "--host" "source.example"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;
           assert hmUser.systemd.user.services ? terminal-redeemer-resume;
           pkgs.runCommand "nixos-module-eval" { } ''

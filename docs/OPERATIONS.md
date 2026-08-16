@@ -1,15 +1,17 @@
 # Operations
 
-## Four workflows
+## Bounded workflows
 
 | Shortcut or command | Result |
 |---|---|
 | `Mod+Return` | Niri launches a local Kitty directly. |
-| `Mod+Shift+Return` | Create one persistent Zellij session on Lattice, attach from Overton, and best-effort open an attach-only Lattice Kitty. |
-| `Mod+Ctrl+Return` | Browse and reopen visible or headless live Lattice sessions. |
-| `redeem resume` | Restore exact prior-boot terminal placement. |
+| `Mod+Shift+Return` | Overton creates one persistent Lattice session and best-effort opens an attach-only Lattice Kitty. |
+| `Mod+Ctrl+Return` | Manually browse and reopen visible or headless live Lattice sessions. |
+| `redeem mirror save/apply` | Manually replace or apply one exact pinned projection set outside rolling checkpoints. |
+| `redeem mirror follow` | Temporarily add missing projections from one interactively selected source workspace while the foreground command runs. |
+| `redeem resume` | Restore exact prior-boot local terminal placement from rolling checkpoints. |
 
-The Home Manager module exports the shortcuts as an opt-in Niri fragment. `mirror new` always preserves the Overton-created session even when the bounded source-local Kitty helper is unavailable. An optional `--source-workspace` name or number moves the source Kitty once without installing a Niri rule or service.
+The Home Manager module exports the three shortcuts as an opt-in Niri fragment and direct argv for all mirror workflows. `mirror new` always preserves the Overton-created session even when the bounded source-local Kitty helper is unavailable. An optional `--source-workspace` name or number moves the source Kitty once. Follow has no installed Niri rule, service, timer, or persistent selection.
 
 ## Dependencies and diagnostics
 
@@ -68,3 +70,7 @@ Do not activate hosts from repository automation. After the user activates the a
 6. **Checkpoint:** run `redeem capture once` and `redeem doctor`; confirm both succeed.
 7. **Prior-boot plan:** after the approved reboot or failure simulation, run `redeem resume --dry-run`; verify it selects the expected prior boot and exact sessions.
 8. **Placement:** run `redeem resume`; verify each terminal appears in its captured workspace, then run it again and verify no duplicate Kitty windows.
+9. **Same-boot pinned continuity:** while the intended Overton projections are open, run `redeem mirror save --host lattice`. Disconnect or restart the viewer without ending the source sessions, reconnect in the same boot, run `redeem mirror apply --host lattice`, and verify exact sessions, captured opening order, workspaces, floating/tiled state, and supported sizes. Run apply again and verify it is a no-op; do not expect exact column or stack reconstruction.
+10. **Follow start, stop, and reconnect:** run `redeem mirror follow --host lattice`, select a named and then a numbered workspace in separate runs, and verify only visible exact sessions are added in source order. Interrupt SSH and restore it; confirm status backs off and later resumes additions without closing existing windows. Press `q`, Ctrl+C, and close the containing Kitty in separate runs; confirm each stops polling promptly.
+11. **Follow lifecycle:** while following, manually close one eligible projection and verify the next healthy poll reopens it. Then exit its source Zellij session and verify the clients close naturally with no Redeem close action. Confirm headless sessions and non-terminal windows are never added.
+12. **Activation/version skew:** activate only after the reviewed immutable package and mono/nix pin agree. Before upgrading the source helper, verify `mirror new` still leaves the Overton-created session usable and emits only a source-view warning; after both hosts match, repeat dual-visible, save/apply, and follow checks. Treat these physical observations as deployment evidence, never as results of repository build checks.

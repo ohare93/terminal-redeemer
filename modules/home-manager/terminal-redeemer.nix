@@ -54,10 +54,14 @@ let
   pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
   renderNiriSpawn = argv: "spawn " + lib.concatMapStringsSep " " builtins.toJSON argv + ";";
   mirrorLocalCommand = [ cfg.mirror.launcherCommand ];
+  mirrorHostArgs = lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
   mirrorNewCommand = [ (lib.getExe cfg.package) "mirror" "new" ]
-    ++ lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
-  mirrorOpenCommand = [ (lib.getExe cfg.package) "mirror" "open" ]
-    ++ lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
+    ++ mirrorHostArgs
+    ++ lib.optionals (cfg.mirror.sourceWorkspace != "") [ "--source-workspace" cfg.mirror.sourceWorkspace ];
+  mirrorOpenCommand = [ (lib.getExe cfg.package) "mirror" "open" ] ++ mirrorHostArgs;
+  mirrorSaveCommand = [ (lib.getExe cfg.package) "mirror" "save" ] ++ mirrorHostArgs;
+  mirrorApplyCommand = [ (lib.getExe cfg.package) "mirror" "apply" ] ++ mirrorHostArgs;
+  mirrorFollowCommand = [ (lib.getExe cfg.package) "mirror" "follow" ] ++ mirrorHostArgs;
   mirrorNiriIntegrationFragment = ''
     // Terminal Redeemer explicit local and remote terminal shortcuts.
     // Opt-in template only; this module does not install these bindings.
@@ -170,10 +174,14 @@ in {
 
     mirror = {
       localCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorLocalCommand; description = "Direct local Kitty argv suitable for Mod+Return."; };
-      newCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorNewCommand; description = "Packaged argv creating and attaching a new persistent remote session."; };
-      openCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorOpenCommand; description = "Packaged argv opening the remote session picker."; };
+      newCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorNewCommand; description = "Packaged argv creating one persistent remote session and best-effort opening its source view."; };
+      openCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorOpenCommand; description = "Packaged argv opening the manual remote session picker."; };
+      saveCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorSaveCommand; description = "Packaged argv replacing the pinned manual projection set from fresh evidence."; };
+      applyCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorApplyCommand; description = "Packaged argv applying the pinned manual projection set attach-only."; };
+      followCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = mirrorFollowCommand; description = "Packaged argv starting the temporary foreground workspace-follow TUI."; };
       niriIntegrationFragment = lib.mkOption { type = lib.types.lines; readOnly = true; default = mirrorNiriIntegrationFragment; description = "Generated opt-in Niri shortcuts for local, new remote, and remote picker terminals; never installed automatically."; };
       sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "SSH source host for live session mirroring."; };
+      sourceWorkspace = lib.mkOption { type = lib.types.str; default = ""; description = "Optional source Niri workspace name or number passed only to mirror new; empty preserves normal source placement."; };
       sshCommand = lib.mkOption { type = lib.types.str; default = "ssh"; description = "SSH executable."; };
       sshOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "SSH argv options."; };
       snapshotCommand = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "redeem" "mirror" "snapshot" ]; description = "Remote snapshot command argv."; };
@@ -202,6 +210,11 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [{
+      assertion = cfg.mirror.sourceWorkspace == "" || cfg.mirror.sourceHost != "";
+      message = "programs.terminal-redeemer.mirror.sourceWorkspace requires mirror.sourceHost";
+    }];
+
     home.packages = [ cfg.package ];
     programs.terminal-redeemer.renderedConfig = renderedConfig;
 

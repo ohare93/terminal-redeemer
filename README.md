@@ -1,13 +1,15 @@
 # terminal-redeemer
 
-`terminal-redeemer` provides four terminal workflows for Niri, Kitty, and Zellij:
+`terminal-redeemer` provides separate, bounded terminal workflows for Niri, Kitty, and Zellij:
 
 1. **`Mod+Return` — local terminal.** Niri launches Kitty directly; Redeem is not involved.
-2. **`Mod+Shift+Return` — new Lattice terminal.** Redeem creates a persistent Zellij session on Lattice, attaches from an owned Kitty on Overton, and best-effort opens an attach-only Kitty on Lattice.
-3. **`Mod+Ctrl+Return` — browse or reopen Lattice terminals.** The project-first picker includes both visible and headless live Zellij sessions.
-4. **Resume after reboot.** Rolling boot checkpoints restore exact live terminal sessions to their captured Niri workspaces.
+2. **`Mod+Shift+Return` — new dual-visible Lattice terminal.** Overton alone creates the persistent session, then Redeem best-effort opens an attach-only source Kitty.
+3. **`Mod+Ctrl+Return` — manual picker.** Browse or reopen visible and headless live Lattice sessions without persistent selection.
+4. **Pinned save/apply.** Manually replace and later apply one exact projection set; it is independent of rolling checkpoints.
+5. **Foreground workspace follow.** Temporarily add missing visible projections from one runtime-selected workspace until the command exits.
+6. **Prior-boot resume.** Rolling local checkpoints restore exact live terminal sessions to their captured Niri workspaces.
 
-The Home Manager module exports these bindings as an opt-in Niri fragment. It does not install the fragment automatically.
+The Home Manager module exports only the three shortcuts as an opt-in Niri fragment. It also exports direct argv for new/open/save/apply/follow, but installs no follow service, timer, rule, or saved selection.
 
 ## Remote sessions
 
@@ -67,6 +69,7 @@ Resume is terminal-only and attach-only. It never recreates a missing captured s
 - [Configuration](docs/CONFIG.md)
 - [Operations and physical smoke checklist](docs/OPERATIONS.md)
 - [Prior-boot resume decision](docs/adr/0001-resume-zellij-terminals-in-niri.md)
+- [Bounded mirror continuity decision](docs/adr/0002-bounded-mirror-continuity.md)
 
 Home Manager can schedule capture and optionally run resume at graphical-session startup. Startup resume is disabled by default. Disable any competing startup terminal restorer before enabling it.
 

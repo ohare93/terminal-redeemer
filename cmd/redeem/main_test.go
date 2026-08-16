@@ -41,7 +41,7 @@ func TestHelpByDefault(t *testing.T) {
 	for _, want := range []string{
 		"Refresh this boot's rolling terminal checkpoint",
 		"Restore exact prior-boot terminal placement",
-		"Create, browse, and reopen remote terminal sessions",
+		"Create, pick, pin, apply, or temporarily follow remote terminals",
 		"Read-only capture/resume/mirror diagnostics",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -63,8 +63,28 @@ func TestHelpDoesNotRequireValidRuntimeConfig(t *testing.T) {
 	if code := run([]string{"--config", path, "--help"}, &out, &stderr); code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "Create, browse, and reopen remote terminal sessions") {
+	if !strings.Contains(out.String(), "Create, pick, pin, apply, or temporarily follow remote terminals") {
 		t.Fatalf("unexpected help: %q", out.String())
+	}
+}
+
+func TestMirrorHelpDistinguishesBoundedWorkflows(t *testing.T) {
+	t.Parallel()
+
+	var out, stderr bytes.Buffer
+	if code := run([]string{"mirror", "--help"}, &out, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"Create one persistent session and best-effort open its source view",
+		"Manually pick and attach visible or headless live sessions",
+		"Replace one pinned projection set from fresh exact evidence",
+		"Attach the available sessions from that pin without creating them",
+		"Temporarily follow one selected source workspace in the foreground",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("mirror help missing %q: %q", want, out.String())
+		}
 	}
 }
 
@@ -95,6 +115,8 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror list", args: []string{"mirror", "list", "--help"}},
 		{name: "mirror open", args: []string{"mirror", "open", "--help"}},
 		{name: "mirror new", args: []string{"mirror", "new", "--help"}},
+		{name: "mirror save", args: []string{"mirror", "save", "--help"}},
+		{name: "mirror apply", args: []string{"mirror", "apply", "--help"}},
 		{name: "mirror follow", args: []string{"mirror", "follow", "--help"}},
 		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
 		{name: "mirror close", args: []string{"mirror", "close", "--help"}},

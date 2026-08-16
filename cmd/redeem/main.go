@@ -137,11 +137,11 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 
 func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|new|save|apply|follow|status|close|paste-image> [flags]")
+		printMirrorHelp(stderr)
 		return 2
 	}
 	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|new|save|apply|follow|status|close|paste-image> [flags]")
+		printMirrorHelp(stdout)
 		return 0
 	}
 	switch args[0] {
@@ -1284,13 +1284,29 @@ func printHelp(w io.Writer) {
 	writeln(w, "Commands:")
 	writeln(w, "  capture   Refresh this boot's rolling terminal checkpoint")
 	writeln(w, "  resume    Restore exact prior-boot terminal placement")
-	writeln(w, "  mirror    Create, browse, and reopen remote terminal sessions")
+	writeln(w, "  mirror    Create, pick, pin, apply, or temporarily follow remote terminals")
 	writeln(w, "  prune     Prune old boot checkpoints")
 	writeln(w, "  doctor    Read-only capture/resume/mirror diagnostics")
 	writeln(w)
 	writeln(w, "Flags:")
 	writeln(w, "  --config <path>  Path to YAML config file")
 	writeln(w, "  -h, --help  Show help")
+}
+
+func printMirrorHelp(w io.Writer) {
+	writeln(w, "usage: redeem mirror <command> [flags]")
+	writeln(w)
+	writeln(w, "Commands:")
+	writeln(w, "  new          Create one persistent session and best-effort open its source view")
+	writeln(w, "  open         Manually pick and attach visible or headless live sessions")
+	writeln(w, "  list         Print the current live source-session inventory")
+	writeln(w, "  save         Replace one pinned projection set from fresh exact evidence")
+	writeln(w, "  apply        Attach the available sessions from that pin without creating them")
+	writeln(w, "  follow       Temporarily follow one selected source workspace in the foreground")
+	writeln(w, "  snapshot     Emit a complete source workspace/window/session snapshot")
+	writeln(w, "  status       Inspect one exact locally active Zellij session")
+	writeln(w, "  close        Close only positively verified owned mirror windows")
+	writeln(w, "  paste-image  Copy and display one clipboard image through the mirror bridge")
 }
 
 func localInstallPath() string {
