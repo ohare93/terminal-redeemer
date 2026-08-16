@@ -260,7 +260,7 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 			item.Status, item.Reason = ApplyFailed, "attach-only launch failed: "+err.Error()
 			continue
 		}
-		windowID, err := waitForNewProjection(ctx, cfg, *item, token, matching, beforeOwned, deps, evidence)
+		windowID, err := waitForNewProjection(ctx, cfg, *item, token, matching, beforeOwned, deps, evidence, false)
 		if err != nil {
 			item.Status = ApplyFailed
 			if errors.Is(err, errProjectionAmbiguous) {
@@ -380,7 +380,7 @@ func ownedWindowIDs(windows []OwnedWindow) map[int]struct{} {
 	return ids
 }
 
-func waitForNewProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, token string, beforeExact, beforeOwned map[int]struct{}, deps ApplyDeps, evidence ProjectionEvidenceConfig) (int, error) {
+func waitForNewProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, token string, beforeExact, beforeOwned map[int]struct{}, deps ApplyDeps, evidence ProjectionEvidenceConfig, strictInventory bool) (int, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	for {
@@ -388,6 +388,12 @@ func waitForNewProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, 
 			return 0, fmt.Errorf("new projection for %q did not appear: %w", item.Session, err)
 		}
 		_, inventory, err := observeApplyWindows(waitCtx, cfg, deps, evidence)
+		if strictInventory && err != nil {
+			return 0, fmt.Errorf("projection evidence unavailable while correlating %q: %w", item.Session, err)
+		}
+		if strictInventory && (len(inventory.Untracked) > 0 || len(inventory.Ambiguous) > 0) {
+			return 0, fmt.Errorf("projection evidence degraded while correlating %q (untracked=%d ambiguous=%d)", item.Session, len(inventory.Untracked), len(inventory.Ambiguous))
+		}
 		if err == nil {
 			newMatches := make([]int, 0, 1)
 			for _, projection := range inventory.Exact {
@@ -403,9 +409,9 @@ func waitForNewProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, 
 			if len(newMatches) > 1 {
 				return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
 			}
-			// Only ambiguous evidence containing this exact token/session can
-			// block correlation; unrelated ambiguous windows do not globally
-			// prevent safe additions.
+			// Pin apply intentionally blocks only ambiguous evidence containing
+			// this exact token/session. Follow opts into strict whole-inventory
+			// evidence above because it must stop the remaining batch.
 			if hasAmbiguousCandidate(inventory, cfg.SourceHost, item.Session, token) {
 				return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
 			}

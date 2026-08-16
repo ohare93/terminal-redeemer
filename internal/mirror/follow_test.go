@@ -71,6 +71,39 @@ func TestFollowSnapshotExactJoinsAndGlobalSessionUniquenessFailClosed(t *testing
 	}
 }
 
+func TestFollowRejectsSessionDuplicatesIncludingHeadless(t *testing.T) {
+	cases := map[string]Snapshot{
+		"visible and headless": func() Snapshot {
+			snapshot := followSnapshot("A")
+			snapshot.Windows = append(snapshot.Windows, Window{
+				Order: 1, Headless: true, AppID: "zellij", ZellijSession: "A", Terminal: &Terminal{ZellijSession: "A"},
+			})
+			return snapshot
+		}(),
+		"duplicate headless": func() Snapshot {
+			snapshot := followSnapshot()
+			snapshot.ActiveSessions = []string{"A"}
+			snapshot.Windows = []Window{
+				{Order: 0, Headless: true, AppID: "zellij", ZellijSession: "A", Terminal: &Terminal{ZellijSession: "A"}},
+				{Order: 1, Headless: true, AppID: "zellij", ZellijSession: "A", Terminal: &Terminal{ZellijSession: "A"}},
+			}
+			return snapshot
+		}(),
+	}
+	for name, snapshot := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := FollowWorkspaceChoices(snapshot); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+				t.Fatalf("duplicate source session accepted: %v", err)
+			}
+			sim := newFollowSim()
+			result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, sim.deps())
+			if result.Healthy || result.Attempted != 0 || len(sim.commands) != 0 {
+				t.Fatalf("duplicate source session caused effects: result=%#v commands=%v", result, sim.commands)
+			}
+		})
+	}
+}
+
 func TestSelectedSourceWorkspaceIsFrozenByRuntimeID(t *testing.T) {
 	initial := followSnapshot("A")
 	selection := selectedWorkspace(initial)
@@ -285,6 +318,49 @@ func TestFollowStopsBatchWhenPostLaunchEvidenceDegrades(t *testing.T) {
 	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, deps)
 	if result.Healthy || result.Attempted != 1 || result.Confirmed != 1 || result.Deferred != 1 || len(sim.launchedSessions) != 1 || sim.moves != 0 {
 		t.Fatalf("degraded batch continued: %#v launches=%v moves=%d", result, sim.launchedSessions, sim.moves)
+	}
+}
+
+func TestFollowStrictCorrelationDegradationStopsRemainingBatch(t *testing.T) {
+	snapshot := followSnapshot("A", "B")
+	sim := newFollowSim()
+	deps := sim.deps()
+	inspectCalls := 0
+	deps.Inspect = func(_ context.Context, _ []OwnedWindow, _ ProjectionEvidenceConfig) (ProjectionInventory, error) {
+		inspectCalls++
+		if inspectCalls == 1 {
+			return ProjectionInventory{}, nil
+		}
+		if sim.exact == nil {
+			return ProjectionInventory{}, errors.New("launched projection missing")
+		}
+		return ProjectionInventory{
+			Exact:     []Projection{*sim.exact},
+			Untracked: []OwnedWindow{{ID: 99, PID: 999}},
+		}, nil
+	}
+	state := &FollowState{}
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, deps)
+	if result.Healthy || result.Attempted != 1 || result.Confirmed != 0 || result.Uncertain != 1 || result.Deferred != 1 || strings.Join(sim.launchedSessions, ",") != "A" || sim.moves != 0 || !strings.Contains(result.Reason, "evidence degraded") {
+		t.Fatalf("degraded correlation continued batch: result=%#v launches=%v moves=%d state=%#v", result, sim.launchedSessions, sim.moves, state)
+	}
+}
+
+func TestFollowStrictCorrelationObservationErrorStopsRemainingBatch(t *testing.T) {
+	snapshot := followSnapshot("A", "B")
+	sim := newFollowSim()
+	deps := sim.deps()
+	inspectCalls := 0
+	deps.Inspect = func(_ context.Context, _ []OwnedWindow, _ ProjectionEvidenceConfig) (ProjectionInventory, error) {
+		inspectCalls++
+		if inspectCalls == 1 {
+			return ProjectionInventory{}, nil
+		}
+		return ProjectionInventory{}, errors.New("proc inventory vanished")
+	}
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, deps)
+	if result.Healthy || result.Attempted != 1 || result.Confirmed != 0 || result.Uncertain != 1 || result.Deferred != 1 || strings.Join(sim.launchedSessions, ",") != "A" || sim.moves != 0 || !strings.Contains(result.Reason, "evidence unavailable") {
+		t.Fatalf("observation error continued batch: result=%#v launches=%v moves=%d", result, sim.launchedSessions, sim.moves)
 	}
 }
 

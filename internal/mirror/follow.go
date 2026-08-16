@@ -119,8 +119,21 @@ func validateFollowSnapshot(snapshot Snapshot) (validatedFollowSource, error) {
 			return validatedFollowSource{}, fmt.Errorf("source window order %d is duplicated", window.Order)
 		}
 		orders[window.Order] = struct{}{}
+		session, err := sourceSessionIdentity(window)
+		if err != nil {
+			return validatedFollowSource{}, err
+		}
+		if session != "" {
+			location := window.WorkspaceID
+			if window.Headless {
+				location = "headless"
+			}
+			if prior, exists := seenSessions[session]; exists {
+				return validatedFollowSource{}, fmt.Errorf("source session %q is ambiguous across entries %s and %s", session, prior, location)
+			}
+			seenSessions[session] = location
+		}
 		if window.Headless {
-			session := SessionName(window)
 			if _, exists := source.active[session]; !exists {
 				return validatedFollowSource{}, fmt.Errorf("headless source session %q is absent from ACTIVE inventory", session)
 			}
@@ -144,17 +157,12 @@ func validateFollowSnapshot(snapshot Snapshot) (validatedFollowSource, error) {
 			continue
 		}
 		source.visible[workspace.ID]++
-		session, err := exactVisibleSession(window, source.active)
-		if err != nil {
-			return validatedFollowSource{}, err
-		}
 		if session == "" {
 			continue
 		}
-		if prior, exists := seenSessions[session]; exists {
-			return validatedFollowSource{}, fmt.Errorf("source session %q is ambiguous across workspaces %s and %s", session, prior, workspace.ID)
+		if _, ok := source.active[session]; !ok {
+			continue
 		}
-		seenSessions[session] = workspace.ID
 		source.eligible[workspace.ID] = append(source.eligible[workspace.ID], window)
 	}
 	for id := range source.eligible {
@@ -165,12 +173,12 @@ func validateFollowSnapshot(snapshot Snapshot) (validatedFollowSource, error) {
 	return source, nil
 }
 
-func exactVisibleSession(window Window, active map[string]struct{}) (string, error) {
-	if window.Terminal == nil {
-		return "", nil
-	}
+func sourceSessionIdentity(window Window) (string, error) {
 	top := window.ZellijSession
-	terminal := window.Terminal.ZellijSession
+	terminal := ""
+	if window.Terminal != nil {
+		terminal = window.Terminal.ZellijSession
+	}
 	if top != "" && terminal != "" && top != terminal {
 		return "", fmt.Errorf("source window %d has ambiguous session evidence", window.SourceWindowID)
 	}
@@ -183,9 +191,6 @@ func exactVisibleSession(window Window, active map[string]struct{}) (string, err
 	}
 	if err := ValidateSession(session); err != nil {
 		return "", err
-	}
-	if _, ok := active[session]; !ok {
-		return "", nil
 	}
 	return session, nil
 }
@@ -502,7 +507,7 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 		}
 		windowID, correlationErr := waitForNewProjection(ctx, applyCfg,
 			ApplyItem{PinnedProjection: PinnedProjection{Session: item.Session}}, planned.token, nil, beforeIDs,
-			ApplyDeps{ListWindows: deps.ListWindows, Inspect: deps.Inspect, Sleep: deps.Sleep}, evidence)
+			ApplyDeps{ListWindows: deps.ListWindows, Inspect: deps.Inspect, Sleep: deps.Sleep}, evidence, true)
 		if correlationErr != nil {
 			state.TotalUncertain++
 			result.Uncertain++
