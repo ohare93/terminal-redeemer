@@ -178,10 +178,6 @@ func styleText(value, color string, enabled bool) string {
 	return foregroundANSI(color) + value + "\x1b[0m"
 }
 
-func RunWorkspace(choices []mirror.WorkspaceChoice) (mirror.WorkspaceChoice, bool, error) {
-	return RunWorkspaceContext(context.Background(), choices)
-}
-
 func RunWorkspaceContext(ctx context.Context, choices []mirror.WorkspaceChoice) (mirror.WorkspaceChoice, bool, error) {
 	if len(choices) == 0 {
 		return mirror.WorkspaceChoice{}, false, errors.New("source has no selectable workspaces")
@@ -206,36 +202,34 @@ func RunWorkspaceContext(ctx context.Context, choices []mirror.WorkspaceChoice) 
 
 type FollowPollFunc func(context.Context) (mirror.FollowPollResult, time.Duration)
 
-type followPollMsg struct {
-	result mirror.FollowPollResult
-	delay  time.Duration
-}
-
-type followTickMsg struct{}
+type followPollMsg struct{ result mirror.FollowPollResult }
 
 type FollowStatusModel struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	poll      FollowPollFunc
-	label     string
-	limits    string
-	width     int
-	height    int
-	last      mirror.FollowPollResult
-	polling   bool
-	cancelled bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	updates    <-chan followPollMsg
+	label      string
+	limits     string
+	width      int
+	height     int
+	last       mirror.FollowPollResult
+	haveResult bool
 }
 
-func NewFollowStatusModel(ctx context.Context, cancel context.CancelFunc, label, limits string, poll FollowPollFunc) *FollowStatusModel {
-	return &FollowStatusModel{ctx: ctx, cancel: cancel, poll: poll, label: label, limits: limits, width: 80, height: 12, polling: true}
+func NewFollowStatusModel(ctx context.Context, cancel context.CancelFunc, label, limits string, updates <-chan followPollMsg) *FollowStatusModel {
+	return &FollowStatusModel{ctx: ctx, cancel: cancel, updates: updates, label: label, limits: limits, width: 80, height: 12}
 }
 
-func (m *FollowStatusModel) Init() tea.Cmd { return m.pollCommand() }
+func (m *FollowStatusModel) Init() tea.Cmd { return m.waitCommand() }
 
-func (m *FollowStatusModel) pollCommand() tea.Cmd {
+func (m *FollowStatusModel) waitCommand() tea.Cmd {
 	return func() tea.Msg {
-		result, delay := m.poll(m.ctx)
-		return followPollMsg{result: result, delay: delay}
+		select {
+		case update := <-m.updates:
+			return update
+		case <-m.ctx.Done():
+			return tea.Quit()
+		}
 	}
 }
 
@@ -245,27 +239,15 @@ func (m *FollowStatusModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
-			m.cancelled = true
 			m.cancel()
 			return m, tea.Quit
 		}
 	case followPollMsg:
-		m.last = msg.result
-		m.polling = false
+		m.last, m.haveResult = msg.result, true
 		if m.ctx.Err() != nil {
 			return m, tea.Quit
 		}
-		delay := msg.delay
-		if delay < mirror.MinimumFollowInterval {
-			delay = mirror.MinimumFollowInterval
-		}
-		return m, tea.Tick(delay, func(time.Time) tea.Msg { return followTickMsg{} })
-	case followTickMsg:
-		if m.ctx.Err() != nil {
-			return m, tea.Quit
-		}
-		m.polling = true
-		return m, m.pollCommand()
+		return m, m.waitCommand()
 	}
 	return m, nil
 }
@@ -275,17 +257,18 @@ func (m *FollowStatusModel) View() string {
 	if width <= 0 {
 		width = 80
 	}
-	state := "connected"
-	if !m.last.Healthy {
-		state = "degraded/disconnected"
-	}
-	if m.polling {
-		state += " · polling"
+	state := "connecting/polling"
+	if m.haveResult {
+		state = "connected"
+		if !m.last.Healthy {
+			state = "degraded/disconnected"
+		}
 	}
 	lines := []string{
 		fit("Following "+m.label, width),
 		fit("Status: "+state, width),
-		fit(fmt.Sprintf("eligible=%d existing=%d opened=%d deferred=%d total_opened=%d", m.last.Eligible, m.last.Existing, m.last.Opened, m.last.Deferred, m.last.Total), width),
+		fit(fmt.Sprintf("eligible=%d existing=%d deferred=%d attempted=%d confirmed=%d uncertain=%d", m.last.Eligible, m.last.Existing, m.last.Deferred, m.last.Attempted, m.last.Confirmed, m.last.Uncertain), width),
+		fit(fmt.Sprintf("Totals: attempted=%d confirmed=%d uncertain=%d", m.last.TotalAttempts, m.last.TotalConfirmed, m.last.TotalUncertain), width),
 		fit("Safeguards: "+m.limits, width),
 	}
 	if m.last.Reason != "" {
@@ -310,13 +293,52 @@ func (m *FollowStatusModel) View() string {
 	return strings.Join(lines, "\n")
 }
 
-func RunFollowStatus(ctx context.Context, label, limits string, poll FollowPollFunc) error {
+func followWorker(ctx context.Context, poll FollowPollFunc, updates chan<- followPollMsg) {
+	for {
+		result, delay := poll(ctx)
+		select {
+		case updates <- followPollMsg{result: result}:
+		case <-ctx.Done():
+			return
+		}
+		if delay < mirror.MinimumFollowInterval {
+			delay = mirror.MinimumFollowInterval
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		}
+	}
+}
+
+type followStatusProgram func(context.Context, *FollowStatusModel) error
+
+func runFollowStatus(ctx context.Context, label, limits string, poll FollowPollFunc, run followStatusProgram) error {
 	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	model := NewFollowStatusModel(runCtx, cancel, label, limits, poll)
-	_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(runCtx)).Run()
-	if err != nil && runCtx.Err() == nil && !errors.Is(err, context.Canceled) {
+	updates := make(chan followPollMsg, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		followWorker(runCtx, poll, updates)
+	}()
+	model := NewFollowStatusModel(runCtx, cancel, label, limits, updates)
+	err := run(runCtx, model)
+	cancel()
+	<-done // join every in-flight acquisition/effect before the caller unlocks
+	if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+func RunFollowStatus(ctx context.Context, label, limits string, poll FollowPollFunc) error {
+	return runFollowStatus(ctx, label, limits, poll, func(runCtx context.Context, model *FollowStatusModel) error {
+		_, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(runCtx)).Run()
+		return err
+	})
 }

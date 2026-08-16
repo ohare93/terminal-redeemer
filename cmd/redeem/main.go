@@ -651,8 +651,8 @@ func runMirrorFollow(args []string, resolvedConfig config.Config, stdout io.Writ
 	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
 	niriCommand := fs.String("niri-command", resolvedConfig.Mirror.NiriCommand, "Niri executable")
 	interval := fs.Duration("interval", mirror.DefaultFollowInterval, "healthy source poll interval (minimum 2s)")
-	maxPerPoll := fs.Int("max-per-poll", mirror.DefaultFollowMaxPerPoll, "maximum new projections opened by one poll")
-	maxTotal := fs.Int("max-total", mirror.DefaultFollowMaxTotal, "maximum projections opened during this foreground run")
+	maxPerPoll := fs.Int("max-per-poll", mirror.DefaultFollowMaxPerPoll, "maximum detached launch attempts in one poll")
+	maxTotal := fs.Int("max-total", mirror.DefaultFollowMaxTotal, "maximum detached launch attempts in this foreground run")
 	timeout := fs.Duration("timeout", resolvedConfig.Resume.Timeout, "per-command and correlation timeout")
 	evidenceInterval := fs.Duration("evidence-interval", resolvedConfig.Resume.PollInterval, "new projection evidence interval")
 	if err := fs.Parse(args); err != nil {
@@ -727,7 +727,10 @@ func runMirrorFollow(args []string, resolvedConfig config.Config, stdout io.Writ
 		freshCancel()
 		var result mirror.FollowPollResult
 		if acquireErr != nil || freshHost != host || fresh.Profile != snapshot.Profile {
-			result = mirror.FollowPollResult{Total: state.TotalOpened, Reason: "source disconnected: " + errorText(acquireErr, "SSH destination or profile changed")}
+			result = mirror.FollowPollResult{
+				TotalAttempts: state.TotalAttempts, TotalConfirmed: state.TotalConfirmed, TotalUncertain: state.TotalUncertain,
+				Reason: "source disconnected: " + errorText(acquireErr, "SSH destination or profile changed"),
+			}
 		} else {
 			result = mirror.FollowOnce(pollCtx, cfg, fresh, selection, destination, state, mirror.FollowDeps{Runner: mirror.ExecRunner{}})
 		}

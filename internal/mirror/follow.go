@@ -24,43 +24,28 @@ type WorkspaceChoice struct {
 	EligibleSessions int
 }
 
+type validatedFollowSource struct {
+	byID     map[string]Workspace
+	active   map[string]struct{}
+	visible  map[string]int
+	eligible map[string][]Window
+}
+
 // FollowWorkspaceChoices validates the complete source inventory and returns
 // every workspace, including empty ones, in Niri index order.
 func FollowWorkspaceChoices(snapshot Snapshot) ([]WorkspaceChoice, error) {
-	byID, active, err := validateFollowSnapshot(snapshot)
+	source, err := validateFollowSnapshot(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	counts := make(map[string]*WorkspaceChoice, len(snapshot.Workspaces))
 	choices := make([]WorkspaceChoice, 0, len(snapshot.Workspaces))
 	for _, workspace := range snapshot.Workspaces {
-		choices = append(choices, WorkspaceChoice{Workspace: workspace})
-		counts[workspace.ID] = &choices[len(choices)-1]
+		choices = append(choices, WorkspaceChoice{
+			Workspace:        workspace,
+			VisibleTerminals: source.visible[workspace.ID],
+			EligibleSessions: len(source.eligible[workspace.ID]),
+		})
 	}
-	seenSessions := make(map[string]string)
-	for _, window := range snapshot.Windows {
-		if window.Headless || !strings.EqualFold(strings.TrimSpace(window.AppID), "kitty") || window.Terminal == nil {
-			continue
-		}
-		choice := counts[window.WorkspaceID]
-		if choice == nil {
-			return nil, fmt.Errorf("visible source window %d references unknown workspace %q", window.SourceWindowID, window.WorkspaceID)
-		}
-		choice.VisibleTerminals++
-		session, err := exactVisibleSession(window, active)
-		if err != nil {
-			return nil, err
-		}
-		if session == "" {
-			continue
-		}
-		if prior, exists := seenSessions[session]; exists {
-			return nil, fmt.Errorf("source session %q is ambiguous across workspaces %s and %s", session, prior, window.WorkspaceID)
-		}
-		seenSessions[session] = window.WorkspaceID
-		choice.EligibleSessions++
-	}
-	_ = byID
 	sort.SliceStable(choices, func(i, j int) bool {
 		if choices[i].Workspace.Index != choices[j].Workspace.Index {
 			return choices[i].Workspace.Index < choices[j].Workspace.Index
@@ -70,95 +55,122 @@ func FollowWorkspaceChoices(snapshot Snapshot) ([]WorkspaceChoice, error) {
 	return choices, nil
 }
 
-func validateFollowSnapshot(snapshot Snapshot) (map[string]Workspace, map[string]struct{}, error) {
+func validateFollowSnapshot(snapshot Snapshot) (validatedFollowSource, error) {
 	if err := validateText("source profile", snapshot.Profile, 128, false); err != nil {
-		return nil, nil, err
+		return validatedFollowSource{}, err
 	}
 	if snapshot.Workspaces == nil {
-		return nil, nil, fmt.Errorf("source snapshot has no complete workspace inventory (source Redeem upgrade required)")
+		return validatedFollowSource{}, fmt.Errorf("source snapshot has no complete workspace inventory (source Redeem upgrade required)")
 	}
 	if snapshot.ActiveSessions == nil {
-		return nil, nil, fmt.Errorf("source snapshot has no complete ACTIVE Zellij inventory (source Redeem upgrade required)")
+		return validatedFollowSource{}, fmt.Errorf("source snapshot has no complete ACTIVE Zellij inventory (source Redeem upgrade required)")
 	}
-	byID := make(map[string]Workspace, len(snapshot.Workspaces))
+	source := validatedFollowSource{
+		byID:     make(map[string]Workspace, len(snapshot.Workspaces)),
+		active:   make(map[string]struct{}, len(snapshot.ActiveSessions)),
+		visible:  make(map[string]int, len(snapshot.Workspaces)),
+		eligible: make(map[string][]Window, len(snapshot.Workspaces)),
+	}
 	byIndex := make(map[int]string, len(snapshot.Workspaces))
 	byName := make(map[string]string, len(snapshot.Workspaces))
 	for i, workspace := range snapshot.Workspaces {
 		if workspace.ID == "" || len(workspace.ID) > 256 || strings.IndexAny(workspace.ID, "\r\n\x00") >= 0 || workspace.Index <= 0 {
-			return nil, nil, fmt.Errorf("source workspace %d has invalid identity", i)
+			return validatedFollowSource{}, fmt.Errorf("source workspace %d has invalid identity", i)
 		}
-		if _, exists := byID[workspace.ID]; exists {
-			return nil, nil, fmt.Errorf("source workspace ID %q is duplicated", workspace.ID)
+		if _, exists := source.byID[workspace.ID]; exists {
+			return validatedFollowSource{}, fmt.Errorf("source workspace ID %q is duplicated", workspace.ID)
 		}
 		if previous, exists := byIndex[workspace.Index]; exists {
-			return nil, nil, fmt.Errorf("source workspace index %d is ambiguous (%s and %s)", workspace.Index, previous, workspace.ID)
+			return validatedFollowSource{}, fmt.Errorf("source workspace index %d is ambiguous (%s and %s)", workspace.Index, previous, workspace.ID)
 		}
 		if len(workspace.Name) > 256 || workspace.Name != strings.TrimSpace(workspace.Name) || strings.IndexAny(workspace.Name, "\r\n\x00") >= 0 {
-			return nil, nil, fmt.Errorf("source workspace %q has invalid name", workspace.ID)
+			return validatedFollowSource{}, fmt.Errorf("source workspace %q has invalid name", workspace.ID)
 		}
 		if len(workspace.Output) > 256 || workspace.Output != strings.TrimSpace(workspace.Output) || strings.IndexAny(workspace.Output, "\r\n\x00") >= 0 {
-			return nil, nil, fmt.Errorf("source workspace %q has invalid output", workspace.ID)
+			return validatedFollowSource{}, fmt.Errorf("source workspace %q has invalid output", workspace.ID)
 		}
 		if workspace.Name != "" {
 			if previous, exists := byName[workspace.Name]; exists {
-				return nil, nil, fmt.Errorf("source workspace name %q is ambiguous (%s and %s)", workspace.Name, previous, workspace.ID)
+				return validatedFollowSource{}, fmt.Errorf("source workspace name %q is ambiguous (%s and %s)", workspace.Name, previous, workspace.ID)
 			}
 			byName[workspace.Name] = workspace.ID
 		}
-		byID[workspace.ID] = workspace
+		source.byID[workspace.ID] = workspace
 		byIndex[workspace.Index] = workspace.ID
 	}
-	active := make(map[string]struct{}, len(snapshot.ActiveSessions))
 	for _, session := range snapshot.ActiveSessions {
 		if err := ValidateSession(session); err != nil {
-			return nil, nil, fmt.Errorf("malformed ACTIVE session inventory: %w", err)
+			return validatedFollowSource{}, fmt.Errorf("malformed ACTIVE session inventory: %w", err)
 		}
-		if _, exists := active[session]; exists {
-			return nil, nil, fmt.Errorf("ACTIVE session %q is duplicated", session)
+		if _, exists := source.active[session]; exists {
+			return validatedFollowSource{}, fmt.Errorf("ACTIVE session %q is duplicated", session)
 		}
-		active[session] = struct{}{}
+		source.active[session] = struct{}{}
 	}
+
 	orders := make(map[int]struct{}, len(snapshot.Windows))
 	windowIDs := make(map[int]struct{}, len(snapshot.Windows))
+	seenSessions := make(map[string]string)
 	for _, window := range snapshot.Windows {
 		if window.Order < 0 {
-			return nil, nil, fmt.Errorf("source window has invalid order %d", window.Order)
+			return validatedFollowSource{}, fmt.Errorf("source window has invalid order %d", window.Order)
 		}
 		if _, exists := orders[window.Order]; exists {
-			return nil, nil, fmt.Errorf("source window order %d is duplicated", window.Order)
+			return validatedFollowSource{}, fmt.Errorf("source window order %d is duplicated", window.Order)
 		}
 		orders[window.Order] = struct{}{}
 		if window.Headless {
 			session := SessionName(window)
-			if _, exists := active[session]; !exists {
-				return nil, nil, fmt.Errorf("headless source session %q is absent from ACTIVE inventory", session)
+			if _, exists := source.active[session]; !exists {
+				return validatedFollowSource{}, fmt.Errorf("headless source session %q is absent from ACTIVE inventory", session)
 			}
 			continue
 		}
 		if window.SourceWindowID <= 0 {
-			return nil, nil, fmt.Errorf("visible source window has invalid ID")
+			return validatedFollowSource{}, fmt.Errorf("visible source window has invalid ID")
 		}
 		if _, exists := windowIDs[window.SourceWindowID]; exists {
-			return nil, nil, fmt.Errorf("source window ID %d is duplicated", window.SourceWindowID)
+			return validatedFollowSource{}, fmt.Errorf("source window ID %d is duplicated", window.SourceWindowID)
 		}
 		windowIDs[window.SourceWindowID] = struct{}{}
-		workspace, exists := byID[window.WorkspaceID]
+		workspace, exists := source.byID[window.WorkspaceID]
 		if !exists {
-			return nil, nil, fmt.Errorf("source window %d references unknown workspace %q", window.SourceWindowID, window.WorkspaceID)
+			return validatedFollowSource{}, fmt.Errorf("source window %d references unknown workspace %q", window.SourceWindowID, window.WorkspaceID)
 		}
-		if window.WorkspaceIndex != workspace.Index || strings.TrimSpace(window.WorkspaceName) != strings.TrimSpace(workspace.Name) {
-			return nil, nil, fmt.Errorf("source window %d has inconsistent workspace metadata", window.SourceWindowID)
+		if window.WorkspaceIndex != workspace.Index || window.WorkspaceName != workspace.Name || window.Output != workspace.Output {
+			return validatedFollowSource{}, fmt.Errorf("source window %d has inconsistent workspace metadata", window.SourceWindowID)
 		}
+		if !strings.EqualFold(window.AppID, "kitty") || window.Terminal == nil {
+			continue
+		}
+		source.visible[workspace.ID]++
+		session, err := exactVisibleSession(window, source.active)
+		if err != nil {
+			return validatedFollowSource{}, err
+		}
+		if session == "" {
+			continue
+		}
+		if prior, exists := seenSessions[session]; exists {
+			return validatedFollowSource{}, fmt.Errorf("source session %q is ambiguous across workspaces %s and %s", session, prior, workspace.ID)
+		}
+		seenSessions[session] = workspace.ID
+		source.eligible[workspace.ID] = append(source.eligible[workspace.ID], window)
 	}
-	return byID, active, nil
+	for id := range source.eligible {
+		sort.SliceStable(source.eligible[id], func(i, j int) bool {
+			return source.eligible[id][i].Order < source.eligible[id][j].Order
+		})
+	}
+	return source, nil
 }
 
 func exactVisibleSession(window Window, active map[string]struct{}) (string, error) {
 	if window.Terminal == nil {
 		return "", nil
 	}
-	top := strings.TrimSpace(window.ZellijSession)
-	terminal := strings.TrimSpace(window.Terminal.ZellijSession)
+	top := window.ZellijSession
+	terminal := window.Terminal.ZellijSession
 	if top != "" && terminal != "" && top != terminal {
 		return "", fmt.Errorf("source window %d has ambiguous session evidence", window.SourceWindowID)
 	}
@@ -178,40 +190,24 @@ func exactVisibleSession(window Window, active map[string]struct{}) (string, err
 	return session, nil
 }
 
-type SourceWorkspaceSelection struct {
-	Name  string
-	Index int
-}
+type SourceWorkspaceSelection struct{ ID string }
 
 func SelectionForWorkspace(workspace Workspace) SourceWorkspaceSelection {
-	if strings.TrimSpace(workspace.Name) != "" {
-		return SourceWorkspaceSelection{Name: strings.TrimSpace(workspace.Name)}
-	}
-	return SourceWorkspaceSelection{Index: workspace.Index}
+	return SourceWorkspaceSelection{ID: workspace.ID}
 }
 
-func sourceWorkspace(snapshot Snapshot, selection SourceWorkspaceSelection) (Workspace, error) {
-	var matches []Workspace
-	for _, workspace := range snapshot.Workspaces {
-		if selection.Name != "" && workspace.Name == selection.Name || selection.Name == "" && workspace.Index == selection.Index {
-			matches = append(matches, workspace)
-		}
+func sourceWorkspace(source validatedFollowSource, selection SourceWorkspaceSelection) (Workspace, error) {
+	if selection.ID == "" {
+		return Workspace{}, fmt.Errorf("selected source workspace has no frozen runtime ID")
 	}
-	if len(matches) != 1 {
-		label := selection.Name
-		if label == "" {
-			label = fmt.Sprintf("%d", selection.Index)
-		}
-		return Workspace{}, fmt.Errorf("selected source workspace %q is absent or ambiguous", label)
+	workspace, ok := source.byID[selection.ID]
+	if !ok {
+		return Workspace{}, fmt.Errorf("selected source workspace ID %q no longer exists", selection.ID)
 	}
-	return matches[0], nil
+	return workspace, nil
 }
 
-type FrozenDestination struct {
-	ID            string
-	OriginalName  string
-	OriginalIndex int
-}
+type FrozenDestination struct{ ID string }
 
 func ResolveFollowDestination(source Workspace, workspaces []OwnedWorkspace) (FrozenDestination, error) {
 	var matches []OwnedWorkspace
@@ -228,7 +224,7 @@ func ResolveFollowDestination(source Workspace, workspaces []OwnedWorkspace) (Fr
 	if id == "" {
 		return FrozenDestination{}, fmt.Errorf("matching local workspace has no runtime ID")
 	}
-	return FrozenDestination{ID: id, OriginalName: source.Name, OriginalIndex: source.Index}, nil
+	return FrozenDestination{ID: id}, nil
 }
 
 func (destination FrozenDestination) CurrentTarget(workspaces []OwnedWorkspace) (resume.WorkspaceTarget, error) {
@@ -246,18 +242,18 @@ func (destination FrozenDestination) CurrentTarget(workspaces []OwnedWorkspace) 
 		return resume.WorkspaceTarget{}, fmt.Errorf("frozen destination ID %q no longer exists", destination.ID)
 	}
 	name, _ := valueAsString(current.Name)
-	name = strings.TrimSpace(name)
 	if name != "" {
 		matches := 0
 		for _, workspace := range workspaces {
 			other, _ := valueAsString(workspace.Name)
-			if strings.TrimSpace(other) == name {
+			if other == name {
 				matches++
 			}
 		}
-		if matches == 1 {
-			return resume.WorkspaceTarget{ID: destination.ID, Name: name, Index: current.Index}, nil
+		if matches != 1 {
+			return resume.WorkspaceTarget{}, fmt.Errorf("frozen destination %q has an ambiguous current name", destination.ID)
 		}
+		return resume.WorkspaceTarget{ID: destination.ID, Name: name, Index: current.Index}, nil
 	}
 	if current.Index > 0 {
 		matches := 0
@@ -284,11 +280,12 @@ type FollowConfig struct {
 	EvidenceInterval time.Duration
 	MaxPerPoll       int
 	MaxTotal         int
-	DryRun           bool
 }
 
 type FollowState struct {
-	TotalOpened int
+	TotalAttempts  int
+	TotalConfirmed int
+	TotalUncertain int
 }
 
 type FollowLock struct{ lock *pinLock }
@@ -317,10 +314,9 @@ func (lock *FollowLock) Close() error {
 type FollowItemStatus string
 
 const (
-	FollowOpened    FollowItemStatus = "opened"
-	FollowExisting  FollowItemStatus = "existing"
-	FollowWouldOpen FollowItemStatus = "would_open"
-	FollowFailed    FollowItemStatus = "failed"
+	FollowOpened   FollowItemStatus = "opened"
+	FollowDeferred FollowItemStatus = "deferred"
+	FollowFailed   FollowItemStatus = "failed"
 )
 
 type FollowItem struct {
@@ -331,14 +327,18 @@ type FollowItem struct {
 }
 
 type FollowPollResult struct {
-	Healthy  bool
-	Eligible int
-	Existing int
-	Deferred int
-	Opened   int
-	Total    int
-	Items    []FollowItem
-	Reason   string
+	Healthy        bool
+	Eligible       int
+	Existing       int
+	Deferred       int
+	Attempted      int
+	Confirmed      int
+	Uncertain      int
+	TotalAttempts  int
+	TotalConfirmed int
+	TotalUncertain int
+	Items          []FollowItem
+	Reason         string
 }
 
 type FollowDeps struct {
@@ -350,27 +350,29 @@ type FollowDeps struct {
 	Token       func() (string, error)
 }
 
+type plannedFollowLaunch struct {
+	window Window
+	token  string
+	plan   LaunchPlan
+}
+
 func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, selection SourceWorkspaceSelection, destination FrozenDestination, state *FollowState, deps FollowDeps) FollowPollResult {
-	result := FollowPollResult{Total: state.TotalOpened}
+	result := followResultTotals(state)
 	if err := validateFollowConfig(cfg); err != nil {
 		result.Reason = err.Error()
 		return result
 	}
-	_, active, err := validateFollowSnapshot(snapshot)
+	source, err := validateFollowSnapshot(snapshot)
 	if err != nil {
 		result.Reason = err.Error()
 		return result
 	}
-	workspace, err := sourceWorkspace(snapshot, selection)
+	workspace, err := sourceWorkspace(source, selection)
 	if err != nil {
 		result.Reason = err.Error()
 		return result
 	}
-	eligible, err := eligibleWorkspaceWindows(snapshot, workspace, active)
-	if err != nil {
-		result.Reason = err.Error()
-		return result
-	}
+	eligible := source.eligible[workspace.ID]
 	result.Eligible = len(eligible)
 
 	manager := WindowManager{Runner: deps.Runner, NiriCommand: cfg.NiriCommand}
@@ -393,8 +395,12 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 	if deps.Token == nil {
 		deps.Token = RandomID
 	}
+
+	// This is the single full-poll safety gate. No launch effect is attempted
+	// until source, local evidence, destination, every token, and every launch
+	// plan have all validated successfully.
 	evidence := ProjectionEvidenceConfig{SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions}
-	_, inventory, err := observeFollow(ctx, deps, evidence)
+	beforeWindows, inventory, err := observeFollow(ctx, deps, evidence)
 	if err != nil {
 		result.Reason = "local projection evidence unavailable: " + err.Error()
 		return result
@@ -412,6 +418,7 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 		result.Reason = "frozen destination unavailable: " + err.Error()
 		return result
 	}
+
 	open := make(map[string]int)
 	for _, projection := range inventory.Exact {
 		if projection.SourceHost == cfg.SourceHost {
@@ -430,7 +437,7 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 			missing = append(missing, window)
 		}
 	}
-	remaining := cfg.MaxTotal - state.TotalOpened
+	remaining := cfg.MaxTotal - state.TotalAttempts
 	limit := cfg.MaxPerPoll
 	if remaining < limit {
 		limit = remaining
@@ -439,83 +446,126 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 		limit = 0
 	}
 	if len(missing) > limit {
+		for _, window := range missing[limit:] {
+			result.Items = append(result.Items, FollowItem{Session: SessionName(window), Status: FollowDeferred})
+		}
 		result.Deferred = len(missing) - limit
 		missing = missing[:limit]
 	}
-	result.Healthy = true
-	if cfg.DryRun {
-		for _, window := range missing {
-			result.Items = append(result.Items, FollowItem{Session: SessionName(window), Status: FollowWouldOpen})
+
+	plans := make([]plannedFollowLaunch, 0, len(missing))
+	for _, window := range missing {
+		token, err := deps.Token()
+		if err != nil {
+			result.Reason = "prepare launch token: " + err.Error()
+			return result
 		}
-		return result
+		plan, err := PlanLaunch(window, LaunchConfig{
+			SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions,
+			LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID, CorrelationToken: token,
+		})
+		if err != nil {
+			result.Reason = "prepare launch: " + err.Error()
+			return result
+		}
+		plans = append(plans, plannedFollowLaunch{window: window, token: token, plan: plan})
 	}
 
-	for _, window := range missing {
-		item := FollowItem{Session: SessionName(window)}
-		beforeWindows, beforeInventory, observeErr := observeFollow(ctx, deps, evidence)
-		if observeErr != nil || len(beforeInventory.Untracked) > 0 || len(beforeInventory.Ambiguous) > 0 {
-			item.Status, item.Reason = FollowFailed, "exact local pre-launch evidence became unavailable"
-			result.Items = append(result.Items, item)
-			continue
+	result.Healthy = true
+	if len(plans) == 0 && len(missing) == 0 && result.Deferred > 0 {
+		result.Reason = "lifetime launch-attempt limit reached"
+	}
+	beforeIDs := ownedWindowIDs(beforeWindows)
+	for i, planned := range plans {
+		item := FollowItem{Session: SessionName(planned.window)}
+		if err := ctx.Err(); err != nil {
+			failFollowBatch(&result, &item, err.Error(), len(plans)-i-1)
+			break
 		}
-		matching := exactProjectionIDs(beforeInventory, cfg.SourceHost, item.Session)
-		if len(matching) == 1 {
-			item.Status = FollowExisting
-			result.Items = append(result.Items, item)
-			continue
-		}
-		if len(matching) > 1 || hasAmbiguousCandidate(beforeInventory, cfg.SourceHost, item.Session, "") {
-			item.Status, item.Reason = FollowFailed, "exact local pre-launch evidence is ambiguous"
-			result.Items = append(result.Items, item)
-			continue
-		}
-		token, tokenErr := deps.Token()
-		if tokenErr != nil {
-			item.Status, item.Reason = FollowFailed, tokenErr.Error()
-			result.Items = append(result.Items, item)
-			continue
-		}
-		plan, planErr := PlanLaunch(window, LaunchConfig{SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID, CorrelationToken: token})
-		if planErr != nil {
-			item.Status, item.Reason = FollowFailed, planErr.Error()
-			result.Items = append(result.Items, item)
-			continue
-		}
+		state.TotalAttempts++ // charge before invoking the detached launcher
+		result.Attempted++
+		setFollowResultTotals(&result, state)
+
 		launchCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		launchErr := deps.Runner.Run(launchCtx, plan.Command)
+		launchErr := deps.Runner.Run(launchCtx, planned.plan.Command)
 		cancel()
 		if launchErr != nil {
-			item.Status, item.Reason = FollowFailed, launchErr.Error()
-			result.Items = append(result.Items, item)
-			continue
+			state.TotalUncertain++
+			result.Uncertain++
+			setFollowResultTotals(&result, state)
+			failFollowBatch(&result, &item, launchErr.Error(), len(plans)-i-1)
+			break
 		}
-		applyCfg := ApplyConfig{SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, AppID: cfg.AppID, NiriCommand: cfg.NiriCommand, Timeout: cfg.Timeout, PollInterval: cfg.EvidenceInterval}
-		windowID, correlationErr := waitForNewProjection(ctx, applyCfg, ApplyItem{PinnedProjection: PinnedProjection{Session: item.Session}}, token, matching, ownedWindowIDs(beforeWindows), ApplyDeps{ListWindows: deps.ListWindows, Inspect: deps.Inspect, Sleep: deps.Sleep}, evidence)
+		applyCfg := ApplyConfig{
+			SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions,
+			AppID: cfg.AppID, NiriCommand: cfg.NiriCommand, Timeout: cfg.Timeout, PollInterval: cfg.EvidenceInterval,
+		}
+		windowID, correlationErr := waitForNewProjection(ctx, applyCfg,
+			ApplyItem{PinnedProjection: PinnedProjection{Session: item.Session}}, planned.token, nil, beforeIDs,
+			ApplyDeps{ListWindows: deps.ListWindows, Inspect: deps.Inspect, Sleep: deps.Sleep}, evidence)
 		if correlationErr != nil {
-			item.Status, item.Reason = FollowFailed, correlationErr.Error()
-			result.Items = append(result.Items, item)
-			continue
+			state.TotalUncertain++
+			result.Uncertain++
+			setFollowResultTotals(&result, state)
+			failFollowBatch(&result, &item, correlationErr.Error(), len(plans)-i-1)
+			break
 		}
+
 		item.WindowID = windowID
+		item.Status = FollowOpened
+		state.TotalConfirmed++
+		result.Confirmed++
+		setFollowResultTotals(&result, state)
+
+		// Re-resolve only the selector for the already-frozen runtime ID. A
+		// renamed or renumbered replacement can never receive this action.
 		current, workspaceErr := deps.Workspaces(ctx)
 		if workspaceErr != nil {
-			item.Status, item.Reason = FollowOpened, "opened but frozen destination inventory is unavailable: "+workspaceErr.Error()
-		} else if target, targetErr := destination.CurrentTarget(current); targetErr != nil {
-			item.Status, item.Reason = FollowOpened, "opened but not moved: "+targetErr.Error()
-		} else {
-			actions := resume.NiriActions{Runner: applyActionRunner{runner: deps.Runner, command: cfg.NiriCommand, timeout: cfg.Timeout}}
-			if moveErr := actions.MoveToWorkspace(ctx, windowID, target); moveErr != nil {
-				item.Status, item.Reason = FollowOpened, "opened but move failed: "+moveErr.Error()
-			} else {
-				item.Status = FollowOpened
-			}
+			failOpenedFollowBatch(&result, &item, "opened but frozen destination inventory is unavailable: "+workspaceErr.Error(), len(plans)-i-1)
+			break
 		}
-		state.TotalOpened++
-		result.Opened++
-		result.Total = state.TotalOpened
+		target, targetErr := destination.CurrentTarget(current)
+		if targetErr != nil {
+			failOpenedFollowBatch(&result, &item, "opened but not moved: "+targetErr.Error(), len(plans)-i-1)
+			break
+		}
+		actions := resume.NiriActions{Runner: applyActionRunner{runner: deps.Runner, command: cfg.NiriCommand, timeout: cfg.Timeout}}
+		if moveErr := actions.MoveToWorkspace(ctx, windowID, target); moveErr != nil {
+			failOpenedFollowBatch(&result, &item, "opened but move failed: "+moveErr.Error(), len(plans)-i-1)
+			break
+		}
 		result.Items = append(result.Items, item)
 	}
 	return result
+}
+
+func followResultTotals(state *FollowState) FollowPollResult {
+	result := FollowPollResult{}
+	setFollowResultTotals(&result, state)
+	return result
+}
+
+func setFollowResultTotals(result *FollowPollResult, state *FollowState) {
+	result.TotalAttempts = state.TotalAttempts
+	result.TotalConfirmed = state.TotalConfirmed
+	result.TotalUncertain = state.TotalUncertain
+}
+
+func failFollowBatch(result *FollowPollResult, item *FollowItem, reason string, deferred int) {
+	result.Healthy = false
+	item.Status = FollowFailed
+	item.Reason = reason
+	result.Reason = reason
+	result.Deferred += deferred
+	result.Items = append(result.Items, *item)
+}
+
+func failOpenedFollowBatch(result *FollowPollResult, item *FollowItem, reason string, deferred int) {
+	result.Healthy = false
+	item.Reason = reason
+	result.Reason = reason
+	result.Deferred += deferred
+	result.Items = append(result.Items, *item)
 }
 
 func validateFollowConfig(cfg FollowConfig) error {
@@ -532,30 +582,6 @@ func validateFollowConfig(cfg FollowConfig) error {
 		return fmt.Errorf("follow timeout, evidence interval, and finite launch bounds must be positive")
 	}
 	return nil
-}
-
-func eligibleWorkspaceWindows(snapshot Snapshot, workspace Workspace, active map[string]struct{}) ([]Window, error) {
-	eligible := make([]Window, 0)
-	seen := make(map[string]struct{})
-	for _, window := range snapshot.Windows {
-		if window.Headless || window.WorkspaceID != workspace.ID || !strings.EqualFold(strings.TrimSpace(window.AppID), "kitty") || window.Terminal == nil {
-			continue
-		}
-		session, err := exactVisibleSession(window, active)
-		if err != nil {
-			return nil, err
-		}
-		if session == "" {
-			continue
-		}
-		if _, exists := seen[session]; exists {
-			return nil, fmt.Errorf("source session %q is ambiguous in selected workspace", session)
-		}
-		seen[session] = struct{}{}
-		eligible = append(eligible, window)
-	}
-	sort.SliceStable(eligible, func(i, j int) bool { return eligible[i].Order < eligible[j].Order })
-	return eligible, nil
 }
 
 func observeFollow(ctx context.Context, deps FollowDeps, evidence ProjectionEvidenceConfig) ([]OwnedWindow, ProjectionInventory, error) {

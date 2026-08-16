@@ -12,23 +12,27 @@ func followSnapshot(sessions ...string) Snapshot {
 	windows := make([]Window, 0, len(sessions))
 	for i, session := range sessions {
 		windows = append(windows, Window{
-			Order: i, SourceWindowID: i + 1, AppID: "kitty", WorkspaceID: "remote-dev", WorkspaceIndex: 2, WorkspaceName: "Dev",
+			Order: i, SourceWindowID: i + 1, AppID: "kitty", WorkspaceID: "remote-dev", WorkspaceIndex: 2, WorkspaceName: "Dev", Output: "DP-1",
 			ZellijSession: session, Terminal: &Terminal{CWD: "/" + session, ZellijSession: session},
 		})
 	}
 	return Snapshot{
 		Host: "lattice", Profile: "default", GeneratedAt: time.Now(),
-		Workspaces:     []Workspace{{ID: "remote-empty", Index: 1}, {ID: "remote-dev", Index: 2, Name: "Dev"}},
+		Workspaces:     []Workspace{{ID: "remote-empty", Index: 1}, {ID: "remote-dev", Index: 2, Name: "Dev", Output: "DP-1"}},
 		ActiveSessions: append([]string(nil), sessions...), Windows: windows,
 	}
+}
+
+func selectedWorkspace(snapshot Snapshot) SourceWorkspaceSelection {
+	return SelectionForWorkspace(snapshot.Workspaces[1])
 }
 
 func TestFollowWorkspaceChoicesIncludeEmptyAndOnlyEligibleVisibleKitty(t *testing.T) {
 	snapshot := followSnapshot("A")
 	snapshot.Windows = append(snapshot.Windows,
-		Window{Order: 2, SourceWindowID: 2, AppID: "firefox", WorkspaceID: "remote-dev", WorkspaceIndex: 2, WorkspaceName: "Dev"},
+		Window{Order: 2, SourceWindowID: 2, AppID: "firefox", WorkspaceID: "remote-dev", WorkspaceIndex: 2, WorkspaceName: "Dev", Output: "DP-1"},
 		Window{Order: 3, Headless: true, AppID: "zellij", ZellijSession: "headless", Terminal: &Terminal{ZellijSession: "headless"}},
-		Window{Order: 4, SourceWindowID: 3, AppID: "kitty", WorkspaceID: "remote-dev", WorkspaceIndex: 2, WorkspaceName: "Dev", Terminal: &Terminal{}},
+		Window{Order: 4, SourceWindowID: 3, AppID: "kitty", WorkspaceID: "remote-dev", WorkspaceIndex: 2, WorkspaceName: "Dev", Output: "DP-1", Terminal: &Terminal{}},
 	)
 	snapshot.ActiveSessions = append(snapshot.ActiveSessions, "headless")
 	choices, err := FollowWorkspaceChoices(snapshot)
@@ -40,17 +44,60 @@ func TestFollowWorkspaceChoicesIncludeEmptyAndOnlyEligibleVisibleKitty(t *testin
 	}
 }
 
-func TestFollowSnapshotAbsentInconsistentAndDuplicateEvidenceFailClosed(t *testing.T) {
+func TestFollowSnapshotExactJoinsAndGlobalSessionUniquenessFailClosed(t *testing.T) {
 	base := followSnapshot("A")
+	duplicateElsewhere := followSnapshot("A")
+	duplicateElsewhere.Workspaces = append(duplicateElsewhere.Workspaces, Workspace{ID: "remote-other", Index: 3, Name: "Other", Output: "DP-2"})
+	duplicateElsewhere.Windows = append(duplicateElsewhere.Windows, Window{
+		Order: 1, SourceWindowID: 2, AppID: "kitty", WorkspaceID: "remote-other", WorkspaceIndex: 3, WorkspaceName: "Other", Output: "DP-2",
+		ZellijSession: "A", Terminal: &Terminal{ZellijSession: "A"},
+	})
 	cases := []Snapshot{
 		{Host: "lattice", Windows: []Window{}},
 		func() Snapshot { s := base; s.ActiveSessions = nil; return s }(),
 		func() Snapshot { s := base; s.Windows[0].WorkspaceIndex = 3; return s }(),
-		func() Snapshot { s := base; s.Windows = append(s.Windows, s.Windows[0]); return s }(),
+		func() Snapshot { s := base; s.Windows[0].WorkspaceName = " Dev "; return s }(),
+		func() Snapshot { s := base; s.Windows[0].Output = "DP-2"; return s }(),
+		duplicateElsewhere,
 	}
 	for i, snapshot := range cases {
 		if _, err := FollowWorkspaceChoices(snapshot); err == nil {
 			t.Fatalf("case %d accepted malformed/incomplete snapshot", i)
+		}
+		result := FollowOnce(context.Background(), followConfig(), snapshot, SourceWorkspaceSelection{ID: "remote-dev"}, FrozenDestination{ID: "local"}, &FollowState{}, FollowDeps{Runner: &followSim{}})
+		if result.Healthy {
+			t.Fatalf("case %d follow poll remained healthy: %#v", i, result)
+		}
+	}
+}
+
+func TestSelectedSourceWorkspaceIsFrozenByRuntimeID(t *testing.T) {
+	initial := followSnapshot("A")
+	selection := selectedWorkspace(initial)
+	if selection.ID != "remote-dev" {
+		t.Fatalf("selection=%#v", selection)
+	}
+
+	renumbered := followSnapshot("A")
+	renumbered.Workspaces[1].Index = 7
+	renumbered.Windows[0].WorkspaceIndex = 7
+	sim := newFollowSim()
+	sim.exact = &Projection{Window: OwnedWindow{ID: 40, PID: 400}, SourceHost: "lattice", Session: "A"}
+	result := FollowOnce(context.Background(), followConfig(), renumbered, selection, FrozenDestination{ID: "local"}, &FollowState{}, sim.deps())
+	if !result.Healthy || result.Existing != 1 {
+		t.Fatalf("same-ID renumber did not follow: %#v", result)
+	}
+
+	for _, mutate := range []func(*Snapshot){
+		func(s *Snapshot) { s.Workspaces = s.Workspaces[:1]; s.Windows = nil; s.ActiveSessions = []string{} },
+		func(s *Snapshot) { s.Workspaces[1].ID = "replacement"; s.Windows[0].WorkspaceID = "replacement" },
+	} {
+		fresh := followSnapshot("A")
+		mutate(&fresh)
+		before := len(sim.commands)
+		result = FollowOnce(context.Background(), followConfig(), fresh, selection, FrozenDestination{ID: "local"}, &FollowState{}, sim.deps())
+		if result.Healthy || len(sim.commands) != before || !strings.Contains(result.Reason, "workspace ID") {
+			t.Fatalf("source replacement/disappearance retargeted: %#v commands=%#v", result, sim.commands)
 		}
 	}
 }
@@ -68,6 +115,9 @@ func TestFrozenDestinationSurvivesRenumberAndNeverRetargets(t *testing.T) {
 	if _, err := frozen.CurrentTarget([]OwnedWorkspace{{ID: "replacement", Index: 2, Name: "Dev"}}); err == nil {
 		t.Fatal("retargeted to workspace that inherited selector")
 	}
+	if _, err := frozen.CurrentTarget([]OwnedWorkspace{{ID: "local-dev", Index: 7, Name: "Dev"}, {ID: "other", Index: 8, Name: "Dev"}}); err == nil {
+		t.Fatal("accepted duplicate current destination name")
+	}
 
 	numbered, err := ResolveFollowDestination(Workspace{ID: "source", Index: 3}, []OwnedWorkspace{{ID: 99, Index: 3}})
 	if err != nil {
@@ -76,156 +126,186 @@ func TestFrozenDestinationSurvivesRenumberAndNeverRetargets(t *testing.T) {
 	if target, err := numbered.CurrentTarget([]OwnedWorkspace{{ID: 100, Index: 3}, {ID: 99, Index: 8}}); err != nil || target.ID != "99" || target.Index != 8 {
 		t.Fatalf("numbered target=%#v err=%v", target, err)
 	}
+	if _, err := numbered.CurrentTarget([]OwnedWorkspace{{ID: 99, Index: 8}, {ID: 100, Index: 8}}); err == nil {
+		t.Fatal("accepted duplicate current destination index")
+	}
 }
 
-type followRunner struct {
-	commands []Command
-	token    string
-	session  string
+type followSim struct {
+	commands         []Command
+	launchedSessions []string
+	exact            *Projection
+	correlate        bool
+	moves            int
+	workspaces       []OwnedWorkspace
 }
 
-func (r *followRunner) Output(context.Context, Command) ([]byte, error) {
+func newFollowSim() *followSim {
+	return &followSim{correlate: true, workspaces: []OwnedWorkspace{{ID: "local", Index: 2, Name: "Dev"}}}
+}
+
+func (sim *followSim) Output(context.Context, Command) ([]byte, error) {
 	return nil, errors.New("unexpected output")
 }
-func (r *followRunner) Run(_ context.Context, command Command) error {
-	r.commands = append(r.commands, command)
-	if command.Name == "kitty" {
-		joined := strings.Join(command.Args, " ")
-		marker := projectionTokenEnvironment + "="
-		if i := strings.Index(joined, marker); i >= 0 {
-			r.token = joined[i+len(marker) : i+len(marker)+32]
-		}
-		for _, candidate := range []string{"A", "B", "C"} {
-			if strings.Contains(joined, "'"+candidate+"'") {
-				r.session = candidate
-			}
+
+func (sim *followSim) Run(_ context.Context, command Command) error {
+	sim.commands = append(sim.commands, command)
+	if command.Name == "niri" {
+		sim.moves++
+		return nil
+	}
+	if command.Name != "kitty" {
+		return nil
+	}
+	joined := strings.Join(command.Args, " ")
+	session := ""
+	for _, candidate := range []string{"A", "B", "C"} {
+		if strings.Contains(joined, "'"+candidate+"'") {
+			session = candidate
+			break
 		}
 	}
+	sim.launchedSessions = append(sim.launchedSessions, session)
+	if !sim.correlate {
+		return nil
+	}
+	marker := projectionTokenEnvironment + "="
+	i := strings.Index(joined, marker)
+	if i < 0 || i+len(marker)+32 > len(joined) {
+		return errors.New("missing token")
+	}
+	token := joined[i+len(marker) : i+len(marker)+32]
+	window := OwnedWindow{ID: 40 + len(sim.launchedSessions), PID: 400 + len(sim.launchedSessions)}
+	sim.exact = &Projection{Window: window, SourceHost: "lattice", Session: session, CorrelationToken: token}
 	return nil
+}
+
+func (sim *followSim) deps() FollowDeps {
+	return FollowDeps{
+		Runner: sim,
+		ListWindows: func(context.Context) ([]OwnedWindow, error) {
+			if sim.exact == nil {
+				return nil, nil
+			}
+			return []OwnedWindow{sim.exact.Window}, nil
+		},
+		Inspect: func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
+			if sim.exact == nil {
+				return ProjectionInventory{}, nil
+			}
+			return ProjectionInventory{Exact: []Projection{*sim.exact}}, nil
+		},
+		Workspaces: func(context.Context) ([]OwnedWorkspace, error) { return sim.workspaces, nil },
+		Sleep:      func(context.Context, time.Duration) error { return nil },
+		Token:      func() (string, error) { return strings.Repeat("a", 32), nil },
+	}
 }
 
 func followConfig() FollowConfig {
 	return FollowConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned", NiriCommand: "niri", Timeout: time.Second, EvidenceInterval: time.Millisecond, MaxPerPoll: 2, MaxTotal: 4}
 }
 
-func TestFollowDryRunUsesSourceOrderAndFiniteBounds(t *testing.T) {
-	cfg := followConfig()
-	cfg.DryRun = true
-	result := FollowOnce(context.Background(), cfg, followSnapshot("C", "A", "B"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, &FollowState{}, FollowDeps{
-		Runner:      &followRunner{},
-		ListWindows: func(context.Context) ([]OwnedWindow, error) { return []OwnedWindow{}, nil },
-		Inspect: func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
-			return ProjectionInventory{}, nil
-		},
-		Workspaces: func(context.Context) ([]OwnedWorkspace, error) {
-			return []OwnedWorkspace{{ID: "local", Index: 2, Name: "Dev"}}, nil
-		},
-	})
-	if !result.Healthy || result.Deferred != 1 || len(result.Items) != 2 || result.Items[0].Session != "C" || result.Items[1].Session != "A" || result.Items[0].Status != FollowWouldOpen {
-		t.Fatalf("result=%#v", result)
+func TestFollowUsesSourceOrderAndFiniteAttemptBounds(t *testing.T) {
+	snapshot := followSnapshot("C", "A", "B")
+	sim := newFollowSim()
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, sim.deps())
+	if !result.Healthy || result.Deferred != 1 || result.Attempted != 2 || result.Confirmed != 2 || strings.Join(sim.launchedSessions, ",") != "C,A" || len(result.Items) != 3 || result.Items[0].Session != "B" || result.Items[0].Status != FollowDeferred {
+		t.Fatalf("result=%#v launched=%v", result, sim.launchedSessions)
 	}
 }
 
-func TestFollowExactTokenMovesNewWindowOnceAndManualCloseReopens(t *testing.T) {
-	runner := &followRunner{}
-	open := false
-	moves := 0
-	deps := FollowDeps{
-		Runner: runner,
-		ListWindows: func(context.Context) ([]OwnedWindow, error) {
-			if open || runner.session != "" {
-				open = true
-				return []OwnedWindow{{ID: 40, PID: 400}}, nil
-			}
-			return []OwnedWindow{}, nil
-		},
-		Inspect: func(_ context.Context, windows []OwnedWindow, _ ProjectionEvidenceConfig) (ProjectionInventory, error) {
-			if len(windows) == 0 {
-				return ProjectionInventory{}, nil
-			}
-			return ProjectionInventory{Exact: []Projection{{Window: windows[0], SourceHost: "lattice", Session: "A", CorrelationToken: runner.token}}}, nil
-		},
-		Workspaces: func(context.Context) ([]OwnedWorkspace, error) {
-			return []OwnedWorkspace{{ID: "local", Index: 2, Name: "Dev"}}, nil
-		},
-		Sleep: func(context.Context, time.Duration) error { return nil },
-		Token: func() (string, error) { return strings.Repeat("a", 32), nil },
-	}
-	// Count only Niri move actions.
-	originalRunner := deps.Runner
-	deps.Runner = followTestRunnerFunc{run: func(ctx context.Context, command Command) error {
-		if command.Name == "niri" {
-			moves++
+func TestFollowPlansWholeBatchBeforeAnyEffect(t *testing.T) {
+	snapshot := followSnapshot("A", "B")
+	sim := newFollowSim()
+	calls := 0
+	deps := sim.deps()
+	deps.Token = func() (string, error) {
+		calls++
+		if calls == 2 {
+			return "", errors.New("late token failure")
 		}
-		return originalRunner.Run(ctx, command)
-	}}
+		return strings.Repeat("a", 32), nil
+	}
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, deps)
+	if result.Healthy || result.Attempted != 0 || len(sim.commands) != 0 || !strings.Contains(result.Reason, "token") {
+		t.Fatalf("partial effect escaped plan gate: %#v commands=%#v", result, sim.commands)
+	}
+}
+
+func TestFollowExactTokenMovesOnceAndManualCloseReopens(t *testing.T) {
+	snapshot := followSnapshot("A")
+	sim := newFollowSim()
 	state := &FollowState{}
-	result := FollowOnce(context.Background(), followConfig(), followSnapshot("A"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, state, deps)
-	if result.Opened != 1 || result.Items[0].WindowID != 40 || moves != 1 || state.TotalOpened != 1 {
-		t.Fatalf("first=%#v moves=%d state=%#v", result, moves, state)
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, sim.deps())
+	if !result.Healthy || result.Confirmed != 1 || sim.moves != 1 || state.TotalAttempts != 1 || state.TotalConfirmed != 1 {
+		t.Fatalf("first=%#v moves=%d state=%#v", result, sim.moves, state)
 	}
-	result = FollowOnce(context.Background(), followConfig(), followSnapshot("A"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, state, deps)
-	if result.Existing != 1 || result.Opened != 0 || moves != 1 {
-		t.Fatalf("existing=%#v moves=%d", result, moves)
+	result = FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, sim.deps())
+	if result.Existing != 1 || result.Attempted != 0 || sim.moves != 1 {
+		t.Fatalf("existing=%#v moves=%d", result, sim.moves)
 	}
-	open, runner.session, runner.token = false, "", ""
-	result = FollowOnce(context.Background(), followConfig(), followSnapshot("A"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, state, deps)
-	if result.Opened != 1 || moves != 2 || state.TotalOpened != 2 {
-		t.Fatalf("reopen=%#v moves=%d state=%#v", result, moves, state)
+	sim.exact = nil
+	result = FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, sim.deps())
+	if result.Confirmed != 1 || sim.moves != 2 || state.TotalAttempts != 2 {
+		t.Fatalf("reopen=%#v moves=%d state=%#v", result, sim.moves, state)
 	}
 }
 
-type followTestRunnerFunc struct {
-	run func(context.Context, Command) error
+func TestUncorrelatedLaunchChargesLifetimeAttemptBudget(t *testing.T) {
+	snapshot := followSnapshot("A")
+	sim := newFollowSim()
+	sim.correlate = false
+	cfg := followConfig()
+	cfg.MaxTotal = 1
+	deps := sim.deps()
+	deps.Sleep = func(context.Context, time.Duration) error { return errors.New("no exact projection") }
+	state := &FollowState{}
+	result := FollowOnce(context.Background(), cfg, snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, deps)
+	if result.Healthy || result.Attempted != 1 || result.Uncertain != 1 || state.TotalAttempts != 1 || len(sim.launchedSessions) != 1 {
+		t.Fatalf("first=%#v state=%#v", result, state)
+	}
+	result = FollowOnce(context.Background(), cfg, snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, deps)
+	if !result.Healthy || result.Attempted != 0 || result.Deferred != 1 || len(sim.launchedSessions) != 1 || result.TotalAttempts != 1 {
+		t.Fatalf("budget retried uncertain launch: %#v launches=%v", result, sim.launchedSessions)
+	}
 }
 
-func (r followTestRunnerFunc) Output(context.Context, Command) ([]byte, error) {
-	return nil, errors.New("unexpected output")
-}
-func (r followTestRunnerFunc) Run(ctx context.Context, command Command) error {
-	return r.run(ctx, command)
+func TestFollowStopsBatchWhenPostLaunchEvidenceDegrades(t *testing.T) {
+	snapshot := followSnapshot("A", "B")
+	sim := newFollowSim()
+	deps := sim.deps()
+	workspaceCalls := 0
+	deps.Workspaces = func(context.Context) ([]OwnedWorkspace, error) {
+		workspaceCalls++
+		if workspaceCalls > 1 {
+			return nil, errors.New("niri disappeared")
+		}
+		return sim.workspaces, nil
+	}
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, deps)
+	if result.Healthy || result.Attempted != 1 || result.Confirmed != 1 || result.Deferred != 1 || len(sim.launchedSessions) != 1 || sim.moves != 0 {
+		t.Fatalf("degraded batch continued: %#v launches=%v moves=%d", result, sim.launchedSessions, sim.moves)
+	}
 }
 
 func TestFollowUntrackedLocalOrExitedSourceOpensNothing(t *testing.T) {
-	runner := &followRunner{}
-	deps := FollowDeps{
-		Runner:      runner,
-		ListWindows: func(context.Context) ([]OwnedWindow, error) { return []OwnedWindow{{ID: 9, PID: 90}}, nil },
-		Inspect: func(_ context.Context, windows []OwnedWindow, _ ProjectionEvidenceConfig) (ProjectionInventory, error) {
-			return ProjectionInventory{Untracked: windows}, nil
-		},
+	snapshot := followSnapshot("A")
+	sim := newFollowSim()
+	deps := sim.deps()
+	deps.ListWindows = func(context.Context) ([]OwnedWindow, error) { return []OwnedWindow{{ID: 9, PID: 90}}, nil }
+	deps.Inspect = func(_ context.Context, windows []OwnedWindow, _ ProjectionEvidenceConfig) (ProjectionInventory, error) {
+		return ProjectionInventory{Untracked: windows}, nil
 	}
-	result := FollowOnce(context.Background(), followConfig(), followSnapshot("A"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, &FollowState{}, deps)
-	if result.Healthy || len(runner.commands) != 0 {
-		t.Fatalf("unsafe local evidence launched: %#v commands=%v", result, runner.commands)
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, deps)
+	if result.Healthy || len(sim.commands) != 0 {
+		t.Fatalf("unsafe local evidence launched: %#v commands=%v", result, sim.commands)
 	}
+
 	exited := followSnapshot("A")
 	exited.ActiveSessions = []string{}
-	deps.ListWindows = func(context.Context) ([]OwnedWindow, error) { return []OwnedWindow{}, nil }
-	deps.Inspect = func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
-		return ProjectionInventory{}, nil
-	}
-	deps.Workspaces = func(context.Context) ([]OwnedWorkspace, error) {
-		return []OwnedWorkspace{{ID: "local", Index: 2, Name: "Dev"}}, nil
-	}
-	result = FollowOnce(context.Background(), followConfig(), exited, SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, &FollowState{}, deps)
-	if !result.Healthy || result.Eligible != 0 || len(runner.commands) != 0 {
+	result = FollowOnce(context.Background(), followConfig(), exited, selectedWorkspace(exited), FrozenDestination{ID: "local"}, &FollowState{}, newFollowSim().deps())
+	if !result.Healthy || result.Eligible != 0 || result.Attempted != 0 {
 		t.Fatalf("exited session caused effect: %#v", result)
-	}
-}
-
-func TestFollowLocalWorkspaceFailureHasZeroEffects(t *testing.T) {
-	runner := &followRunner{}
-	result := FollowOnce(context.Background(), followConfig(), followSnapshot("A"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, &FollowState{}, FollowDeps{
-		Runner:      runner,
-		ListWindows: func(context.Context) ([]OwnedWindow, error) { return []OwnedWindow{}, nil },
-		Inspect: func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
-			return ProjectionInventory{}, nil
-		},
-		Workspaces: func(context.Context) ([]OwnedWorkspace, error) { return nil, errors.New("niri unavailable") },
-	})
-	if result.Healthy || !strings.Contains(result.Reason, "workspace inventory") || len(runner.commands) != 0 {
-		t.Fatalf("result=%#v commands=%#v", result, runner.commands)
 	}
 }
 
@@ -250,45 +330,28 @@ func TestFollowLockSerializesForegroundOperations(t *testing.T) {
 	}
 }
 
-func TestFollowCorrelationCancellationStopsWithoutMove(t *testing.T) {
-	runner := &followRunner{}
+func TestFollowCorrelationCancellationStopsAndChargesAttempt(t *testing.T) {
+	snapshot := followSnapshot("A")
+	sim := newFollowSim()
+	sim.correlate = false
 	ctx, cancel := context.WithCancel(context.Background())
-	deps := FollowDeps{
-		Runner:      runner,
-		ListWindows: func(context.Context) ([]OwnedWindow, error) { return []OwnedWindow{}, nil },
-		Inspect: func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
-			return ProjectionInventory{}, nil
-		},
-		Sleep: func(context.Context, time.Duration) error {
-			cancel()
-			return context.Canceled
-		},
-		Workspaces: func(context.Context) ([]OwnedWorkspace, error) {
-			return []OwnedWorkspace{{ID: "local", Index: 2, Name: "Dev"}}, nil
-		},
-		Token: func() (string, error) { return strings.Repeat("b", 32), nil },
+	deps := sim.deps()
+	deps.Sleep = func(context.Context, time.Duration) error {
+		cancel()
+		return context.Canceled
 	}
-	result := FollowOnce(ctx, followConfig(), followSnapshot("A"), SourceWorkspaceSelection{Name: "Dev"}, FrozenDestination{ID: "local"}, &FollowState{}, deps)
-	if result.Opened != 0 || len(result.Items) != 1 || result.Items[0].Status != FollowFailed || !strings.Contains(result.Items[0].Reason, "canceled") {
-		t.Fatalf("cancellation result=%#v", result)
-	}
-	for _, command := range runner.commands {
-		if command.Name == "niri" {
-			t.Fatalf("cancellation still moved a window: %#v", runner.commands)
-		}
+	state := &FollowState{}
+	result := FollowOnce(ctx, followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, state, deps)
+	if result.Healthy || result.Attempted != 1 || result.Uncertain != 1 || state.TotalAttempts != 1 || len(result.Items) != 1 || !strings.Contains(result.Items[0].Reason, "canceled") || sim.moves != 0 {
+		t.Fatalf("cancellation result=%#v state=%#v moves=%d", result, state, sim.moves)
 	}
 }
 
-func TestFollowRetryDelayIsBoundedAndCancellationPropagates(t *testing.T) {
+func TestFollowRetryDelayIsBounded(t *testing.T) {
 	if got := FollowRetryDelay(time.Millisecond, 0); got != MinimumFollowInterval {
 		t.Fatalf("minimum delay=%s", got)
 	}
 	if got := FollowRetryDelay(5*time.Second, 20); got != MaximumFollowBackoff {
 		t.Fatalf("capped delay=%s", got)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if !errors.Is(ctx.Err(), context.Canceled) {
-		t.Fatal("cancellation not propagated")
 	}
 }

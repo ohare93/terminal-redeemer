@@ -62,9 +62,7 @@ func TestWorkspacePickerNarrowAndNoColorRendering(t *testing.T) {
 func TestFollowStatusQAndCtrlCCancelImmediately(t *testing.T) {
 	for _, key := range []tea.KeyType{tea.KeyRunes, tea.KeyCtrlC} {
 		ctx, cancel := context.WithCancel(context.Background())
-		model := NewFollowStatusModel(ctx, cancel, "Dev", "max=4", func(context.Context) (mirror.FollowPollResult, time.Duration) {
-			return mirror.FollowPollResult{Healthy: true}, mirror.MinimumFollowInterval
-		})
+		model := NewFollowStatusModel(ctx, cancel, "Dev", "max=4", make(chan followPollMsg))
 		message := tea.KeyMsg{Type: key}
 		if key == tea.KeyRunes {
 			message.Runes = []rune("q")
@@ -81,11 +79,72 @@ func TestFollowStatusShowsBoundsDeferredAndDegraded(t *testing.T) {
 	defer cancel()
 	model := NewFollowStatusModel(ctx, cancel, "Dev", "interval=5s max-per-poll=4 max-total=64", nil)
 	model.width, model.height = 120, 10
-	model.last = mirror.FollowPollResult{Healthy: false, Eligible: 9, Existing: 2, Deferred: 7, Total: 4, Reason: "SSH unavailable"}
+	model.haveResult = true
+	model.last = mirror.FollowPollResult{Healthy: false, Eligible: 9, Existing: 2, Deferred: 7, TotalAttempts: 4, TotalConfirmed: 3, TotalUncertain: 1, Reason: "SSH unavailable"}
 	view := model.View()
-	for _, want := range []string{"degraded/disconnected", "deferred=7", "max-total=64", "SSH unavailable", "q/Ctrl+C"} {
+	for _, want := range []string{"degraded/disconnected", "deferred=7", "attempted=4 confirmed=3 uncertain=1", "max-total=64", "SSH unavailable", "q/Ctrl+C"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view lacks %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestRunFollowStatusJoinsBlockingPollBeforeCallerUnlocks(t *testing.T) {
+	root := t.TempDir()
+	lock, err := mirror.AcquireFollowLock(root, "lattice", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	workerDone := make(chan struct{})
+	returned := make(chan error, 1)
+	poll := func(ctx context.Context) (mirror.FollowPollResult, time.Duration) {
+		close(started)
+		<-ctx.Done()
+		<-release
+		close(workerDone)
+		return mirror.FollowPollResult{}, mirror.MinimumFollowInterval
+	}
+	go func() {
+		err := runFollowStatus(context.Background(), "Dev", "max=4", poll, func(context.Context, *FollowStatusModel) error {
+			<-started
+			return nil
+		})
+		if closeErr := lock.Close(); err == nil {
+			err = closeErr
+		}
+		returned <- err
+	}()
+	<-started
+	select {
+	case err := <-returned:
+		t.Fatalf("status returned before its worker completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case <-workerDone:
+		t.Fatal("worker completed before release")
+	default:
+	}
+	if second, err := mirror.AcquireFollowLock(root, "lattice", "default"); err == nil {
+		_ = second.Close()
+		t.Fatal("caller released follow lock while poll effect was still running")
+	}
+	close(release)
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("status did not return after worker completion")
+	}
+	second, err := mirror.AcquireFollowLock(root, "lattice", "default")
+	if err != nil {
+		t.Fatalf("joined worker did not allow caller to release lock: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
