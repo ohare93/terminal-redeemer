@@ -89,11 +89,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cancelled, m.done = true, true
 			return m, tea.Quit
-		case "up", "k":
+		case "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
-		case "down", "j":
+		case "down":
 			if m.cursor+1 < len(m.visible) {
 				m.cursor++
 			}
@@ -144,7 +144,7 @@ func (m *Model) currentIndex() int {
 
 func (m *Model) refilter(preferred int) {
 	needle := strings.ToLower(m.query)
-	m.visible = m.visible[:0]
+	matched := make([]int, 0, len(m.windows))
 	for i, window := range m.windows {
 		cwd := ""
 		if window.Terminal != nil {
@@ -154,8 +154,12 @@ func (m *Model) refilter(preferred int) {
 			mirror.SessionName(window), window.Title, window.WorkspaceName, cwd,
 		}, "\x00"))
 		if needle == "" || strings.Contains(haystack, needle) {
-			m.visible = append(m.visible, i)
+			matched = append(matched, i)
 		}
+	}
+	m.visible = m.visible[:0]
+	for _, group := range buildSessionGroups(m.windows, matched) {
+		m.visible = append(m.visible, group.indexes...)
 	}
 	m.cursor = 0
 	if preferred >= 0 {
@@ -260,13 +264,21 @@ func (m *Model) View() string {
 		lines = lines[:m.height]
 	}
 
-	var out strings.Builder
+	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		plain := fit(line.text, width)
-		out.WriteString(m.paint(plain, line.role, line.selected))
-		out.WriteByte('\n')
+		if line.selected {
+			plain = padCell(plain, width)
+		}
+		rendered = append(rendered, m.paint(plain, line.role, line.selected))
 	}
-	return out.String()
+	return strings.Join(rendered, "\n")
+}
+
+type sessionGroup struct {
+	label    string
+	indexes  []int
+	headless bool
 }
 
 func (m *Model) bodyLines(width int) []renderedLine {
@@ -277,57 +289,91 @@ func (m *Model) bodyLines(width int) []renderedLine {
 		return []renderedLine{{text: "No sessions match the current filter.", role: roleWarning, active: true}}
 	}
 
-	visible := make(map[int]bool, len(m.visible))
-	for _, index := range m.visible {
-		visible[index] = true
-	}
-	groupOrder := make([]string, 0)
-	seenGroup := make(map[string]bool)
-	for i, window := range m.windows {
-		if !visible[i] {
-			continue
-		}
-		key := strings.TrimSpace(window.WorkspaceName)
-		if !seenGroup[key] {
-			seenGroup[key] = true
-			groupOrder = append(groupOrder, key)
-		}
-	}
-
+	groups := buildSessionGroups(m.windows, m.visible)
 	active := m.currentIndex()
-	lines := make([]renderedLine, 0, len(m.visible)*2+len(groupOrder))
-	for _, group := range groupOrder {
-		if group != "" || len(groupOrder) > 1 {
-			heading := group
-			if heading == "" {
-				heading = "(unnamed)"
-			}
-			lines = append(lines, renderedLine{text: "  Workspace: " + heading, role: roleAccent})
+	lines := make([]renderedLine, 0, len(m.visible)*2+len(groups))
+	for _, group := range groups {
+		heading := "  Workspace: " + group.label
+		if group.headless {
+			heading = "  " + group.label
 		}
-		for i, window := range m.windows {
-			if !visible[i] || strings.TrimSpace(window.WorkspaceName) != group {
-				continue
-			}
-			lines = append(lines, m.windowLines(i, window, width, i == active)...)
+		heading += fmt.Sprintf(" (%d)", len(group.indexes))
+		lines = append(lines, renderedLine{text: heading, role: roleAccent})
+		for _, index := range group.indexes {
+			lines = append(lines, m.windowLines(index, m.windows[index], width, index == active)...)
 		}
 	}
 	return lines
 }
 
+func buildSessionGroups(windows []mirror.Window, indexes []int) []sessionGroup {
+	groups := make([]sessionGroup, 0)
+	groupIndex := make(map[string]int)
+	headless := sessionGroup{label: "Headless Zellij", headless: true}
+	for _, index := range indexes {
+		window := windows[index]
+		if window.Headless {
+			headless.indexes = append(headless.indexes, index)
+			continue
+		}
+		key := workspaceGroupKey(window)
+		position, found := groupIndex[key]
+		if !found {
+			position = len(groups)
+			groupIndex[key] = position
+			groups = append(groups, sessionGroup{label: workspaceGroupLabel(window)})
+		}
+		groups[position].indexes = append(groups[position].indexes, index)
+	}
+	if len(headless.indexes) > 0 {
+		groups = append(groups, headless)
+	}
+	return groups
+}
+
+func workspaceGroupKey(window mirror.Window) string {
+	if id := strings.TrimSpace(window.WorkspaceID); id != "" {
+		return "id:" + id
+	}
+	if window.WorkspaceIndex > 0 || strings.TrimSpace(window.Output) != "" {
+		return fmt.Sprintf("position:%d:%s", window.WorkspaceIndex, strings.TrimSpace(window.Output))
+	}
+	return fmt.Sprintf("window:%d", window.SourceWindowID)
+}
+
+func workspaceGroupLabel(window mirror.Window) string {
+	label := strings.TrimSpace(window.WorkspaceName)
+	if label == "" && window.WorkspaceIndex > 0 {
+		label = fmt.Sprintf("Workspace %d", window.WorkspaceIndex)
+	}
+	if label == "" {
+		label = strings.TrimSpace(window.Output)
+	}
+	if label == "" {
+		if id := strings.TrimSpace(window.WorkspaceID); id != "" {
+			label = "Workspace " + id
+		} else {
+			label = "Workspace (unknown)"
+		}
+	}
+	if output := strings.TrimSpace(window.Output); output != "" && output != label {
+		label += " · " + output
+	}
+	return label
+}
+
 func (m *Model) windowLines(index int, window mirror.Window, width int, active bool) []renderedLine {
 	cursor := "  "
 	if active {
-		cursor = "> "
+		cursor = m.inline(roleAccent, "> ")
 	}
-	check := "[ ] "
-	role := roleText
+	check := m.inline(roleMuted, "[ ] ")
 	if m.checked[index] {
-		check = "[x] "
-		role = roleSuccess
+		check = m.inline(roleSuccess, "[x] ")
 	}
 	focus := "  "
 	if window.IsFocused {
-		focus = "* "
+		focus = m.inline(roleWarning, "* ")
 	}
 	prefix := cursor + check + focus
 	session := mirror.SessionName(window)
@@ -336,18 +382,18 @@ func (m *Model) windowLines(index int, window mirror.Window, width int, active b
 
 	if width >= 72 {
 		projectWidth, activityWidth, sessionWidth := columnWidths(width)
-		line := prefix + padPath(project, projectWidth) + "  " + padCell(activity, activityWidth) + "  " + fit(session, sessionWidth)
-		return []renderedLine{{text: line, role: role, selected: active, active: active}}
+		line := prefix + m.inline(roleAccent, padPath(project, projectWidth)) + "  " + padCell(activity, activityWidth) + "  " + m.inline(roleDim, fit(session, sessionWidth))
+		return []renderedLine{{text: line, role: roleText, selected: active, active: active}}
 	}
 
 	projectWidth := width - ansi.StringWidth(prefix)
-	lines := []renderedLine{{text: prefix + fitPath(project, projectWidth), role: role, selected: active, active: active}}
+	lines := []renderedLine{{text: prefix + m.inline(roleAccent, fitPath(project, projectWidth)), role: roleText, selected: active, active: active}}
 	indent := strings.Repeat(" ", ansi.StringWidth(prefix))
 	if activity != "" {
-		lines = append(lines, renderedLine{text: indent + "activity: " + activity, role: roleDim, selected: active, active: active})
+		lines = append(lines, renderedLine{text: indent + m.inline(roleMuted, "activity: ") + activity, role: roleText, selected: active, active: active})
 	}
 	if strings.TrimSpace(session) != "" {
-		lines = append(lines, renderedLine{text: indent + "session: " + session, role: roleDim, selected: active, active: active})
+		lines = append(lines, renderedLine{text: indent + m.inline(roleDim, "session: "+session), role: roleText, selected: active, active: active})
 	}
 	return lines
 }
@@ -504,30 +550,41 @@ func padPath(value string, width int) string {
 	return value
 }
 
+func (m *Model) inline(role semanticRole, value string) string {
+	if !m.color || value == "" {
+		return value
+	}
+	return foregroundANSI(roleColor(role)) + value + foregroundANSI(textColor)
+}
+
 func (m *Model) paint(value string, role semanticRole, selected bool) string {
 	if !m.color || value == "" {
 		return value
 	}
-	foreground := textColor
-	switch role {
-	case roleAccent:
-		foreground = accentColor
-	case roleSuccess:
-		foreground = successColor
-	case roleMuted:
-		foreground = mutedColor
-	case roleDim:
-		foreground = dimColor
-	case roleWarning:
-		foreground = warningColor
-	case roleError:
-		foreground = errorColor
-	}
-	sequence := foregroundANSI(foreground)
+	sequence := foregroundANSI(roleColor(role))
 	if selected {
 		sequence += backgroundANSI(selectedBgColor)
 	}
 	return sequence + value + "\x1b[0m"
+}
+
+func roleColor(role semanticRole) string {
+	switch role {
+	case roleAccent:
+		return accentColor
+	case roleSuccess:
+		return successColor
+	case roleMuted:
+		return mutedColor
+	case roleDim:
+		return dimColor
+	case roleWarning:
+		return warningColor
+	case roleError:
+		return errorColor
+	default:
+		return textColor
+	}
 }
 
 func foregroundANSI(hex string) string { return colorANSI("38", hex) }
