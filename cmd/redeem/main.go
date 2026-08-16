@@ -632,11 +632,24 @@ func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Write
 		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
 		return 1
 	}
+	if writeMirrorApplyResult(stdout, result) {
+		return 1
+	}
+	return 0
+}
+
+func writeMirrorApplyResult(stdout io.Writer, result mirror.ApplyResult) bool {
 	failed := false
 	for _, item := range result.Items {
 		_, _ = fmt.Fprintf(stdout, "session=%q order=%d status=%s", item.Session, item.Order, item.Status)
 		if item.WindowID > 0 {
 			_, _ = fmt.Fprintf(stdout, " window_id=%d", item.WindowID)
+		}
+		if item.LayoutStatus != "" {
+			_, _ = fmt.Fprintf(stdout, " layout_status=%s", item.LayoutStatus)
+			if item.LayoutReason != "" {
+				_, _ = fmt.Fprintf(stdout, " layout_reason=%q", item.LayoutReason)
+			}
 		}
 		if item.Reason != "" {
 			_, _ = fmt.Fprintf(stdout, " reason=%q", item.Reason)
@@ -647,10 +660,7 @@ func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Write
 		}
 	}
 	_, _ = fmt.Fprintf(stdout, "untracked=%d ambiguous=%d\n", result.Untracked, result.Ambiguous)
-	if failed {
-		return 1
-	}
-	return 0
+	return failed
 }
 
 func safeSocketPart(value string) string {

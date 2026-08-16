@@ -115,8 +115,10 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bo
 		mapping := "map=ctrl+v launch --type=background " + QuoteCommand([]string{cfg.SelfCommand, "mirror", "paste-image", "--host", cfg.SourceHost, "--kitty-to", cfg.Socket})
 		args = append(args, "--listen-on", cfg.Socket, "--override", mapping)
 	}
-	sshArgs := append([]string(nil), cfg.SSHOptions...)
-	sshArgs = append(sshArgs, "-tt", "--", cfg.SourceHost, remoteCommand)
+	sshArgs, err := buildSSHArgs(cfg.SSHOptions, []string{"-tt"}, cfg.SourceHost, remoteCommand)
+	if err != nil {
+		return LaunchPlan{}, err
+	}
 	args = append(args, "-e", cfg.SSHCommand)
 	args = append(args, sshArgs...)
 	return LaunchPlan{

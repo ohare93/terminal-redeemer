@@ -20,9 +20,10 @@ type Projection struct {
 }
 
 type ProjectionInventory struct {
-	Exact     []Projection
-	Untracked []OwnedWindow
-	Ambiguous []OwnedWindow
+	Exact               []Projection
+	Untracked           []OwnedWindow
+	Ambiguous           []OwnedWindow
+	AmbiguousCandidates map[int][]Projection
 }
 
 type ProjectionEvidenceConfig struct {
@@ -35,7 +36,10 @@ type ProjectionEvidenceConfig struct {
 // unreadable process evidence is untracked; multiple qualifying descendants
 // are ambiguous. Neither category is authoritative.
 func InspectProjections(ctx context.Context, windows []OwnedWindow, cfg ProjectionEvidenceConfig) (ProjectionInventory, error) {
-	inventory := ProjectionInventory{}
+	if err := ValidateSSHOptions(cfg.SSHOptions); err != nil {
+		return ProjectionInventory{}, err
+	}
+	inventory := ProjectionInventory{AmbiguousCandidates: make(map[int][]Projection)}
 	for _, window := range windows {
 		matches, err := inspectProjectionWindow(ctx, window, cfg)
 		if err != nil {
@@ -52,6 +56,7 @@ func InspectProjections(ctx context.Context, windows []OwnedWindow, cfg Projecti
 			inventory.Exact = append(inventory.Exact, matches[0])
 		default:
 			inventory.Ambiguous = append(inventory.Ambiguous, window)
+			inventory.AmbiguousCandidates[window.ID] = append([]Projection(nil), matches...)
 		}
 	}
 	return inventory, nil
@@ -82,21 +87,19 @@ func parseProjectionSSHArgv(argv []string, sshCommand string, sshOptions []strin
 	if want == "" {
 		want = "ssh"
 	}
-	if len(argv) != 1+len(sshOptions)+4 || !sameExecutableArgv0(argv[0], want) {
+	if len(argv) < 3 || !sameExecutableArgv0(argv[0], want) {
 		return "", "", "", false
 	}
-	if !equalStrings(argv[1:1+len(sshOptions)], sshOptions) {
+	host, remote := argv[len(argv)-2], argv[len(argv)-1]
+	expected, err := buildSSHArgs(sshOptions, []string{"-tt"}, host, remote)
+	if err != nil || !equalStrings(argv[1:], expected) {
 		return "", "", "", false
 	}
-	tail := argv[1+len(sshOptions):]
-	if tail[0] != "-tt" || tail[1] != "--" || ValidateDestination(tail[2]) != nil {
-		return "", "", "", false
-	}
-	session, token, ok = parseProjectionRemoteCommand(tail[3])
+	session, token, ok = parseProjectionRemoteCommand(remote)
 	if !ok {
 		return "", "", "", false
 	}
-	return tail[2], session, token, true
+	return host, session, token, true
 }
 
 func sameExecutableArgv0(observed, configured string) bool {

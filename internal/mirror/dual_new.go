@@ -62,8 +62,10 @@ func PlanSourceAttach(cfg SourceAttachConfig) (Command, error) {
 	if err != nil {
 		return Command{}, err
 	}
-	args := append([]string(nil), cfg.SSHOptions...)
-	args = append(args, "--", cfg.SourceHost, QuoteCommand(remoteArgv))
+	args, err := buildSSHArgs(cfg.SSHOptions, nil, cfg.SourceHost, QuoteCommand(remoteArgv))
+	if err != nil {
+		return Command{}, err
+	}
 	return Command{Name: cfg.SSHCommand, Args: args}, nil
 }
 

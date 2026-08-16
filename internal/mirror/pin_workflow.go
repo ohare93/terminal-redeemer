@@ -108,10 +108,12 @@ const (
 
 type ApplyItem struct {
 	PinnedProjection
-	Status   ApplyStatus
-	Reason   string
-	WindowID int
-	target   resume.WorkspaceTarget
+	Status       ApplyStatus
+	Reason       string
+	WindowID     int
+	LayoutStatus resume.LayoutStatus
+	LayoutReason string
+	target       resume.WorkspaceTarget
 }
 
 type ApplyResult struct {
@@ -148,6 +150,9 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 	}
 	if cfg.Snapshot.Host != cfg.SourceHost {
 		return ApplyResult{}, fmt.Errorf("fresh source snapshot host does not match requested SSH destination")
+	}
+	if err := ValidateSSHOptions(cfg.SSHOptions); err != nil {
+		return ApplyResult{}, err
 	}
 	if err := validateText("source profile", cfg.Snapshot.Profile, 128, false); err != nil {
 		return ApplyResult{}, err
@@ -204,7 +209,8 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 	if workspaceErr != nil {
 		for i := range result.Items {
 			if result.Items[i].Status == ApplyReady {
-				result.Items[i].Reason = "destination workspace inventory unavailable: " + workspaceErr.Error()
+				result.Items[i].LayoutStatus = resume.LayoutDegraded
+				result.Items[i].LayoutReason = "destination workspace inventory unavailable: " + workspaceErr.Error()
 			}
 		}
 	}
@@ -222,6 +228,10 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 			continue
 		}
 		matching := exactProjectionIDs(beforeInventory, cfg.SourceHost, item.Session)
+		if hasAmbiguousCandidate(beforeInventory, cfg.SourceHost, item.Session, "") {
+			item.Status, item.Reason = ApplyAmbiguous, "ambiguous owned window contains matching projection evidence"
+			continue
+		}
 		switch len(matching) {
 		case 0:
 		case 1:
@@ -260,11 +270,8 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 			continue
 		}
 		item.WindowID = windowID
-		issues := applyPinnedPlacement(ctx, cfg, *item, windowID, deps.Runner)
+		item.LayoutStatus, item.LayoutReason = applyPinnedPlacement(ctx, cfg, *item, windowID, deps.Runner)
 		item.Status = ApplyOpened
-		if len(issues) > 0 {
-			item.Reason = strings.Join(issues, "; ")
-		}
 	}
 	return result, nil
 }
@@ -283,18 +290,22 @@ func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, wor
 	result := ApplyResult{Untracked: len(inventory.Untracked), Ambiguous: len(inventory.Ambiguous)}
 	for _, pinned := range normalizePin(pin).Projections {
 		item := ApplyItem{PinnedProjection: pinned}
+		_, isActive := active[pinned.Session]
 		switch {
+		case hasAmbiguousCandidate(inventory, pin.SourceHost, pinned.Session, ""):
+			item.Status, item.Reason = ApplyAmbiguous, "ambiguous owned window contains matching projection evidence"
 		case open[pinned.Session] > 1:
 			item.Status, item.Reason = ApplyAmbiguous, "multiple exact projections are already open"
 		case open[pinned.Session] == 1:
 			item.Status = ApplyAlreadyOpen
-		case !containsSession(active, pinned.Session):
+		case !isActive:
 			item.Status, item.Reason = ApplyMissing, "exact ACTIVE source session is unavailable"
 		default:
 			item.Status = ApplyReady
 			item.target = resolveWorkspaceReference(pinned.Workspace, workspaces)
 			if item.target.ID == "" {
-				item.Reason = "destination workspace unavailable; launch will remain on current workspace"
+				item.LayoutStatus = resume.LayoutDegraded
+				item.LayoutReason = "destination workspace unavailable; launch will remain on current workspace"
 			}
 		}
 		result.Items = append(result.Items, item)
@@ -302,7 +313,16 @@ func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, wor
 	return result
 }
 
-func containsSession(set map[string]struct{}, session string) bool { _, ok := set[session]; return ok }
+func hasAmbiguousCandidate(inventory ProjectionInventory, host, session, token string) bool {
+	for _, candidates := range inventory.AmbiguousCandidates {
+		for _, candidate := range candidates {
+			if candidate.SourceHost == host && candidate.Session == session && (token == "" || candidate.CorrelationToken == token) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func resolveWorkspaceReference(selector model.WorkspaceRef, workspaces []OwnedWorkspace) resume.WorkspaceTarget {
 	if selector.Name != "" {
@@ -383,12 +403,11 @@ func waitForNewProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, 
 			if len(newMatches) > 1 {
 				return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
 			}
-			// A newly appeared ambiguous owned window could be this detached
-			// launch; never claim a different exact window in that observation.
-			for _, ambiguous := range inventory.Ambiguous {
-				if _, existed := beforeOwned[ambiguous.ID]; !existed {
-					return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
-				}
+			// Only ambiguous evidence containing this exact token/session can
+			// block correlation; unrelated ambiguous windows do not globally
+			// prevent safe additions.
+			if hasAmbiguousCandidate(inventory, cfg.SourceHost, item.Session, token) {
+				return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
 			}
 			if len(newMatches) == 1 {
 				return newMatches[0], nil
@@ -412,7 +431,7 @@ func (r applyActionRunner) Run(ctx context.Context, action string, args ...strin
 	return r.runner.Run(actionCtx, Command{Name: r.command, Args: append([]string{"msg", "action", action}, args...)})
 }
 
-func applyPinnedPlacement(ctx context.Context, cfg ApplyConfig, item ApplyItem, windowID int, runner Runner) []string {
+func applyPinnedPlacement(ctx context.Context, cfg ApplyConfig, item ApplyItem, windowID int, runner Runner) (resume.LayoutStatus, string) {
 	issues := make([]string, 0, 2)
 	actions := resume.NiriActions{Runner: applyActionRunner{runner: runner, command: cfg.NiriCommand, timeout: cfg.Timeout}}
 	if item.target.ID != "" {
@@ -426,7 +445,10 @@ func applyPinnedPlacement(ctx context.Context, cfg ApplyConfig, item ApplyItem, 
 	if layout.Reason != "" {
 		issues = append(issues, layout.Reason)
 	}
-	return issues
+	if len(issues) > 0 {
+		return resume.LayoutDegraded, strings.Join(issues, "; ")
+	}
+	return layout.Status, ""
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {

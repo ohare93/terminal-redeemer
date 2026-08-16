@@ -49,8 +49,10 @@ func AcquireRemote(ctx context.Context, runner Runner, cfg RemoteConfig) (Snapsh
 	if len(cfg.SnapshotCommand) == 0 || strings.TrimSpace(cfg.SnapshotCommand[0]) == "" {
 		return Snapshot{}, fmt.Errorf("remote snapshot command is empty")
 	}
-	args := append([]string(nil), cfg.SSHOptions...)
-	args = append(args, "--", cfg.Host, QuoteCommand(cfg.SnapshotCommand))
+	args, err := buildSSHArgs(cfg.SSHOptions, nil, cfg.Host, QuoteCommand(cfg.SnapshotCommand))
+	if err != nil {
+		return Snapshot{}, err
+	}
 	payload, err := runner.Output(ctx, Command{Name: cfg.SSHCommand, Args: args})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("acquire mirror snapshot from %s: %w", cfg.Host, err)

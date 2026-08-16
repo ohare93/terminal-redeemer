@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/resume"
 	"github.com/jmo/terminal-redeemer/internal/storelock"
 )
 
@@ -218,6 +219,7 @@ func TestPrepareApplyMissingDuplicateCaseDistinctAndNoop(t *testing.T) {
 type pinRunner struct {
 	commands    []Command
 	failSession string
+	niriErr     error
 	token       string
 }
 
@@ -235,6 +237,9 @@ func (r *pinRunner) Run(_ context.Context, command Command) error {
 	}
 	if command.Name == "kitty" && r.failSession != "" && strings.Contains(joined, r.failSession) {
 		return errors.New("launch failed")
+	}
+	if command.Name == "niri" && r.niriErr != nil {
+		return r.niriErr
 	}
 	return nil
 }
@@ -272,7 +277,7 @@ func TestApplyPinnedPartialLaunchPlacementAndDuplicateIdempotence(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Items[0].Status != ApplyOpened || result.Items[0].WindowID != 10 || result.Items[1].Status != ApplyFailed {
+	if result.Items[0].Status != ApplyOpened || result.Items[0].WindowID != 10 || result.Items[0].LayoutStatus != resume.LayoutApplied || result.Items[1].Status != ApplyFailed {
 		t.Fatalf("result=%#v", result)
 	}
 	if len(runner.commands) < 4 {

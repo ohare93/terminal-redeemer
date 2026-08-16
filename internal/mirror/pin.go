@@ -1,7 +1,6 @@
 package mirror
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -145,7 +144,11 @@ func OpenPinStore(stateDir string) (*PinStore, error) {
 	if strings.TrimSpace(stateDir) == "" {
 		return nil, errors.New("state directory is empty")
 	}
-	return &PinStore{stateDir: stateDir}, nil
+	absolute, err := filepath.Abs(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state directory: %w", err)
+	}
+	return &PinStore{stateDir: filepath.Clean(absolute)}, nil
 }
 
 func pinName(host, profile string) string {
@@ -157,61 +160,76 @@ func pinName(host, profile string) string {
 func (s *PinStore) Path(host, profile string) string {
 	return filepath.Join(s.stateDir, pinsRelative, pinName(host, profile))
 }
-func (s *PinStore) lockRoot(host, profile string) string {
-	return filepath.Join(s.stateDir, "mirror", "pin-locks", strings.TrimSuffix(pinName(host, profile), ".json"))
-}
 
-func (s *PinStore) acquire(host, profile string) (*storelock.Lock, error) {
-	if err := ValidateDestination(host); err != nil {
+func (s *PinStore) acquire(host, profile string) (*pinLock, error) {
+	if err := validatePinIdentity(host, profile); err != nil {
 		return nil, err
 	}
-	if err := validateText("source profile", profile, 128, false); err != nil {
-		return nil, err
-	}
-	root, err := s.openRoot(true)
+	lockDir, err := s.openSecureChild("pin-locks", true)
 	if err != nil {
 		return nil, err
 	}
-	if err := root.Close(); err != nil {
-		return nil, err
+	defer unix.Close(lockDir)
+	name := strings.TrimSuffix(pinName(host, profile), ".json") + ".lock"
+	fd, err := unix.Openat(lockDir, name, unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open mirror pin lock safely: %w", err)
 	}
-	return storelock.Acquire(s.lockRoot(host, profile))
+	file := os.NewFile(uintptr(fd), name)
+	if err := requireRegularFile(fd, 0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("unsafe mirror pin lock: %w", err)
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf("%w: mirror pin", storelock.ErrLocked)
+		}
+		return nil, fmt.Errorf("lock mirror pin: %w", err)
+	}
+	return &pinLock{file: file}, nil
+}
+
+type pinLock struct{ file *os.File }
+
+func (lock *pinLock) Close() error {
+	if lock == nil || lock.file == nil {
+		return nil
+	}
+	err := unix.Flock(int(lock.file.Fd()), unix.LOCK_UN)
+	return errors.Join(err, lock.file.Close())
+}
+
+func validatePinIdentity(host, profile string) error {
+	if err := ValidateDestination(host); err != nil {
+		return err
+	}
+	return validateText("source profile", profile, 128, false)
 }
 
 func (s *PinStore) Read(host, profile string) (Pin, error) {
-	if err := ValidateDestination(host); err != nil {
+	if err := validatePinIdentity(host, profile); err != nil {
 		return Pin{}, err
 	}
-	if err := validateText("source profile", profile, 128, false); err != nil {
-		return Pin{}, err
-	}
-	root, err := s.openRoot(false)
+	pinsDir, err := s.openSecureChild("pins", false)
 	if errors.Is(err, os.ErrNotExist) {
 		return Pin{}, ErrPinNotFound
 	}
 	if err != nil {
 		return Pin{}, err
 	}
-	defer func() { _ = root.Close() }()
-	name := filepath.Join(pinsRelative, pinName(host, profile))
-	info, err := root.Lstat(name)
+	defer unix.Close(pinsDir)
+	fd, err := unix.Openat(pinsDir, pinName(host, profile), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return Pin{}, ErrPinNotFound
 	}
 	if err != nil {
-		return Pin{}, err
+		return Pin{}, fmt.Errorf("%w: open mirror pin safely: %v", ErrPinInvalid, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return Pin{}, fmt.Errorf("%w: pin must be a non-symlink 0600 regular file", ErrPinInvalid)
-	}
-	file, err := root.Open(name)
-	if err != nil {
-		return Pin{}, err
-	}
-	defer func() { _ = file.Close() }()
-	info, err = file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return Pin{}, fmt.Errorf("%w: pin changed during safe open", ErrPinInvalid)
+	file := os.NewFile(uintptr(fd), pinName(host, profile))
+	defer file.Close()
+	if err := requireRegularFile(fd, 0o600); err != nil {
+		return Pin{}, fmt.Errorf("%w: unsafe pin: %v", ErrPinInvalid, err)
 	}
 	payload, err := io.ReadAll(io.LimitReader(file, maxPinBytes+1))
 	if err != nil {
@@ -230,18 +248,19 @@ func (s *PinStore) Read(host, profile string) (Pin, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Pin{}, fmt.Errorf("%w: trailing JSON", ErrPinInvalid)
 	}
-	pin = normalizePin(pin)
+	// Validate before normalization so a missing/null projections member is
+	// distinguishable from the explicit empty array used for a no-op pin.
 	if err := pin.Validate(); err != nil || pin.SourceHost != host || pin.SourceProfile != profile {
 		return Pin{}, fmt.Errorf("%w: validation or deterministic identity mismatch: %v", ErrPinInvalid, err)
 	}
-	return pin, nil
+	return normalizePin(pin), nil
 }
 
 func (s *PinStore) Write(pin Pin) (path string, returnErr error) {
-	pin = normalizePin(pin)
 	if err := pin.Validate(); err != nil {
 		return "", fmt.Errorf("validate mirror pin: %w", err)
 	}
+	pin = normalizePin(pin)
 	lock, err := s.acquire(pin.SourceHost, pin.SourceProfile)
 	if err != nil {
 		return "", fmt.Errorf("lock mirror pin: %w", err)
@@ -252,32 +271,33 @@ func (s *PinStore) Write(pin Pin) (path string, returnErr error) {
 		return "", fmt.Errorf("encode mirror pin: %w", err)
 	}
 	payload = append(payload, '\n')
-	root, err := s.openRoot(true)
+	pinsDir, err := s.openSecureChild("pins", true)
 	if err != nil {
 		return "", err
 	}
-	defer func() { returnErr = errors.Join(returnErr, root.Close()) }()
-	name := filepath.Join(pinsRelative, pinName(pin.SourceHost, pin.SourceProfile))
-	if info, statErr := root.Lstat(name); statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600) {
-		return "", fmt.Errorf("%w: existing pin must be a non-symlink 0600 regular file", ErrPinInvalid)
-	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return "", statErr
+	defer unix.Close(pinsDir)
+	finalName := pinName(pin.SourceHost, pin.SourceProfile)
+	if fd, openErr := unix.Openat(pinsDir, finalName, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0); openErr == nil {
+		regularErr := requireRegularFile(fd, 0o600)
+		_ = unix.Close(fd)
+		if regularErr != nil {
+			return "", fmt.Errorf("%w: unsafe existing pin: %v", ErrPinInvalid, regularErr)
+		}
+	} else if !errors.Is(openErr, os.ErrNotExist) {
+		return "", fmt.Errorf("%w: open existing mirror pin safely: %v", ErrPinInvalid, openErr)
 	}
-	tmpName, tmp, err := createRootTemp(root)
+	tmpName, tmp, err := createPinTemp(pinsDir)
 	if err != nil {
 		return "", fmt.Errorf("create mirror pin temp file: %w", err)
 	}
 	defer func() {
 		_ = tmp.Close()
 		if returnErr != nil {
-			_ = root.Remove(tmpName)
+			_ = unix.Unlinkat(pinsDir, tmpName, 0)
 		}
 	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return "", err
-	}
-	if err := writeFull(tmp, payload); err != nil {
-		return "", err
+	if _, err := tmp.Write(payload); err != nil {
+		return "", fmt.Errorf("write mirror pin temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		return "", fmt.Errorf("sync mirror pin temp file: %w", err)
@@ -285,133 +305,126 @@ func (s *PinStore) Write(pin Pin) (path string, returnErr error) {
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	pinsDir, err := root.Open(pinsRelative)
-	if err != nil {
-		return "", err
-	}
-	defer func() { returnErr = errors.Join(returnErr, pinsDir.Close()) }()
-	if err := unix.Renameat(int(pinsDir.Fd()), filepath.Base(tmpName), int(pinsDir.Fd()), filepath.Base(name)); err != nil {
+	if err := unix.Renameat(pinsDir, tmpName, pinsDir, finalName); err != nil {
 		return "", fmt.Errorf("replace mirror pin: %w", err)
 	}
-	if err := pinsDir.Sync(); err != nil {
+	if err := unix.Fsync(pinsDir); err != nil {
 		return "", fmt.Errorf("sync mirror pin directory: %w", err)
 	}
 	return s.Path(pin.SourceHost, pin.SourceProfile), nil
 }
 
-func writeFull(file *os.File, payload []byte) error {
-	for len(payload) > 0 {
-		n, err := file.Write(payload)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		payload = payload[n:]
-	}
-	return nil
-}
-
-func createRootTemp(root *os.Root) (string, *os.File, error) {
+func createPinTemp(pinsDir int) (string, *os.File, error) {
 	for range 32 {
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
+		id, err := RandomID()
+		if err != nil {
 			return "", nil, err
 		}
-		name := filepath.Join(pinsRelative, ".pin-"+hex.EncodeToString(random[:])+".tmp")
-		file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		name := ".pin-" + id + ".tmp"
+		fd, err := unix.Openat(pinsDir, name, unix.O_CREAT|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
-		return name, file, err
+		if err != nil {
+			return "", nil, err
+		}
+		if err := requireRegularFile(fd, 0o600); err != nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(pinsDir, name, 0)
+			return "", nil, err
+		}
+		return name, os.NewFile(uintptr(fd), name), nil
 	}
 	return "", nil, errors.New("cannot allocate unique pin temp file")
 }
 
-func (s *PinStore) openRoot(create bool) (*os.Root, error) {
-	if create {
-		if err := mkdirAllDurable(s.stateDir, 0o700); err != nil {
-			return nil, err
-		}
-	}
-	info, err := os.Lstat(s.stateDir)
+// openSecureChild anchors every lookup at a directory descriptor reached from
+// `/` with O_NOFOLLOW. An attacker cannot swap any pathname component and
+// redirect pin I/O after it has been opened.
+func (s *PinStore) openSecureChild(name string, create bool) (int, error) {
+	stateDir, err := openAbsoluteDirectory(s.stateDir, create)
 	if err != nil {
-		return nil, err
+		return -1, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, fmt.Errorf("state directory is not a safe directory")
-	}
-	root, err := os.OpenRoot(s.stateDir)
+	defer unix.Close(stateDir)
+	mirrorDir, err := openChildDirectory(stateDir, "mirror", create, 0o700, false)
 	if err != nil {
-		return nil, err
+		return -1, err
 	}
-	for _, dir := range []string{"mirror", pinsRelative} {
-		info, err := root.Lstat(dir)
-		if errors.Is(err, os.ErrNotExist) && create {
-			if err := root.Mkdir(dir, 0o700); err != nil {
-				_ = root.Close()
-				return nil, err
-			}
-			if err := syncRootDirectory(root, filepath.Dir(dir)); err != nil {
-				_ = root.Close()
-				return nil, err
-			}
-			info, err = root.Lstat(dir)
-		}
-		if err != nil {
-			_ = root.Close()
-			return nil, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
-			_ = root.Close()
-			return nil, fmt.Errorf("mirror pin directory %q is not a 0700 directory", dir)
-		}
-	}
-	return root, nil
+	defer unix.Close(mirrorDir)
+	return openChildDirectory(mirrorDir, name, create, 0o700, true)
 }
 
-func syncRootDirectory(root *os.Root, name string) error {
-	dir, err := root.Open(name)
+func openAbsoluteDirectory(path string, create bool) (int, error) {
+	if !filepath.IsAbs(path) {
+		return -1, fmt.Errorf("state directory anchor is not absolute")
+	}
+	current, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
+		return -1, err
+	}
+	components := strings.Split(strings.TrimPrefix(filepath.Clean(path), "/"), "/")
+	if len(components) == 1 && components[0] == "" {
+		return current, nil
+	}
+	for _, component := range components {
+		next, openErr := unix.Openat(current, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if errors.Is(openErr, os.ErrNotExist) && create {
+			if err := unix.Mkdirat(current, component, 0o700); err != nil {
+				_ = unix.Close(current)
+				return -1, fmt.Errorf("create state directory component %q: %w", component, err)
+			}
+			if err := unix.Fsync(current); err != nil {
+				_ = unix.Close(current)
+				return -1, fmt.Errorf("sync state directory parent: %w", err)
+			}
+			next, openErr = unix.Openat(current, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		}
+		if openErr != nil {
+			_ = unix.Close(current)
+			return -1, fmt.Errorf("open state directory component %q safely: %w", component, openErr)
+		}
+		_ = unix.Close(current)
+		current = next
+	}
+	return current, nil
+}
+
+func openChildDirectory(parent int, name string, create bool, mode uint32, requireSecure bool) (int, error) {
+	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) && create {
+		if err := unix.Mkdirat(parent, name, mode); err != nil {
+			return -1, err
+		}
+		if err := unix.Fsync(parent); err != nil {
+			return -1, err
+		}
+		fd, err = unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	}
+	if err != nil {
+		return -1, fmt.Errorf("open mirror %s directory safely: %w", name, err)
+	}
+	if requireSecure {
+		var stat unix.Stat_t
+		if err := unix.Fstat(fd, &stat); err != nil {
+			_ = unix.Close(fd)
+			return -1, err
+		}
+		if stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Mode&0o777 != mode || stat.Uid != uint32(os.Geteuid()) {
+			_ = unix.Close(fd)
+			return -1, fmt.Errorf("mirror %s directory must be an owned %04o directory", name, mode)
+		}
+	}
+	return fd, nil
+}
+
+func requireRegularFile(fd int, mode uint32) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
 		return err
 	}
-	defer func() { _ = dir.Close() }()
-	return dir.Sync()
-}
-
-// mkdirAllDurable fsyncs the parent entry for every state-directory component
-// it creates. Directories below the state root are synced by openRoot.
-func mkdirAllDurable(path string, mode os.FileMode) error {
-	clean := filepath.Clean(path)
-	missing := make([]string, 0, 4)
-	for cursor := clean; ; cursor = filepath.Dir(cursor) {
-		info, err := os.Lstat(cursor)
-		if err == nil {
-			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-				return fmt.Errorf("%s is not a safe directory", cursor)
-			}
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		missing = append(missing, cursor)
-		if filepath.Dir(cursor) == cursor {
-			return err
-		}
-	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		if err := os.Mkdir(missing[i], mode); err != nil {
-			return err
-		}
-		parent, err := os.Open(filepath.Dir(missing[i]))
-		if err != nil {
-			return err
-		}
-		if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
-			return err
-		}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0o777 != mode || stat.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("must be an owned %04o regular file", mode)
 	}
 	return nil
 }
