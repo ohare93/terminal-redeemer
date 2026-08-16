@@ -55,7 +55,15 @@ func AcquireRemote(ctx context.Context, runner Runner, cfg RemoteConfig) (Snapsh
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("acquire mirror snapshot from %s: %w", cfg.Host, err)
 	}
-	return DecodeSnapshot(payload)
+	snapshot, err := DecodeSnapshot(payload)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	// The SSH destination token is the only host identity this local process
+	// can attest. A remote self-label (often "local") cannot override or
+	// retarget the transport selected by the user/configuration.
+	snapshot.Host = cfg.Host
+	return snapshot, nil
 }
 
 func ReadSnapshot(path string) (Snapshot, error) {

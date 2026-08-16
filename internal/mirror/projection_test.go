@@ -4,102 +4,120 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestParseProjectionSSHArgvExactDeterministicForms(t *testing.T) {
+func TestProjectionEvidenceAcceptsOnlyCompleteGeneratedForms(t *testing.T) {
+	cfg := LaunchConfig{SourceHost: "alias@lattice", SSHCommand: "/usr/bin/ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", AppID: "owned"}
 	for _, tc := range []struct {
 		name    string
 		session string
 		create  bool
+		token   bool
 	}{
-		{name: "attach", session: "Alpha"},
+		{name: "attach", session: "Alpha", token: true},
 		{name: "create", session: "redeem-0123456789abcdef0123456789abcdef", create: true},
-		{name: "leading dash", session: "-hostile'; exec echo NO"},
+		{name: "leading dash", session: "-hostile'; exec echo NO", token: true},
 		{name: "case distinct", session: "alpha"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			window := Window{Order: 1, Title: "ignored", ZellijSession: tc.session, Terminal: &Terminal{CWD: "/tmp/a'b"}}
-			cfg := LaunchConfig{SourceHost: "user@lattice", SSHCommand: "/usr/bin/ssh", LauncherCommand: "kitty", AppID: "owned"}
+			launchCfg := cfg
+			expectedToken := ""
+			if tc.token {
+				expectedToken = "0123456789abcdef0123456789abcdef"
+				launchCfg.CorrelationToken = expectedToken
+			}
 			var plan LaunchPlan
 			var err error
 			if tc.create {
-				plan, err = PlanNew(tc.session, cfg)
+				plan, err = PlanNew(tc.session, launchCfg)
 			} else {
-				plan, err = PlanLaunch(window, cfg)
+				plan, err = PlanLaunch(window, launchCfg)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			argv := plan.Command.Args[len(plan.Command.Args)-5:]
-			argv = append([]string{"/usr/bin/ssh"}, argv[1:]...)
-			host, session, ok := ParseProjectionSSHArgv(argv, "/usr/bin/ssh")
-			if !ok || host != "user@lattice" || session != tc.session {
-				t.Fatalf("parse=(%q,%q,%v) argv=%#v", host, session, ok, argv)
+			argv := launchSSHArgv(t, plan)
+			host, session, token, ok := parseProjectionSSHArgv(argv, cfg.SSHCommand, cfg.SSHOptions)
+			if !ok || host != cfg.SourceHost || session != tc.session || token != expectedToken {
+				t.Fatalf("parse=(%q,%q,%q,%v) argv=%#v", host, session, token, ok, argv)
+			}
+			remote := argv[len(argv)-1]
+			if strings.HasPrefix(tc.session, "-") && !strings.Contains(remote, "'attach' '--' "+ShellQuote(tc.session)) {
+				t.Fatalf("leading-dash plan lacks usable option boundary: %s", remote)
 			}
 		})
 	}
 }
 
-func TestParseProjectionSSHArgvRejectsNearMatches(t *testing.T) {
-	plan, err := PlanLaunch(Window{ZellijSession: "Alpha"}, LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
+func TestProjectionEvidenceRejectsDeceptiveSSHAndShellNearMatches(t *testing.T) {
+	cfg := LaunchConfig{SourceHost: "lattice", SSHCommand: "/usr/bin/ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", AppID: "owned"}
+	plan, err := PlanLaunch(Window{ZellijSession: "Alpha"}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := append([]string{"ssh"}, plan.Command.Args[len(plan.Command.Args)-4:]...)
-	cases := [][]string{
-		append([]string(nil), base[:len(base)-1]...),
-		{"ssh", "-tt", "--", "lattice", "zellij attach Alpha"},
-		append([]string{"other-ssh"}, base[1:]...),
+	base := launchSSHArgv(t, plan)
+	mutate := func(fn func([]string) []string) []string { return fn(append([]string(nil), base...)) }
+	cases := map[string][]string{
+		"wrong executable same basename": mutate(func(v []string) []string { v[0] = "/evil/ssh"; return v }),
+		"missing configured option":      append(append([]string(nil), base[:1]...), base[3:]...),
+		"extra option":                   append(append([]string(nil), base[:3]...), append([]string{"-F", "evil"}, base[3:]...)...),
+		"reordered option":               mutate(func(v []string) []string { v[1], v[2] = v[2], v[1]; return v }),
+		"premature boundary":             mutate(func(v []string) []string { v[1] = "--"; return v }),
+		"extra operand":                  append(append([]string(nil), base...), "extra"),
+		"missing remote":                 append([]string(nil), base[:len(base)-1]...),
+		"dynamic remote":                 mutate(func(v []string) []string { v[len(v)-1] = "exec zellij attach Alpha"; return v }),
+		"multiple commands":              mutate(func(v []string) []string { v[len(v)-1] += "; exec 'zellij' 'attach' 'B'"; return v }),
+		"malformed quote":                mutate(func(v []string) []string { v[len(v)-1] = strings.TrimSuffix(v[len(v)-1], "'"); return v }),
 	}
-	for _, argv := range cases {
-		if _, _, ok := ParseProjectionSSHArgv(argv, "ssh"); ok {
-			t.Fatalf("accepted malformed argv %#v", argv)
-		}
-	}
-	near := append([]string(nil), base...)
-	near[len(near)-1] = strings.Replace(near[len(near)-1], "'Alpha'", "'Alpha-extra'", 1)
-	_, session, ok := ParseProjectionSSHArgv(near, "ssh")
-	if !ok || session != "Alpha-extra" || session == "Alpha" {
-		t.Fatalf("substring extraction was not exact: session=%q ok=%v", session, ok)
+	for name, argv := range cases {
+		t.Run(name, func(t *testing.T) {
+			if host, session, token, ok := parseProjectionSSHArgv(argv, cfg.SSHCommand, cfg.SSHOptions); ok {
+				t.Fatalf("accepted deceptive argv host=%q session=%q token=%q argv=%#v", host, session, token, argv)
+			}
+		})
 	}
 }
 
-func TestProcProjectionInspectorFailsClosedForAmbiguousAndTitleOnly(t *testing.T) {
+func TestInspectProjectionsSeparatesAmbiguousUntrackedAndPreUpgrade(t *testing.T) {
 	root := t.TempDir()
 	writeMirrorProc(t, root, 100, 1, 10, []string{"kitty"})
-	planA, _ := PlanLaunch(Window{ZellijSession: "A"}, LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
-	planB, _ := PlanLaunch(Window{ZellijSession: "B"}, LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
-	writeMirrorProc(t, root, 101, 100, 11, append([]string{"ssh"}, planA.Command.Args[len(planA.Command.Args)-4:]...))
-	writeMirrorProc(t, root, 102, 100, 12, append([]string{"ssh"}, planB.Command.Args[len(planB.Command.Args)-4:]...))
+	cfg := LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", SSHOptions: []string{"-v"}, LauncherCommand: "kitty", AppID: "owned"}
+	planA, _ := PlanLaunch(Window{ZellijSession: "A"}, cfg)
+	planB, _ := PlanLaunch(Window{ZellijSession: "B"}, cfg)
+	writeMirrorProc(t, root, 101, 100, 11, launchSSHArgv(t, planA))
+	writeMirrorProc(t, root, 102, 100, 12, launchSSHArgv(t, planB))
 	writeMirrorProc(t, root, 200, 1, 20, []string{"kitty"})
+	writeMirrorProc(t, root, 300, 1, 30, []string{"kitty"})
+	writeMirrorProc(t, root, 301, 300, 31, launchSSHArgv(t, planA))
 
-	inventory, err := (ProcProjectionInspector{ProcRoot: root, SSHCommand: "ssh"}).Inspect(context.Background(), []OwnedWindow{
-		{ID: 1, PID: 100, AppID: "owned", Title: "lattice[0|A]: A"},
-		{ID: 2, PID: 200, AppID: "owned", Title: "lattice[0|A]: A"},
-	})
+	inventory, err := InspectProjections(context.Background(), []OwnedWindow{
+		{ID: 1, PID: 100, AppID: "owned", Title: "lattice[0|A]: spoof"},
+		{ID: 2, PID: 200, AppID: "owned", Title: "lattice[0|A]: title-only"},
+		{ID: 3, PID: 300, AppID: "owned", Title: "lattice[0]: pre-upgrade"},
+	}, ProjectionEvidenceConfig{ProcRoot: root, SSHCommand: "ssh", SSHOptions: []string{"-v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inventory.Exact) != 0 || len(inventory.Untracked) != 2 {
+	if len(inventory.Ambiguous) != 1 || inventory.Ambiguous[0].ID != 1 || len(inventory.Untracked) != 1 || inventory.Untracked[0].ID != 2 {
 		t.Fatalf("inventory=%#v", inventory)
+	}
+	if len(inventory.Exact) != 1 || inventory.Exact[0].Window.ID != 3 || inventory.Exact[0].Session != "A" {
+		t.Fatalf("exact=%#v", inventory.Exact)
 	}
 }
 
-func TestProcProjectionInspectorTracksPreUpgradeTitleByEvidence(t *testing.T) {
-	root := t.TempDir()
-	writeMirrorProc(t, root, 100, 1, 10, []string{"kitty"})
-	plan, _ := PlanLaunch(Window{ZellijSession: "Case"}, LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
-	writeMirrorProc(t, root, 101, 100, 11, append([]string{"ssh"}, plan.Command.Args[len(plan.Command.Args)-4:]...))
-	inventory, err := (ProcProjectionInspector{ProcRoot: root, SSHCommand: "ssh"}).Inspect(context.Background(), []OwnedWindow{{ID: 1, PID: 100, AppID: "owned", Title: "lattice[0]: old title"}})
-	if err != nil {
-		t.Fatal(err)
+func launchSSHArgv(t *testing.T, plan LaunchPlan) []string {
+	t.Helper()
+	index := slices.Index(plan.Command.Args, "-e")
+	if index < 0 || index+1 >= len(plan.Command.Args) {
+		t.Fatalf("launch has no -e SSH argv: %#v", plan.Command.Args)
 	}
-	if len(inventory.Exact) != 1 || inventory.Exact[0].Session != "Case" {
-		t.Fatalf("inventory=%#v", inventory)
-	}
+	return append([]string(nil), plan.Command.Args[index+1:]...)
 }
 
 func writeMirrorProc(t *testing.T, root string, pid, ppid, start int, argv []string) {

@@ -2,11 +2,13 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/resume"
 )
 
 type SaveResult struct {
@@ -15,13 +17,16 @@ type SaveResult struct {
 	Ambiguous int
 }
 
-// BuildPin joins only exact live local projections to exact sessions from one
-// fresh source snapshot. Duplicate local projections fail closed as ambiguous.
+// BuildPin joins exact live local projections to exact sessions from one fresh
+// transport-bound source snapshot. Local Niri observation order is retained.
 func BuildPin(snapshot Snapshot, sourceHost string, windows []OwnedWindow, workspaces []OwnedWorkspace, inventory ProjectionInventory) (SaveResult, error) {
 	if err := ValidateDestination(sourceHost); err != nil {
 		return SaveResult{}, err
 	}
-	profile := strings.TrimSpace(snapshot.Profile)
+	if snapshot.Host != sourceHost {
+		return SaveResult{}, fmt.Errorf("fresh source snapshot host %q does not match requested SSH destination %q", snapshot.Host, sourceHost)
+	}
+	profile := snapshot.Profile
 	if err := validateText("source profile", profile, 128, false); err != nil {
 		return SaveResult{}, err
 	}
@@ -39,20 +44,19 @@ func BuildPin(snapshot Snapshot, sourceHost string, windows []OwnedWindow, works
 			workspaceByID[id] = workspace
 		}
 	}
-	windowByID := make(map[int]OwnedWindow, len(windows))
-	for _, window := range windows {
-		windowByID[window.ID] = window
-	}
+	projectionByWindow := make(map[int]Projection, len(inventory.Exact))
 	counts := make(map[string]int)
 	for _, projection := range inventory.Exact {
+		projectionByWindow[projection.Window.ID] = projection
 		if projection.SourceHost == sourceHost {
 			counts[projection.Session]++
 		}
 	}
 	pin := Pin{V: PinSchemaVersion, SourceHost: sourceHost, SourceProfile: profile, Projections: []PinnedProjection{}}
-	ambiguous := 0
-	for _, projection := range inventory.Exact {
-		if projection.SourceHost != sourceHost {
+	ambiguous := len(inventory.Ambiguous)
+	for localOrder, local := range windows {
+		projection, exact := projectionByWindow[local.ID]
+		if !exact || projection.SourceHost != sourceHost {
 			continue
 		}
 		if counts[projection.Session] != 1 {
@@ -63,14 +67,19 @@ func BuildPin(snapshot Snapshot, sourceHost string, windows []OwnedWindow, works
 		if !found {
 			continue
 		}
-		local := windowByID[projection.Window.ID]
 		workspaceID, _ := valueAsString(local.WorkspaceID)
 		workspace := workspaceByID[workspaceID]
 		name, _ := valueAsString(workspace.Name)
+		floating := local.IsFloating
 		item := PinnedProjection{
-			Session: projection.Session, Workspace: WorkspaceSelector{Name: strings.TrimSpace(name), Index: workspace.Index},
-			Order: source.Order, IsFloating: local.IsFloating,
-			TileSize: append([]float64(nil), local.Layout.TileSize...), WindowSize: append([]int(nil), local.Layout.WindowSize...),
+			Session:   projection.Session,
+			Workspace: model.WorkspaceRef{Name: strings.TrimSpace(name), Index: workspace.Index},
+			Order:     localOrder,
+			Placement: model.Placement{
+				IsFloating: &floating,
+				TileSize:   append([]float64(nil), local.Layout.TileSize...),
+				WindowSize: append([]int(nil), local.Layout.WindowSize...),
+			},
 		}
 		if source.Terminal != nil {
 			item.RemoteCWD = strings.TrimSpace(source.Terminal.CWD)
@@ -86,6 +95,8 @@ func BuildPin(snapshot Snapshot, sourceHost string, windows []OwnedWindow, works
 
 type ApplyStatus string
 
+var errProjectionAmbiguous = errors.New("projection evidence is ambiguous")
+
 const (
 	ApplyReady       ApplyStatus = "ready"
 	ApplyOpened      ApplyStatus = "opened"
@@ -97,20 +108,19 @@ const (
 
 type ApplyItem struct {
 	PinnedProjection
-	Status       ApplyStatus
-	Reason       string
-	WindowID     int
-	LayoutIssues []string
-	target       string
+	Status   ApplyStatus
+	Reason   string
+	WindowID int
+	target   resume.WorkspaceTarget
 }
 
 type ApplyResult struct {
 	Items     []ApplyItem
 	Untracked int
+	Ambiguous int
 }
 
 type ApplyConfig struct {
-	Pin             Pin
 	Snapshot        Snapshot
 	SourceHost      string
 	SSHCommand      string
@@ -118,6 +128,7 @@ type ApplyConfig struct {
 	LauncherCommand string
 	AppID           string
 	NiriCommand     string
+	StateDir        string
 	Timeout         time.Duration
 	PollInterval    time.Duration
 	DryRun          bool
@@ -125,54 +136,71 @@ type ApplyConfig struct {
 
 type ApplyDeps struct {
 	Runner      Runner
-	Manager     WindowManager
-	Inspector   ProjectionInspector
 	ListWindows func(context.Context) ([]OwnedWindow, error)
 	Workspaces  func(context.Context) ([]OwnedWorkspace, error)
+	Inspect     func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error)
 	Sleep       func(context.Context, time.Duration) error
 }
 
-func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (ApplyResult, error) {
+func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result ApplyResult, returnErr error) {
 	if _, ok := ctx.Deadline(); !ok {
 		return ApplyResult{}, fmt.Errorf("mirror apply requires a context deadline")
 	}
-	if err := cfg.Pin.Validate(); err != nil {
-		return ApplyResult{}, err
+	if cfg.Snapshot.Host != cfg.SourceHost {
+		return ApplyResult{}, fmt.Errorf("fresh source snapshot host does not match requested SSH destination")
 	}
-	if cfg.Pin.SourceHost != cfg.SourceHost || cfg.Pin.SourceProfile != cfg.Snapshot.Profile {
-		return ApplyResult{}, fmt.Errorf("pin identity does not match fresh source snapshot")
+	if err := validateText("source profile", cfg.Snapshot.Profile, 128, false); err != nil {
+		return ApplyResult{}, err
 	}
 	if cfg.Timeout <= 0 || cfg.PollInterval <= 0 || cfg.PollInterval > cfg.Timeout {
 		return ApplyResult{}, fmt.Errorf("apply timeout and poll interval must be positive, and poll interval must not exceed timeout")
 	}
-	if deps.Runner == nil || deps.Inspector == nil {
-		return ApplyResult{}, fmt.Errorf("mirror apply dependency is unavailable")
+	if deps.Runner == nil {
+		return ApplyResult{}, fmt.Errorf("mirror apply runner is unavailable")
 	}
-	if deps.Manager.Runner == nil {
-		deps.Manager.Runner = deps.Runner
-	}
-	if strings.TrimSpace(deps.Manager.NiriCommand) == "" {
-		deps.Manager.NiriCommand = cfg.NiriCommand
-	}
+	manager := WindowManager{Runner: deps.Runner, NiriCommand: cfg.NiriCommand}
 	if deps.ListWindows == nil {
-		deps.ListWindows = func(ctx context.Context) ([]OwnedWindow, error) { return deps.Manager.List(ctx, cfg.AppID, "") }
+		deps.ListWindows = func(ctx context.Context) ([]OwnedWindow, error) { return manager.List(ctx, cfg.AppID, "") }
 	}
 	if deps.Workspaces == nil {
-		deps.Workspaces = deps.Manager.Workspaces
+		deps.Workspaces = manager.Workspaces
+	}
+	if deps.Inspect == nil {
+		deps.Inspect = InspectProjections
 	}
 	if deps.Sleep == nil {
 		deps.Sleep = sleepContext
 	}
+	evidence := ProjectionEvidenceConfig{SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions}
+
+	store, err := OpenPinStore(cfg.StateDir)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	// Dry-run is intentionally read-only. Mutating apply holds the same
+	// host/profile lock as pin replacement while it reads and applies the pin.
+	if !cfg.DryRun {
+		lock, err := store.acquire(cfg.SourceHost, cfg.Snapshot.Profile)
+		if err != nil {
+			return ApplyResult{}, fmt.Errorf("lock mirror apply: %w", err)
+		}
+		defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	}
+	pin, err := store.Read(cfg.SourceHost, cfg.Snapshot.Profile)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+
 	windows, err := deps.ListWindows(ctx)
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	inventory, err := deps.Inspector.Inspect(ctx, windows)
+	inventory, err := deps.Inspect(ctx, windows, evidence)
 	if err != nil {
 		return ApplyResult{}, err
 	}
 	workspaces, workspaceErr := deps.Workspaces(ctx)
-	result := prepareApply(cfg.Pin, cfg.Snapshot, inventory, workspaces)
+	result = prepareApply(pin, cfg.Snapshot, inventory, workspaces)
 	if workspaceErr != nil {
 		for i := range result.Items {
 			if result.Items[i].Status == ApplyReady {
@@ -188,21 +216,29 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (ApplyRes
 		if item.Status != ApplyReady {
 			continue
 		}
-		openCount, err := exactProjectionCount(ctx, cfg, item.Session, deps)
+		beforeWindows, beforeInventory, err := observeApplyWindows(ctx, cfg, deps, evidence)
 		if err != nil {
 			item.Status, item.Reason = ApplyFailed, "cannot safely recheck exact projection: "+err.Error()
 			continue
 		}
-		if openCount > 1 {
+		matching := exactProjectionIDs(beforeInventory, cfg.SourceHost, item.Session)
+		switch len(matching) {
+		case 0:
+		case 1:
+			item.Status, item.Reason = ApplyAlreadyOpen, "exact projection appeared before launch"
+			continue
+		default:
 			item.Status, item.Reason = ApplyAmbiguous, "multiple exact projections appeared before launch"
 			continue
 		}
-		if openCount == 1 {
-			item.Status, item.Reason = ApplyAlreadyOpen, "exact projection appeared before launch"
+		beforeOwned := ownedWindowIDs(beforeWindows)
+		token, err := RandomID()
+		if err != nil {
+			item.Status, item.Reason = ApplyFailed, "create projection correlation token: "+err.Error()
 			continue
 		}
 		window := Window{Order: item.Order, Title: item.Session, ZellijSession: item.Session, Terminal: &Terminal{CWD: item.RemoteCWD, ZellijSession: item.Session}}
-		plan, err := PlanLaunch(window, LaunchConfig{SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID})
+		plan, err := PlanLaunch(window, LaunchConfig{SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID, CorrelationToken: token})
 		if err != nil {
 			item.Status, item.Reason = ApplyFailed, err.Error()
 			continue
@@ -214,16 +250,20 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (ApplyRes
 			item.Status, item.Reason = ApplyFailed, "attach-only launch failed: "+err.Error()
 			continue
 		}
-		windowID, err := waitForProjection(ctx, cfg, *item, deps)
+		windowID, err := waitForNewProjection(ctx, cfg, *item, token, matching, beforeOwned, deps, evidence)
 		if err != nil {
-			item.Status, item.Reason = ApplyFailed, err.Error()
+			item.Status = ApplyFailed
+			if errors.Is(err, errProjectionAmbiguous) {
+				item.Status = ApplyAmbiguous
+			}
+			item.Reason = err.Error()
 			continue
 		}
 		item.WindowID = windowID
-		item.LayoutIssues = applyPinnedPlacement(ctx, cfg, *item, windowID, deps.Runner)
+		issues := applyPinnedPlacement(ctx, cfg, *item, windowID, deps.Runner)
 		item.Status = ApplyOpened
-		if len(item.LayoutIssues) > 0 {
-			item.Reason = strings.Join(item.LayoutIssues, "; ")
+		if len(issues) > 0 {
+			item.Reason = strings.Join(issues, "; ")
 		}
 	}
 	return result, nil
@@ -240,7 +280,7 @@ func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, wor
 			open[projection.Session]++
 		}
 	}
-	result := ApplyResult{Untracked: len(inventory.Untracked)}
+	result := ApplyResult{Untracked: len(inventory.Untracked), Ambiguous: len(inventory.Ambiguous)}
 	for _, pinned := range normalizePin(pin).Projections {
 		item := ApplyItem{PinnedProjection: pinned}
 		switch {
@@ -253,7 +293,7 @@ func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, wor
 		default:
 			item.Status = ApplyReady
 			item.target = resolveWorkspaceReference(pinned.Workspace, workspaces)
-			if item.target == "" {
+			if item.target.ID == "" {
 				item.Reason = "destination workspace unavailable; launch will remain on current workspace"
 			}
 		}
@@ -264,67 +304,94 @@ func prepareApply(pin Pin, snapshot Snapshot, inventory ProjectionInventory, wor
 
 func containsSession(set map[string]struct{}, session string) bool { _, ok := set[session]; return ok }
 
-func resolveWorkspaceReference(selector WorkspaceSelector, workspaces []OwnedWorkspace) string {
+func resolveWorkspaceReference(selector model.WorkspaceRef, workspaces []OwnedWorkspace) resume.WorkspaceTarget {
 	if selector.Name != "" {
-		matches := 0
-		for _, workspace := range workspaces {
-			name, _ := valueAsString(workspace.Name)
+		var match *OwnedWorkspace
+		for i := range workspaces {
+			name, _ := valueAsString(workspaces[i].Name)
 			if name == selector.Name {
-				matches++
+				if match != nil {
+					match = nil
+					break
+				}
+				match = &workspaces[i]
 			}
 		}
-		if matches == 1 {
-			return selector.Name
+		if match != nil {
+			id, _ := valueAsString(match.ID)
+			return resume.WorkspaceTarget{ID: id, Name: selector.Name, Index: match.Index}
 		}
 	}
 	if selector.Index > 0 {
 		for _, workspace := range workspaces {
 			if workspace.Index == selector.Index {
-				return strconv.Itoa(selector.Index)
+				id, _ := valueAsString(workspace.ID)
+				return resume.WorkspaceTarget{ID: id, Index: selector.Index}
 			}
 		}
 	}
-	return ""
+	return resume.WorkspaceTarget{}
 }
 
-func exactProjectionCount(ctx context.Context, cfg ApplyConfig, session string, deps ApplyDeps) (int, error) {
+func observeApplyWindows(ctx context.Context, cfg ApplyConfig, deps ApplyDeps, evidence ProjectionEvidenceConfig) ([]OwnedWindow, ProjectionInventory, error) {
 	windows, err := deps.ListWindows(ctx)
 	if err != nil {
-		return 0, err
+		return nil, ProjectionInventory{}, err
 	}
-	inventory, err := deps.Inspector.Inspect(ctx, windows)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, projection := range inventory.Exact {
-		if projection.SourceHost == cfg.SourceHost && projection.Session == session {
-			count++
-		}
-	}
-	return count, nil
+	inventory, err := deps.Inspect(ctx, windows, evidence)
+	return windows, inventory, err
 }
 
-func waitForProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, deps ApplyDeps) (int, error) {
+func exactProjectionIDs(inventory ProjectionInventory, host, session string) map[int]struct{} {
+	ids := make(map[int]struct{})
+	for _, projection := range inventory.Exact {
+		if projection.SourceHost == host && projection.Session == session {
+			ids[projection.Window.ID] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func ownedWindowIDs(windows []OwnedWindow) map[int]struct{} {
+	ids := make(map[int]struct{}, len(windows))
+	for _, window := range windows {
+		ids[window.ID] = struct{}{}
+	}
+	return ids
+}
+
+func waitForNewProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, token string, beforeExact, beforeOwned map[int]struct{}, deps ApplyDeps, evidence ProjectionEvidenceConfig) (int, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	for {
-		windows, err := deps.ListWindows(waitCtx)
+		if err := waitCtx.Err(); err != nil {
+			return 0, fmt.Errorf("new projection for %q did not appear: %w", item.Session, err)
+		}
+		_, inventory, err := observeApplyWindows(waitCtx, cfg, deps, evidence)
 		if err == nil {
-			inventory, inspectErr := deps.Inspector.Inspect(waitCtx, windows)
-			if inspectErr == nil {
-				matches := make([]Projection, 0, 1)
-				for _, projection := range inventory.Exact {
-					if projection.SourceHost == cfg.SourceHost && projection.Session == item.Session {
-						matches = append(matches, projection)
-					}
+			newMatches := make([]int, 0, 1)
+			for _, projection := range inventory.Exact {
+				if projection.SourceHost != cfg.SourceHost || projection.Session != item.Session || projection.CorrelationToken != token {
+					continue
 				}
-				if len(matches) == 1 {
-					return matches[0].Window.ID, nil
+				_, wasExact := beforeExact[projection.Window.ID]
+				_, wasOwned := beforeOwned[projection.Window.ID]
+				if !wasExact && !wasOwned {
+					newMatches = append(newMatches, projection.Window.ID)
 				}
-				if len(matches) > 1 {
-					return 0, fmt.Errorf("new projection evidence for %q is ambiguous", item.Session)
+			}
+			if len(newMatches) > 1 {
+				return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
+			}
+			// A newly appeared ambiguous owned window could be this detached
+			// launch; never claim a different exact window in that observation.
+			for _, ambiguous := range inventory.Ambiguous {
+				if _, existed := beforeOwned[ambiguous.ID]; !existed {
+					return 0, fmt.Errorf("%w for %q", errProjectionAmbiguous, item.Session)
 				}
+			}
+			if len(newMatches) == 1 {
+				return newMatches[0], nil
 			}
 		}
 		if err := deps.Sleep(waitCtx, cfg.PollInterval); err != nil {
@@ -333,45 +400,33 @@ func waitForProjection(ctx context.Context, cfg ApplyConfig, item ApplyItem, dep
 	}
 }
 
+type applyActionRunner struct {
+	runner  Runner
+	command string
+	timeout time.Duration
+}
+
+func (r applyActionRunner) Run(ctx context.Context, action string, args ...string) error {
+	actionCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	return r.runner.Run(actionCtx, Command{Name: r.command, Args: append([]string{"msg", "action", action}, args...)})
+}
+
 func applyPinnedPlacement(ctx context.Context, cfg ApplyConfig, item ApplyItem, windowID int, runner Runner) []string {
-	issues := make([]string, 0, 4)
-	run := func(action string, args ...string) {
-		actionCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		err := runner.Run(actionCtx, Command{Name: cfg.NiriCommand, Args: append([]string{"msg", "action", action}, args...)})
-		cancel()
-		if err != nil {
+	issues := make([]string, 0, 2)
+	actions := resume.NiriActions{Runner: applyActionRunner{runner: runner, command: cfg.NiriCommand, timeout: cfg.Timeout}}
+	if item.target.ID != "" {
+		if err := actions.MoveToWorkspace(ctx, windowID, item.target); err != nil {
 			issues = append(issues, err.Error())
 		}
-	}
-	if item.target != "" {
-		run("move-window-to-workspace", "--window-id", strconv.Itoa(windowID), "--focus", "false", item.target)
 	} else {
 		issues = append(issues, "destination workspace unavailable")
 	}
-	floatAction := "move-window-to-tiling"
-	if item.IsFloating {
-		floatAction = "move-window-to-floating"
-	}
-	run(floatAction, "--id", strconv.Itoa(windowID))
-	width, height, ok := pinnedSize(item.PinnedProjection)
-	if ok {
-		run("set-window-width", "--id", strconv.Itoa(windowID), strconv.Itoa(width))
-		run("set-window-height", "--id", strconv.Itoa(windowID), strconv.Itoa(height))
+	layout := actions.ApplyLayout(ctx, windowID, item.Placement)
+	if layout.Reason != "" {
+		issues = append(issues, layout.Reason)
 	}
 	return issues
-}
-
-func pinnedSize(item PinnedProjection) (int, int, bool) {
-	if item.IsFloating && len(item.WindowSize) == 2 {
-		return item.WindowSize[0], item.WindowSize[1], true
-	}
-	if len(item.TileSize) == 2 {
-		return int(math.Round(item.TileSize[0])), int(math.Round(item.TileSize[1])), true
-	}
-	if len(item.WindowSize) == 2 {
-		return item.WindowSize[0], item.WindowSize[1], true
-	}
-	return 0, 0, false
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {

@@ -131,6 +131,8 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 	}{
 		{name: "capture once unknown flag", args: []string{"capture", "once", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
+		{name: "mirror save rejects local fixture", args: []string{"mirror", "save", "--snapshot-file", "fixture.json"}, want: "flag provided but not defined"},
+		{name: "mirror apply rejects local fixture", args: []string{"mirror", "apply", "--snapshot-file", "fixture.json"}, want: "flag provided but not defined"},
 		{name: "resume invalid timeout", args: []string{"resume", "--timeout", "0s"}, want: "--timeout and --poll-interval must be positive"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 	}
@@ -489,8 +491,8 @@ func TestDoctorPassExitCode(t *testing.T) {
 
 func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
 	dir := t.TempDir()
-	snapshotPath := filepath.Join(dir, "snapshot.json")
-	if err := os.WriteFile(snapshotPath, []byte(`{"host":"lattice","profile":"default","generated_at":"2026-01-01T00:00:00Z","windows":[]}`), 0o600); err != nil {
+	ssh := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"windows\":[]}'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	niri := filepath.Join(dir, "niri")
@@ -499,7 +501,7 @@ func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
 	}
 	stateDir := filepath.Join(dir, "absent-state")
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"mirror", "save", "--host", "lattice", "--snapshot-file", snapshotPath, "--niri-command", niri, "--state-dir", stateDir, "--dry-run"}, &stdout, &stderr)
+	code := run([]string{"mirror", "save", "--host", "lattice", "--ssh-command", ssh, "--niri-command", niri, "--state-dir", stateDir, "--dry-run"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -513,8 +515,8 @@ func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
 
 func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
-	snapshotPath := filepath.Join(dir, "snapshot.json")
-	if err := os.WriteFile(snapshotPath, []byte(`{"host":"lattice","profile":"default","generated_at":"2026-01-01T00:00:00Z","windows":[{"order":0,"app_id":"zellij","title":"A","headless":true,"zellij_session":"A"}]}`), 0o600); err != nil {
+	ssh := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"windows\":[{\"order\":0,\"app_id\":\"zellij\",\"title\":\"A\",\"headless\":true,\"zellij_session\":\"A\"}]}'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	niri := filepath.Join(dir, "niri")
@@ -522,11 +524,12 @@ func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateDir := filepath.Join(dir, "state")
-	store, err := mirror.NewPinStore(stateDir)
+	store, err := mirror.OpenPinStore(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pin := mirror.Pin{V: 1, SourceHost: "lattice", SourceProfile: "default", Projections: []mirror.PinnedProjection{{Session: "A", Workspace: mirror.WorkspaceSelector{Index: 1}, Order: 0}}}
+	floating := false
+	pin := mirror.Pin{V: 1, SourceHost: "lattice", SourceProfile: "default", Projections: []mirror.PinnedProjection{{Session: "A", Workspace: model.WorkspaceRef{Index: 1}, Order: 0, Placement: model.Placement{IsFloating: &floating}}}}
 	path, err := store.Write(pin)
 	if err != nil {
 		t.Fatal(err)
@@ -536,7 +539,7 @@ func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"mirror", "apply", "--host", "lattice", "--snapshot-file", snapshotPath, "--niri-command", niri, "--state-dir", stateDir, "--dry-run"}, &stdout, &stderr)
+	code := run([]string{"mirror", "apply", "--host", "lattice", "--ssh-command", ssh, "--niri-command", niri, "--state-dir", stateDir, "--dry-run"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}

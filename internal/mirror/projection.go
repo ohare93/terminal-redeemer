@@ -2,7 +2,7 @@ package mirror
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"path/filepath"
 	"strings"
 
@@ -10,88 +10,103 @@ import (
 )
 
 // Projection is an owned Niri window whose live descendants prove the exact
-// SSH destination and case-sensitive Zellij session. Titles are presentation
-// only and are deliberately not consulted.
+// configured SSH destination and case-sensitive Zellij session. Titles are
+// presentation only and are deliberately not consulted.
 type Projection struct {
-	Window     OwnedWindow
-	SourceHost string
-	Session    string
+	Window           OwnedWindow
+	SourceHost       string
+	Session          string
+	CorrelationToken string
 }
 
 type ProjectionInventory struct {
 	Exact     []Projection
 	Untracked []OwnedWindow
+	Ambiguous []OwnedWindow
 }
 
-type ProjectionInspector interface {
-	Inspect(context.Context, []OwnedWindow) (ProjectionInventory, error)
-}
-
-type ProcProjectionInspector struct {
+type ProjectionEvidenceConfig struct {
 	ProcRoot   string
 	SSHCommand string
+	SSHOptions []string
 }
 
-func (p ProcProjectionInspector) Inspect(ctx context.Context, windows []OwnedWindow) (ProjectionInventory, error) {
+// InspectProjections evaluates each owned window exactly once. Vanished or
+// unreadable process evidence is untracked; multiple qualifying descendants
+// are ambiguous. Neither category is authoritative.
+func InspectProjections(ctx context.Context, windows []OwnedWindow, cfg ProjectionEvidenceConfig) (ProjectionInventory, error) {
 	inventory := ProjectionInventory{}
 	for _, window := range windows {
-		projection, ok, err := p.inspectWindow(ctx, window)
+		matches, err := inspectProjectionWindow(ctx, window, cfg)
 		if err != nil {
-			return ProjectionInventory{}, fmt.Errorf("inspect owned window %d: %w", window.ID, err)
-		}
-		if !ok {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return ProjectionInventory{}, err
+			}
 			inventory.Untracked = append(inventory.Untracked, window)
 			continue
 		}
-		inventory.Exact = append(inventory.Exact, projection)
+		switch len(matches) {
+		case 0:
+			inventory.Untracked = append(inventory.Untracked, window)
+		case 1:
+			inventory.Exact = append(inventory.Exact, matches[0])
+		default:
+			inventory.Ambiguous = append(inventory.Ambiguous, window)
+		}
 	}
 	return inventory, nil
 }
 
-func (p ProcProjectionInspector) inspectWindow(ctx context.Context, window OwnedWindow) (Projection, bool, error) {
+func inspectProjectionWindow(ctx context.Context, window OwnedWindow, cfg ProjectionEvidenceConfig) ([]Projection, error) {
 	if window.ID <= 0 || window.PID <= 0 {
-		return Projection{}, false, nil
+		return nil, nil
 	}
 	matches := make([]Projection, 0, 1)
-	_, err := procmeta.DescendantArgvMatchContext(ctx, p.ProcRoot, window.PID, func(argv []string) bool {
-		host, session, ok := ParseProjectionSSHArgv(argv, p.SSHCommand)
+	_, err := procmeta.DescendantArgvMatchContext(ctx, cfg.ProcRoot, window.PID, func(argv []string) bool {
+		host, session, token, ok := parseProjectionSSHArgv(argv, cfg.SSHCommand, cfg.SSHOptions)
 		if ok {
-			matches = append(matches, Projection{Window: window, SourceHost: host, Session: session})
+			matches = append(matches, Projection{Window: window, SourceHost: host, Session: session, CorrelationToken: token})
 		}
 		// Walk the complete descendant set so multiple candidates fail closed.
 		return false
 	})
-	if err != nil {
-		return Projection{}, false, err
-	}
-	if len(matches) != 1 {
-		return Projection{}, false, nil
-	}
-	return matches[0], true, nil
+	return matches, err
 }
 
-// ParseProjectionSSHArgv accepts only the deterministic argv emitted by
-// PlanLaunch/PlanNew. Arbitrary SSH commands and shell fragments fail closed.
-func ParseProjectionSSHArgv(argv []string, sshCommand string) (host string, session string, ok bool) {
-	if len(argv) < 5 {
-		return "", "", false
-	}
+// parseProjectionSSHArgv accepts only the complete deterministic SSH argv
+// emitted by PlanLaunch/PlanNew: exact executable identity as represented in
+// argv[0], exact configured options, -tt, --, destination, and one static
+// remote command. It does not interpret arbitrary SSH argv.
+func parseProjectionSSHArgv(argv []string, sshCommand string, sshOptions []string) (host string, session string, token string, ok bool) {
 	want := strings.TrimSpace(sshCommand)
 	if want == "" {
 		want = "ssh"
 	}
-	if filepath.Base(argv[0]) != filepath.Base(want) {
-		return "", "", false
+	if len(argv) != 1+len(sshOptions)+4 || !sameExecutableArgv0(argv[0], want) {
+		return "", "", "", false
 	}
-	n := len(argv)
-	if argv[n-4] != "-tt" || argv[n-3] != "--" {
-		return "", "", false
+	if !equalStrings(argv[1:1+len(sshOptions)], sshOptions) {
+		return "", "", "", false
 	}
-	host = argv[n-2]
-	if ValidateDestination(host) != nil {
-		return "", "", false
+	tail := argv[1+len(sshOptions):]
+	if tail[0] != "-tt" || tail[1] != "--" || ValidateDestination(tail[2]) != nil {
+		return "", "", "", false
 	}
-	remote := argv[n-1]
+	session, token, ok = parseProjectionRemoteCommand(tail[3])
+	if !ok {
+		return "", "", "", false
+	}
+	return tail[2], session, token, true
+}
+
+func sameExecutableArgv0(observed, configured string) bool {
+	if filepath.IsAbs(configured) || strings.ContainsRune(configured, filepath.Separator) {
+		return filepath.Clean(observed) == filepath.Clean(configured)
+	}
+	return observed == configured
+}
+
+func parseProjectionRemoteCommand(remote string) (string, string, bool) {
 	if strings.HasPrefix(remote, "cd -- ") {
 		_, remainder, valid := consumeGeneratedShellWord(strings.TrimPrefix(remote, "cd -- "))
 		if !valid || !strings.HasPrefix(remainder, " 2>/dev/null || true; exec ") {
@@ -110,21 +125,40 @@ func ParseProjectionSSHArgv(argv []string, sshCommand string) (host string, sess
 	for _, name := range zellijEnvironment {
 		prefix = append(prefix, "-u", name)
 	}
-	prefix = append(prefix, "zellij", "attach")
 	if len(words) < len(prefix)+4 || !equalStrings(words[:len(prefix)], prefix) {
 		return "", "", false
 	}
 	rest := words[len(prefix):]
-	if len(rest) == 5 && rest[0] == "--create" {
+	token := ""
+	if strings.HasPrefix(rest[0], projectionTokenEnvironment+"=") {
+		token = strings.TrimPrefix(rest[0], projectionTokenEnvironment+"=")
+		if !correlationTokenPattern.MatchString(token) {
+			return "", "", false
+		}
 		rest = rest[1:]
 	}
-	if len(rest) != 4 || rest[1] != "options" || rest[2] != "--on-force-close" || rest[3] != "detach" {
+	if len(rest) < 4 || rest[0] != "zellij" || rest[1] != "attach" {
 		return "", "", false
 	}
-	if ValidateSession(rest[0]) != nil {
+	rest = rest[2:]
+	var session string
+	switch {
+	case len(rest) == 5 && rest[0] == "--create" && rest[2] == "options" && rest[3] == "--on-force-close" && rest[4] == "detach":
+		session = rest[1]
+	case len(rest) == 4 && rest[1] == "options" && rest[2] == "--on-force-close" && rest[3] == "detach":
+		session = rest[0]
+	case len(rest) == 2 && rest[0] == "--" && strings.HasPrefix(rest[1], "-"):
+		// Zellij's clap grammar accepts a leading-dash session only through
+		// `attach -- SESSION`; its trailing options subcommand cannot then be
+		// combined. This remains attach-only and never creates a session.
+		session = rest[1]
+	default:
 		return "", "", false
 	}
-	return host, rest[0], true
+	if ValidateSession(session) != nil {
+		return "", "", false
+	}
+	return session, token, true
 }
 
 func parseGeneratedShellWords(input string) ([]string, bool) {

@@ -53,7 +53,7 @@ func TestAcquireRemoteUsesArgvAndDecodesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	if snapshot.Host != "source-node" {
+	if snapshot.Host != "user@source-node" {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 	call := runner.outputCalls[0]

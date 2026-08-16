@@ -115,7 +115,7 @@ func (a NiriActions) MoveToWorkspace(ctx context.Context, windowID int, target W
 	if reference == "" {
 		return fmt.Errorf("resolved Niri workspace has no actionable name or index")
 	}
-	return a.runner().Run(ctx, "move-window-to-workspace", "--window-id", strconv.Itoa(windowID), reference)
+	return a.runner().Run(ctx, "move-window-to-workspace", "--window-id", strconv.Itoa(windowID), "--focus", "false", reference)
 }
 
 func (a NiriActions) ApplyLayout(ctx context.Context, windowID int, placement model.Placement) LayoutResult {

@@ -103,7 +103,7 @@ func TestNiriActionsMoveUsesExactWindowAndResolvedWorkspace(t *testing.T) {
 	if err := actions.MoveToWorkspace(context.Background(), 42, WorkspaceTarget{ID: "runtime-7", Name: "dev", Index: 7}); err != nil {
 		t.Fatal(err)
 	}
-	want := actionCall{action: "move-window-to-workspace", args: []string{"--window-id", "42", "dev"}}
+	want := actionCall{action: "move-window-to-workspace", args: []string{"--window-id", "42", "--focus", "false", "dev"}}
 	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], want) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}

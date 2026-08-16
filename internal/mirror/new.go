@@ -5,7 +5,10 @@ import (
 	"regexp"
 )
 
-var generatedSessionPattern = regexp.MustCompile(`^redeem-[a-f0-9]{32}$`)
+var (
+	generatedSessionPattern = regexp.MustCompile(`^redeem-[a-f0-9]{32}$`)
+	correlationTokenPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+)
 
 // NewSessionName returns a collision-resistant Zellij-safe identity reserved
 // for explicit mirror-new launches.

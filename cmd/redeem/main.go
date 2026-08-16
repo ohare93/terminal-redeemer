@@ -232,7 +232,6 @@ func (value *repeatFlag) Set(item string) error {
 type mirrorSourceFlags struct {
 	host            *string
 	sshCommand      *string
-	snapshotFile    *string
 	sshOptions      repeatFlag
 	snapshotCommand repeatFlag
 }
@@ -241,7 +240,6 @@ func addMirrorSourceFlags(fs *flag.FlagSet, cfg config.MirrorConfig) *mirrorSour
 	flags := &mirrorSourceFlags{
 		host:            fs.String("host", cfg.SourceHost, "SSH source host"),
 		sshCommand:      fs.String("ssh-command", cfg.SSHCommand, "SSH executable"),
-		snapshotFile:    fs.String("snapshot-file", "", "read snapshot JSON locally instead of SSH"),
 		sshOptions:      repeatFlag{values: append([]string(nil), cfg.SSHOptions...)},
 		snapshotCommand: repeatFlag{values: append([]string(nil), cfg.SnapshotCommand...)},
 	}
@@ -250,10 +248,10 @@ func addMirrorSourceFlags(fs *flag.FlagSet, cfg config.MirrorConfig) *mirrorSour
 	return flags
 }
 
-func acquireMirrorSnapshot(flags *mirrorSourceFlags) (mirror.Snapshot, string, error) {
+func acquireMirrorSnapshot(ctx context.Context, flags *mirrorSourceFlags, snapshotFile string) (mirror.Snapshot, string, error) {
 	host := strings.TrimSpace(*flags.host)
-	if strings.TrimSpace(*flags.snapshotFile) != "" {
-		snapshot, err := mirror.ReadSnapshot(*flags.snapshotFile)
+	if strings.TrimSpace(snapshotFile) != "" {
+		snapshot, err := mirror.ReadSnapshot(snapshotFile)
 		if host == "" {
 			host = snapshot.Host
 		}
@@ -262,7 +260,7 @@ func acquireMirrorSnapshot(flags *mirrorSourceFlags) (mirror.Snapshot, string, e
 	if host == "" {
 		return mirror.Snapshot{}, "", fmt.Errorf("source host is required (--host or mirror.sourceHost)")
 	}
-	snapshot, err := mirror.AcquireRemote(context.Background(), mirror.ExecRunner{}, mirror.RemoteConfig{
+	snapshot, err := mirror.AcquireRemote(ctx, mirror.ExecRunner{}, mirror.RemoteConfig{
 		Host: host, SSHCommand: *flags.sshCommand, SSHOptions: flags.sshOptions.values, SnapshotCommand: flags.snapshotCommand.values,
 	})
 	return snapshot, host, err
@@ -272,6 +270,7 @@ func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer
 	fs := flag.NewFlagSet("mirror list", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	snapshotFile := fs.String("snapshot-file", "", "read snapshot JSON locally instead of SSH")
 	asJSON := fs.Bool("json", false, "emit discovered windows as JSON")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -279,7 +278,7 @@ func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer
 		}
 		return 2
 	}
-	snapshot, host, err := acquireMirrorSnapshot(source)
+	snapshot, host, err := acquireMirrorSnapshot(context.Background(), source, *snapshotFile)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror list failed: %v\n", err)
 		return 1
@@ -436,6 +435,7 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 	fs := flag.NewFlagSet("mirror open", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	snapshotFile := fs.String("snapshot-file", "", "read snapshot JSON locally instead of SSH")
 	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
 	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
 	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by Kitty clipboard mapping")
@@ -460,7 +460,7 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 		_, _ = fmt.Fprintln(stderr, "--all cannot be combined with --session or --select")
 		return 2
 	}
-	snapshot, host, err := acquireMirrorSnapshot(source)
+	snapshot, host, err := acquireMirrorSnapshot(context.Background(), source, *snapshotFile)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", err)
 		return 1
@@ -544,7 +544,7 @@ func runMirrorSave(args []string, resolvedConfig config.Config, stdout io.Writer
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	snapshot, host, err := acquireMirrorSnapshotContext(ctx, source)
+	snapshot, host, err := acquireMirrorSnapshot(ctx, source, "")
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
 		return 1
@@ -560,7 +560,7 @@ func runMirrorSave(args []string, resolvedConfig config.Config, stdout io.Writer
 		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
 		return 1
 	}
-	inventory, err := (mirror.ProcProjectionInspector{SSHCommand: *source.sshCommand}).Inspect(ctx, windows)
+	inventory, err := mirror.InspectProjections(ctx, windows, mirror.ProjectionEvidenceConfig{SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
 		return 1
@@ -574,7 +574,7 @@ func runMirrorSave(args []string, resolvedConfig config.Config, stdout io.Writer
 		_, _ = fmt.Fprintf(stdout, "would_save=%d host=%s profile=%s untracked=%d ambiguous=%d\n", len(result.Pin.Projections), host, result.Pin.SourceProfile, result.Untracked, result.Ambiguous)
 		return 0
 	}
-	store, err := mirror.NewPinStore(*stateDir)
+	store, err := mirror.OpenPinStore(*stateDir)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
 		return 1
@@ -610,36 +610,24 @@ func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Write
 		return 2
 	}
 	preflightCtx, cancel := context.WithTimeout(context.Background(), *timeout)
-	snapshot, host, err := acquireMirrorSnapshotContext(preflightCtx, source)
+	snapshot, host, err := acquireMirrorSnapshot(preflightCtx, source, "")
 	cancel()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
 		return 1
 	}
-	store, err := mirror.OpenPinStore(*stateDir)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
-		return 1
-	}
-	pin, err := store.Read(host, snapshot.Profile)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
-		return 1
-	}
-	phases := len(pin.Projections) + 2
-	overall := time.Duration(phases) * *timeout
-	if overall > 5*time.Minute {
-		overall = 5 * time.Minute
+	overall := 5 * time.Minute
+	if *timeout <= overall/258 {
+		overall = 258 * *timeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), overall)
 	defer cancel()
 	runner := mirror.ExecRunner{}
-	manager := mirror.WindowManager{Runner: runner, NiriCommand: *niriCommand}
 	result, err := mirror.ApplyPinned(ctx, mirror.ApplyConfig{
-		Pin: pin, Snapshot: snapshot, SourceHost: host, SSHCommand: *source.sshCommand,
+		Snapshot: snapshot, SourceHost: host, SSHCommand: *source.sshCommand,
 		SSHOptions: source.sshOptions.values, LauncherCommand: *launcher, AppID: *appID,
-		NiriCommand: *niriCommand, Timeout: *timeout, PollInterval: *pollInterval, DryRun: *dryRun,
-	}, mirror.ApplyDeps{Runner: runner, Manager: manager, Inspector: mirror.ProcProjectionInspector{SSHCommand: *source.sshCommand}})
+		NiriCommand: *niriCommand, StateDir: *stateDir, Timeout: *timeout, PollInterval: *pollInterval, DryRun: *dryRun,
+	}, mirror.ApplyDeps{Runner: runner})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror apply failed: %v\n", err)
 		return 1
@@ -658,27 +646,11 @@ func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Write
 			failed = true
 		}
 	}
-	_, _ = fmt.Fprintf(stdout, "untracked=%d\n", result.Untracked)
+	_, _ = fmt.Fprintf(stdout, "untracked=%d ambiguous=%d\n", result.Untracked, result.Ambiguous)
 	if failed {
 		return 1
 	}
 	return 0
-}
-
-func acquireMirrorSnapshotContext(ctx context.Context, flags *mirrorSourceFlags) (mirror.Snapshot, string, error) {
-	host := strings.TrimSpace(*flags.host)
-	if strings.TrimSpace(*flags.snapshotFile) != "" {
-		snapshot, err := mirror.ReadSnapshot(*flags.snapshotFile)
-		if host == "" {
-			host = snapshot.Host
-		}
-		return snapshot, host, err
-	}
-	if host == "" {
-		return mirror.Snapshot{}, "", fmt.Errorf("source host is required (--host or mirror.sourceHost)")
-	}
-	snapshot, err := mirror.AcquireRemote(ctx, mirror.ExecRunner{}, mirror.RemoteConfig{Host: host, SSHCommand: *flags.sshCommand, SSHOptions: flags.sshOptions.values, SnapshotCommand: flags.snapshotCommand.values})
-	return snapshot, host, err
 }
 
 func safeSocketPart(value string) string {
