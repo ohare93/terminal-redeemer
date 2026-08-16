@@ -106,7 +106,7 @@ type localAttachDeps struct {
 	pollInterval time.Duration
 }
 
-func attachLocal(ctx context.Context, plan LocalAttachPlan, stateDir string, deps localAttachDeps) (LocalAttachResult, error) {
+func attachLocal(ctx context.Context, plan LocalAttachPlan, stateDir string, deps localAttachDeps) (result LocalAttachResult, returnErr error) {
 	if _, ok := ctx.Deadline(); !ok {
 		return LocalAttachResult{}, fmt.Errorf("source attachment requires a context deadline")
 	}
@@ -117,7 +117,11 @@ func attachLocal(ctx context.Context, plan LocalAttachPlan, stateDir string, dep
 	if err != nil {
 		return LocalAttachResult{}, err
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("release source attachment lock: %w", err))
+		}
+	}()
 
 	matches, err := matchingLocalWindows(ctx, plan.Session, deps)
 	if err != nil {

@@ -10,7 +10,21 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestRunBoundedKillsPipeHoldingDescendantsOnContextExpiry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := runBounded(ctx, "sh", []string{"-c", "sleep 5 & wait"}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
+		t.Fatalf("catalog command exceeded wall-clock bound: %s", elapsed)
+	}
+}
 
 func shortSocketTempDir(t *testing.T) string {
 	t.Helper()

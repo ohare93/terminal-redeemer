@@ -39,7 +39,7 @@ func descendantArgvMatch(ctx context.Context, procRoot string, rootPID int, matc
 	if root == "" {
 		root = "/proc"
 	}
-	table, children, err := processTable(root)
+	table, children, err := processTable(ctx, root)
 	if err != nil {
 		return false, err
 	}
@@ -94,7 +94,7 @@ func DescendantPIDs(procRoot string, rootPID int) ([]int, error) {
 	if root == "" {
 		root = "/proc"
 	}
-	children, err := processChildren(root)
+	_, children, err := processTable(context.Background(), root)
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +117,10 @@ func DescendantPIDs(procRoot string, rootPID int) ([]int, error) {
 	return out, nil
 }
 
-func processChildren(root string) (map[int][]int, error) {
-	_, children, err := processTable(root)
-	return children, err
-}
-
-func processTable(root string) (map[int]processIdentity, map[int][]int, error) {
+func processTable(ctx context.Context, root string) (map[int]processIdentity, map[int][]int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read process table: %w", err)
@@ -130,6 +128,9 @@ func processTable(root string) (map[int]processIdentity, map[int][]int, error) {
 	table := make(map[int]processIdentity)
 	children := make(map[int][]int)
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if !entry.IsDir() {
 			continue
 		}
@@ -143,6 +144,9 @@ func processTable(root string) (map[int]processIdentity, map[int][]int, error) {
 		}
 		table[pid] = identity
 		children[identity.parentPID] = append(children[identity.parentPID], pid)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 	for ppid := range children {
 		sort.Ints(children[ppid])
@@ -178,11 +182,6 @@ func parseProcessIdentity(stat string) (processIdentity, error) {
 		startTime = fields[19]
 	}
 	return processIdentity{parentPID: ppid, startTime: startTime}, nil
-}
-
-func parentPID(stat string) (int, error) {
-	identity, err := parseProcessIdentity(stat)
-	return identity.parentPID, err
 }
 
 func readProcArgs(root string, pid int) ([]string, error) {

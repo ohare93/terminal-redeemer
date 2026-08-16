@@ -109,6 +109,8 @@ type concurrentAttachFixture struct {
 	mu       sync.Mutex
 	window   bool
 	launches int
+	commands []Command
+	moveErr  error
 }
 
 func (fixture *concurrentAttachFixture) list(context.Context) ([]OwnedWindow, error) {
@@ -129,9 +131,13 @@ func (fixture *concurrentAttachFixture) attached(_ context.Context, pid int, ses
 func (fixture *concurrentAttachFixture) Run(_ context.Context, command Command) error {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
+	fixture.commands = append(fixture.commands, command)
 	if command.Name == "kitty" {
 		fixture.launches++
 		fixture.window = true
+	}
+	if command.Name == "niri" {
+		return fixture.moveErr
 	}
 	return nil
 }
@@ -172,9 +178,38 @@ func TestAttachLocalConcurrentProcessesLaunchOnceAndMoveByExactID(t *testing.T) 
 	}
 	fixture.mu.Lock()
 	launches := fixture.launches
+	commands := append([]Command(nil), fixture.commands...)
 	fixture.mu.Unlock()
 	if launches != 1 || alreadyOpen != 1 {
 		t.Fatalf("launches=%d alreadyOpen=%d", launches, alreadyOpen)
+	}
+	wantMove := Command{Name: "niri", Args: []string{"msg", "action", "move-window-to-workspace", "--window-id", "11", "--focus", "false", "agentleman"}}
+	moves := make([]Command, 0, 1)
+	for _, command := range commands {
+		if command.Name == "niri" {
+			moves = append(moves, command)
+		}
+	}
+	if !reflect.DeepEqual(moves, []Command{wantMove}) {
+		t.Fatalf("move commands = %#v, want %#v", moves, []Command{wantMove})
+	}
+}
+
+func TestAttachLocalPlacementFailureIsNonFatal(t *testing.T) {
+	plan, _ := PlanLocalAttach(generatedTestSession, "agentleman", "kitty")
+	fixture := &concurrentAttachFixture{moveErr: errors.New("workspace unavailable")}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := attachLocal(ctx, plan, t.TempDir(), localAttachDeps{
+		runner: fixture, listWindows: fixture.list, attached: fixture.attached,
+		catalog:     &catalogSequence{statuses: []zellijlive.Status{zellijlive.StatusActive}},
+		niriCommand: "niri", pollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("placement failure became fatal: %v", err)
+	}
+	if result.WindowID != 11 || result.PlacementError == nil || !strings.Contains(result.PlacementError.Error(), "workspace unavailable") {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -218,6 +253,19 @@ func (blockingCommandRunner) Output(ctx context.Context, _ Command) ([]byte, err
 func (blockingCommandRunner) Run(ctx context.Context, _ Command) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func TestExecRunnerBoundsPipeHoldingDescendants(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := (ExecRunner{}).Output(ctx, Command{Name: "sh", Args: []string{"-c", "sleep 5 & wait"}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
+		t.Fatalf("mirror command exceeded wall-clock bound: %s", elapsed)
+	}
 }
 
 func TestAttachLocalBoundsBlockingWindowAndKittyOperations(t *testing.T) {

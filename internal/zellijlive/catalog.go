@@ -9,13 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/jmo/terminal-redeemer/internal/procrun"
 )
 
 const PinnedVersion = "0.44.3"
@@ -225,13 +226,13 @@ func (output *boundedOutput) Write(payload []byte) (int, error) {
 
 func runBounded(ctx context.Context, command string, args []string, environment []string) ([]byte, error) {
 	output := &boundedOutput{max: MaxCatalogBytes}
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := procrun.CommandContext(ctx, command, args...)
 	if environment != nil {
 		cmd.Env = environment
 	}
 	cmd.Stdout = output
 	cmd.Stderr = output
-	err := cmd.Run()
+	err := procrun.ContextError(ctx, cmd.Run())
 	return append([]byte(nil), output.Bytes()...), err
 }
 

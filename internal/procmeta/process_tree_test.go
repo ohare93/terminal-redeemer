@@ -2,6 +2,7 @@ package procmeta
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +20,35 @@ func TestReadProcArgsPreservesInteriorEmptyArguments(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []string{"command", "", "tail"}) {
 		t.Fatalf("args=%#v", args)
+	}
+}
+
+type cancelAfterChecksContext struct {
+	context.Context
+	checks int
+	after  int
+}
+
+func (ctx *cancelAfterChecksContext) Err() error {
+	ctx.checks++
+	if ctx.checks >= ctx.after {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestProcessTableChecksCancellationDuringScan(t *testing.T) {
+	root := t.TempDir()
+	for pid := 100; pid < 110; pid++ {
+		writeProcessTreeFixture(t, root, pid, 1, pid, []byte("process\x00"))
+	}
+	ctx := &cancelAfterChecksContext{Context: context.Background(), after: 3}
+	_, _, err := processTable(ctx, root)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("processTable error = %v, want cancellation", err)
+	}
+	if ctx.checks < 3 {
+		t.Fatalf("process table did not scan before cancellation: %d checks", ctx.checks)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -424,7 +423,6 @@ func copyIntSlice(in []int) []int {
 type ShellRunner struct{}
 
 func (ShellRunner) Run(ctx context.Context, command string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
 	env := os.Environ()
 	if !graphicalEnvironmentComplete(environmentValues(env)) {
 		envCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -433,6 +431,5 @@ func (ShellRunner) Run(ctx context.Context, command string) ([]byte, error) {
 			env = recovered
 		}
 	}
-	cmd.Env = env
-	return cmd.Output()
+	return (ExecRunner{Env: env}).Output(ctx, Command{Name: "sh", Args: []string{"-lc", command}})
 }

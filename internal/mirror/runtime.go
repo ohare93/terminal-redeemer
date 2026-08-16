@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/jmo/terminal-redeemer/internal/procrun"
 )
 
 // Command is an argv-based process request. Stdin may contain binary data.
@@ -27,7 +29,7 @@ type ExecRunner struct {
 }
 
 func (r ExecRunner) command(ctx context.Context, request Command) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, request.Name, request.Args...)
+	cmd := procrun.CommandContext(ctx, request.Name, request.Args...)
 	cmd.Stdin = bytes.NewReader(request.Stdin)
 	if r.Env != nil {
 		cmd.Env = append([]string(nil), r.Env...)
@@ -38,6 +40,7 @@ func (r ExecRunner) command(ctx context.Context, request Command) *exec.Cmd {
 func (r ExecRunner) Output(ctx context.Context, request Command) ([]byte, error) {
 	cmd := r.command(ctx, request)
 	output, err := cmd.Output()
+	err = procrun.ContextError(ctx, err)
 	if err == nil {
 		return output, nil
 	}
@@ -51,6 +54,7 @@ func (r ExecRunner) Output(ctx context.Context, request Command) ([]byte, error)
 func (r ExecRunner) Run(ctx context.Context, request Command) error {
 	cmd := r.command(ctx, request)
 	output, err := cmd.CombinedOutput()
+	err = procrun.ContextError(ctx, err)
 	if err == nil {
 		return nil
 	}
