@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/bootid"
@@ -134,11 +137,11 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 
 func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|new|save|apply|status|close|paste-image> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|new|save|apply|follow|status|close|paste-image> [flags]")
 		return 2
 	}
 	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|new|save|apply|status|close|paste-image> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|new|save|apply|follow|status|close|paste-image> [flags]")
 		return 0
 	}
 	switch args[0] {
@@ -156,6 +159,8 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return runMirrorSave(args[1:], resolvedConfig, stdout, stderr)
 	case "apply":
 		return runMirrorApply(args[1:], resolvedConfig, stdout, stderr)
+	case "follow":
+		return runMirrorFollow(args[1:], resolvedConfig, stdout, stderr)
 	case "status":
 		return runMirrorStatus(args[1:], resolvedConfig, stdout, stderr)
 	case "close":
@@ -636,6 +641,121 @@ func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Write
 		return 1
 	}
 	return 0
+}
+
+func runMirrorFollow(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror follow", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
+	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
+	niriCommand := fs.String("niri-command", resolvedConfig.Mirror.NiriCommand, "Niri executable")
+	interval := fs.Duration("interval", mirror.DefaultFollowInterval, "healthy source poll interval (minimum 2s)")
+	maxPerPoll := fs.Int("max-per-poll", mirror.DefaultFollowMaxPerPoll, "maximum new projections opened by one poll")
+	maxTotal := fs.Int("max-total", mirror.DefaultFollowMaxTotal, "maximum projections opened during this foreground run")
+	timeout := fs.Duration("timeout", resolvedConfig.Resume.Timeout, "per-command and correlation timeout")
+	evidenceInterval := fs.Duration("evidence-interval", resolvedConfig.Resume.PollInterval, "new projection evidence interval")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *interval < mirror.MinimumFollowInterval || *maxPerPoll <= 0 || *maxTotal <= 0 || *timeout <= 0 || *evidenceInterval <= 0 || *evidenceInterval > *timeout {
+		_, _ = fmt.Fprintln(stderr, "mirror follow failed: --interval must be at least 2s; launch bounds and timeouts must be positive")
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGHUP, syscall.SIGTERM)
+	defer stop()
+	initialCtx, cancel := context.WithTimeout(ctx, *timeout)
+	snapshot, host, err := acquireMirrorSnapshot(initialCtx, source, "")
+	cancel()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
+		return 1
+	}
+	choices, err := mirror.FollowWorkspaceChoices(snapshot)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
+		return 1
+	}
+	choice, cancelled, err := mirrortui.RunWorkspaceContext(ctx, choices)
+	if cancelled || errors.Is(ctx.Err(), context.Canceled) {
+		return 0
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
+		return 1
+	}
+	manager := mirror.WindowManager{Runner: mirror.ExecRunner{}, NiriCommand: *niriCommand}
+	destinationCtx, cancel := context.WithTimeout(ctx, *timeout)
+	localWorkspaces, err := manager.Workspaces(destinationCtx)
+	cancel()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: resolve local destination: %v\n", err)
+		return 1
+	}
+	destination, err := mirror.ResolveFollowDestination(choice.Workspace, localWorkspaces)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
+		return 1
+	}
+	lock, err := mirror.AcquireFollowLock(resolvedConfig.StateDir, host, snapshot.Profile)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: another mirror operation is active or the lock is unavailable: %v\n", err)
+		return 1
+	}
+	defer func() {
+		if closeErr := lock.Close(); closeErr != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: release mirror follow lock: %v\n", closeErr)
+		}
+	}()
+	selection := mirror.SelectionForWorkspace(choice.Workspace)
+	cfg := mirror.FollowConfig{
+		SourceHost: host, SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values,
+		LauncherCommand: *launcher, AppID: *appID, NiriCommand: *niriCommand,
+		Timeout: *timeout, EvidenceInterval: *evidenceInterval, MaxPerPoll: *maxPerPoll, MaxTotal: *maxTotal,
+	}
+	state := &mirror.FollowState{}
+	failures := 0
+	poll := func(pollParent context.Context) (mirror.FollowPollResult, time.Duration) {
+		budget := time.Duration(*maxPerPoll*2+4) * *timeout
+		pollCtx, pollCancel := context.WithTimeout(pollParent, budget)
+		defer pollCancel()
+		freshCtx, freshCancel := context.WithTimeout(pollCtx, *timeout)
+		fresh, freshHost, acquireErr := acquireMirrorSnapshot(freshCtx, source, "")
+		freshCancel()
+		var result mirror.FollowPollResult
+		if acquireErr != nil || freshHost != host || fresh.Profile != snapshot.Profile {
+			result = mirror.FollowPollResult{Total: state.TotalOpened, Reason: "source disconnected: " + errorText(acquireErr, "SSH destination or profile changed")}
+		} else {
+			result = mirror.FollowOnce(pollCtx, cfg, fresh, selection, destination, state, mirror.FollowDeps{Runner: mirror.ExecRunner{}})
+		}
+		if result.Healthy {
+			failures = 0
+		} else {
+			failures++
+		}
+		return result, mirror.FollowRetryDelay(*interval, failures)
+	}
+	label := choice.Workspace.Name
+	if label == "" {
+		label = fmt.Sprintf("workspace %d", choice.Workspace.Index)
+	}
+	limits := fmt.Sprintf("interval=%s max-per-poll=%d max-total=%d", interval.String(), *maxPerPoll, *maxTotal)
+	if err := mirrortui.RunFollowStatus(ctx, label, limits, poll); err != nil && !errors.Is(ctx.Err(), context.Canceled) {
+		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
+		return 1
+	}
+	_ = stdout
+	return 0
+}
+
+func errorText(err error, fallback string) string {
+	if err != nil {
+		return err.Error()
+	}
+	return fallback
 }
 
 func writeMirrorApplyResult(stdout io.Writer, result mirror.ApplyResult) bool {

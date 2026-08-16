@@ -52,6 +52,10 @@ Prune shares the writer lock, preserves the current boot and newest usable prior
 
 Run `redeem mirror save --host lattice` while the desired Overton projections are open. Save acquires a fresh remote snapshot, then uses each current Niri PID plus the complete configured SSH argv and exact static Zellij command evidence. Title-only windows are untracked and multiple matching descendants are ambiguous; neither is pinned. The host identity is the exact SSH destination token, not a claim about the canonical machine behind an alias. Save atomically replaces the host/profile pin outside `checkpoints/`. Run `redeem mirror apply --host lattice` after a disconnect or restart. Apply refreshes the source snapshot, reports missing sessions without creating them, skips exact already-open projections, and attaches the rest in locally captured order before one-time workspace/floating/size actions. Placement degradation leaves the attached window open. Use `--dry-run` on either command for fresh read-only observation without pin, launch, or Niri mutation.
 
+## Temporary workspace following
+
+Run `redeem mirror follow --host lattice`, filter and select one current Lattice workspace with printable input and arrow navigation, and leave the foreground status TUI open. Each healthy complete poll opens only missing visible exact ACTIVE sessions in source order, up to four per poll and 64 total by default, then moves each newly verified projection once to the frozen matching Overton workspace. Closing a projection causes the next healthy poll to reopen it while the source remains eligible. Source session exit causes no Redeem close action. Disconnection, malformed inventory, or ambiguous local evidence opens nothing and retries with bounded backoff. Press `q` or Ctrl+C to stop; no service, timer, rule, or saved selection exists.
+
 ## User-owned physical smoke checklist
 
 Do not activate hosts from repository automation. After the user activates the approved package and configuration on Lattice and Overton:

@@ -59,10 +59,19 @@ type Options struct {
 }
 
 type Snapshot struct {
-	Host        string    `json:"host"`
-	Profile     string    `json:"profile"`
-	GeneratedAt time.Time `json:"generated_at"`
-	Windows     []Window  `json:"windows"`
+	Host           string      `json:"host"`
+	Profile        string      `json:"profile"`
+	GeneratedAt    time.Time   `json:"generated_at"`
+	Workspaces     []Workspace `json:"workspaces"`
+	ActiveSessions []string    `json:"active_zellij_sessions"`
+	Windows        []Window    `json:"windows"`
+}
+
+type Workspace struct {
+	ID     string `json:"id"`
+	Index  int    `json:"idx"`
+	Name   string `json:"name,omitempty"`
+	Output string `json:"output,omitempty"`
 }
 
 type Window struct {
@@ -170,6 +179,7 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 	enricher := procmeta.NewEnricherWithDependencies(reader, opts.ProcessMetadata, verifier, resolver)
 
 	workspaces := workspaceRefs(parsed.Workspaces)
+	workspaceInventory := snapshotWorkspaces(parsed.Workspaces)
 	ordered := make([]orderedWindow, 0, len(parsed.Windows))
 	for _, rawWindow := range parsed.Windows {
 		appID, _ := valueAsString(rawWindow.AppID)
@@ -234,7 +244,9 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 	if lister == nil && strings.TrimSpace(opts.FixturePath) == "" {
 		lister = liveSessionLister{cataloger: zellijlive.CommandCataloger{}}
 	}
+	var activeSessions []string
 	if lister != nil {
+		activeSessions = make([]string, 0)
 		sessions, err := lister.List(ctx)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list live Zellij sessions: %w", err)
@@ -246,13 +258,14 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 			if session == "" {
 				continue
 			}
-			if _, found := visibleSessions[session]; found {
-				continue
-			}
 			if _, found := added[session]; found {
 				continue
 			}
 			added[session] = struct{}{}
+			activeSessions = append(activeSessions, session)
+			if _, found := visibleSessions[session]; found {
+				continue
+			}
 			cwd, _ := resolver.Resolve(session)
 			cwd = strings.TrimSpace(cwd)
 			windows = append(windows, Window{
@@ -268,10 +281,12 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 	}
 
 	return Snapshot{
-		Host:        opts.Host,
-		Profile:     opts.Profile,
-		GeneratedAt: opts.GeneratedAt,
-		Windows:     windows,
+		Host:           opts.Host,
+		Profile:        opts.Profile,
+		GeneratedAt:    opts.GeneratedAt,
+		Workspaces:     workspaceInventory,
+		ActiveSessions: activeSessions,
+		Windows:        windows,
 	}, nil
 }
 
@@ -350,6 +365,25 @@ func workspaceRefs(workspaces []workspacePayload) map[string]workspaceRef {
 		refs[id] = workspaceRef{ID: id, Index: workspace.Index, Name: name, Output: workspace.Output}
 	}
 	return refs
+}
+
+func snapshotWorkspaces(workspaces []workspacePayload) []Workspace {
+	if workspaces == nil {
+		return nil
+	}
+	out := make([]Workspace, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		id, _ := valueAsString(workspace.ID)
+		name, _ := valueAsString(workspace.Name)
+		out = append(out, Workspace{ID: id, Index: workspace.Index, Name: name, Output: workspace.Output})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Index != out[j].Index {
+			return out[i].Index < out[j].Index
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 func lessWindow(left orderedWindow, right orderedWindow) bool {

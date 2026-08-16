@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +84,12 @@ func TestCaptureOrdersWindowsAndIncludesZellijSession(t *testing.T) {
 
 	if snapshot.Host != "lattice" {
 		t.Fatalf("expected host lattice, got %q", snapshot.Host)
+	}
+	if len(snapshot.Workspaces) != 2 || snapshot.Workspaces[0].ID != "ws-1" || snapshot.Workspaces[1].ID != "ws-2" {
+		t.Fatalf("workspace inventory did not include and order source workspaces: %#v", snapshot.Workspaces)
+	}
+	if snapshot.ActiveSessions != nil {
+		t.Fatalf("fixture without a live lister unexpectedly claimed a complete ACTIVE inventory: %#v", snapshot.ActiveSessions)
 	}
 	if len(snapshot.Windows) != 4 {
 		t.Fatalf("expected 4 windows, got %d", len(snapshot.Windows))
@@ -171,6 +178,28 @@ func TestLiveSessionListerExcludesCacheOnlyDeadSessions(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0] != "active" {
 		t.Fatalf("live sessions = %q, want only active", sessions)
+	}
+}
+
+func TestCaptureIncludesEmptyWorkspaceAndCompleteEmptyActiveInventory(t *testing.T) {
+	fixturePath := filepath.Join(t.TempDir(), "niri.json")
+	payload := []byte(`{"workspaces":[{"id":"empty","idx":1,"name":"Empty"}],"windows":[]}`)
+	if err := os.WriteFile(fixturePath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Capture(context.Background(), Options{FixturePath: fixturePath, Lister: fakeLister{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Workspaces) != 1 || snapshot.Workspaces[0].ID != "empty" || snapshot.ActiveSessions == nil || len(snapshot.ActiveSessions) != 0 {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"workspaces":[`) || !strings.Contains(string(encoded), `"active_zellij_sessions":[]`) {
+		t.Fatalf("complete empty inventories were omitted: %s", encoded)
 	}
 }
 

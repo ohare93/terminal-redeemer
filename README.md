@@ -17,11 +17,14 @@ redeem mirror open --host lattice                               # project-first 
 redeem mirror list --host lattice      # non-interactive live inventory
 redeem mirror save --host lattice      # replace the pinned live projection set
 redeem mirror apply --host lattice     # manually reopen that pinned set
+redeem mirror follow --host lattice    # temporarily follow one selected workspace
 ```
 
 Closing an Overton mirror window detaches it; the Zellij session continues on Lattice and remains discoverable. Existing sessions are exact attach-only. `mirror new` uses attach-or-create only for its newly generated safe identity.
 
 `mirror save` always refreshes the remote snapshot and trusts only complete configured SSH argv plus exact static Zellij evidence below owned Niri window PIDs; titles are presentation, so ambiguous or untracked windows are reported and excluded. The persisted host is the exact SSH destination token, not a canonical-host claim for aliases. Save atomically replaces one mode-0600 pin per host/profile under `STATE_DIR/mirror/pins/`, outside rolling checkpoints. `mirror apply` refreshes and preflights exact ACTIVE sessions, skips already projected sessions, never creates missing sessions, and opens the rest in locally captured order. Each new window is moved once and receives supported floating/tiled size actions; exact Niri column/stack reconstruction is intentionally unsupported. Both commands support side-effect-free `--dry-run`.
+
+`mirror follow` is a foreground-only temporary additions loop. Select a current source workspace with arrow keys; printable `j` and `k` filter normally. Redeem freezes the matching local workspace identity, polls complete source snapshots no faster than two seconds, opens only missing visible exact ACTIVE sessions, and moves each new projection once. Defaults are four opens per poll and 64 for the run; `--max-per-poll`, `--max-total`, and `--interval` are explicit overrides. It never closes, reorders, resizes, or continually repositions windows. Press `q` or Ctrl+C to stop.
 
 ### Picker controls
 

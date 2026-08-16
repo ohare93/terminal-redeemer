@@ -95,6 +95,7 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror list", args: []string{"mirror", "list", "--help"}},
 		{name: "mirror open", args: []string{"mirror", "open", "--help"}},
 		{name: "mirror new", args: []string{"mirror", "new", "--help"}},
+		{name: "mirror follow", args: []string{"mirror", "follow", "--help"}},
 		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
 		{name: "mirror close", args: []string{"mirror", "close", "--help"}},
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
@@ -133,6 +134,7 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "mirror save rejects local fixture", args: []string{"mirror", "save", "--snapshot-file", "fixture.json"}, want: "flag provided but not defined"},
 		{name: "mirror apply rejects local fixture", args: []string{"mirror", "apply", "--snapshot-file", "fixture.json"}, want: "flag provided but not defined"},
+		{name: "mirror follow rejects unsafe interval", args: []string{"mirror", "follow", "--interval", "1s"}, want: "--interval must be at least 2s"},
 		{name: "resume invalid timeout", args: []string{"resume", "--timeout", "0s"}, want: "--timeout and --poll-interval must be positive"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 	}
