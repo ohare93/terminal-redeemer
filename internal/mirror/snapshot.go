@@ -425,52 +425,6 @@ type ShellRunner struct{}
 
 func (ShellRunner) Run(ctx context.Context, command string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
-	cmd.Env = envWithGraphicalSession(os.Environ())
+	cmd.Env = GraphicalEnvironment(os.Environ())
 	return cmd.Output()
-}
-
-func envWithGraphicalSession(env []string) []string {
-	if hasEnv(env, "NIRI_SOCKET") {
-		return env
-	}
-
-	out, err := exec.Command("systemctl", "--user", "show-environment").Output()
-	if err != nil {
-		return env
-	}
-
-	merged := append([]string(nil), env...)
-	for _, line := range strings.Split(string(out), "\n") {
-		name, value, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(value) == "" {
-			continue
-		}
-		switch name {
-		case "NIRI_SOCKET", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR":
-			merged = setEnv(merged, name, value)
-		}
-	}
-	return merged
-}
-
-func hasEnv(env []string, name string) bool {
-	prefix := name + "="
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) && strings.TrimSpace(strings.TrimPrefix(entry, prefix)) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func setEnv(env []string, name string, value string) []string {
-	prefix := name + "="
-	entry := prefix + value
-	for i := range env {
-		if strings.HasPrefix(env[i], prefix) {
-			env[i] = entry
-			return env
-		}
-	}
-	return append(env, entry)
 }

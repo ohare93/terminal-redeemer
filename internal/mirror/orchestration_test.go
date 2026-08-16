@@ -148,12 +148,12 @@ func TestNewSessionNameIsSafeAndUnique(t *testing.T) {
 
 func TestOwnedWindowFilteringAndCloseDryRun(t *testing.T) {
 	raw := []byte(`[
-		{"id":1,"app_id":"redeem-mirror","title":"source[0]: one","workspace_id":2},
+		{"id":1,"pid":101,"app_id":"redeem-mirror","title":"source[0]: one","workspace_id":2},
 		{"id":2,"app_id":"redeem-mirror","title":"other[0]: two"},
 		{"id":3,"app_id":"kitty","title":"source[1]: unrelated"}
 	]`)
 	windows, err := DecodeOwnedWindows(raw, "redeem-mirror", "source")
-	if err != nil || len(windows) != 1 || windows[0].ID != 1 {
+	if err != nil || len(windows) != 1 || windows[0].ID != 1 || windows[0].PID != 101 {
 		t.Fatalf("owned filter: %#v err=%v", windows, err)
 	}
 	runner := &recordingRunner{}

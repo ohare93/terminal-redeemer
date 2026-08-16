@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/procmeta"
 )
 
 type LayoutStatus string
@@ -443,23 +444,11 @@ func (p *execProcess) PID() int {
 func (p *execProcess) Done() <-chan error { return p.done }
 
 func descendantPIDs(rootPID int) []int {
-	children, err := processChildren("/proc")
+	pids, err := procmeta.DescendantPIDs("/proc", rootPID)
 	if err != nil {
 		return nil
 	}
-	queue := append([]int(nil), children[rootPID]...)
-	out := make([]int, 0, len(queue))
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		out = append(out, pid)
-		queue = append(queue, children[pid]...)
-	}
-	// Kill leaves before their parents.
-	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
-		out[left], out[right] = out[right], out[left]
-	}
-	return out
+	return pids
 }
 
 func (p *execProcess) Kill() error {

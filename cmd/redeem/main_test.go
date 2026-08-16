@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -505,7 +507,7 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	}
 }
 
-func TestMirrorNewDryRunCreatesRemoteSessionWithoutLocalFallback(t *testing.T) {
+func TestMirrorNewDryRunShowsCreatorAndBestEffortSourceHelper(t *testing.T) {
 	original := newMirrorSessionName
 	defer func() { newMirrorSessionName = original }()
 	newMirrorSessionName = func() (string, error) {
@@ -513,19 +515,76 @@ func TestMirrorNewDryRunCreatesRemoteSessionWithoutLocalFallback(t *testing.T) {
 	}
 
 	var out, stderr bytes.Buffer
-	code := run([]string{"mirror", "new", "--host", "user@lattice", "--ssh-command", "ssh", "--launcher-command", "kitty", "--app-id", "owned-mirror", "--dry-run", "--no-clipboard"}, &out, &stderr)
+	code := run([]string{"mirror", "new", "--host", "user@lattice", "--ssh-command", "ssh", "--launcher-command", "kitty", "--app-id", "owned-mirror", "--source-workspace", "agentleman", "--dry-run", "--no-clipboard"}, &out, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "--create", "redeem-0123456789abcdef0123456789abcdef", "--on-force-close", "detach"} {
+	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "--create", "redeem-0123456789abcdef0123456789abcdef", "--on-force-close", "detach", "attach-local", "--workspace", "agentleman", "after exact source-session readiness"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("dry-run missing %q: %s", want, out.String())
 		}
 	}
 	for _, forbidden := range []string{"${SHELL", "exec sh", "exec bash"} {
 		if strings.Contains(out.String(), forbidden) {
-			t.Fatalf("dry-run contains local fallback %q: %s", forbidden, out.String())
+			t.Fatalf("dry-run contains fallback %q: %s", forbidden, out.String())
 		}
+	}
+	if strings.Count(out.String(), "'--create'") != 1 {
+		t.Fatalf("only the Overton creator may receive --create: %s", out.String())
+	}
+}
+
+type newCLIRunner struct {
+	runs []mirror.Command
+}
+
+func (runner *newCLIRunner) Output(context.Context, mirror.Command) ([]byte, error) {
+	return nil, errors.New("unexpected output")
+}
+
+func (runner *newCLIRunner) Run(_ context.Context, command mirror.Command) error {
+	runner.runs = append(runner.runs, command)
+	if len(runner.runs) == 2 {
+		return errors.New("source helper unavailable")
+	}
+	return nil
+}
+
+func TestMirrorNewSourceHelperFailureIsWarningAfterPersistentCreator(t *testing.T) {
+	originalName, originalRunner, originalAcquire, originalWait := newMirrorSessionName, newMirrorRunner, newMirrorAcquire, newMirrorWait
+	defer func() {
+		newMirrorSessionName, newMirrorRunner, newMirrorAcquire, newMirrorWait = originalName, originalRunner, originalAcquire, originalWait
+	}()
+	const session = "redeem-0123456789abcdef0123456789abcdef"
+	newMirrorSessionName = func() (string, error) { return session, nil }
+	runner := &newCLIRunner{}
+	newMirrorRunner = runner
+	newMirrorAcquire = func(context.Context, mirror.Runner, mirror.RemoteConfig) (mirror.Snapshot, error) {
+		return mirror.Snapshot{Windows: []mirror.Window{{ZellijSession: session}}}, nil
+	}
+	newMirrorWait = func(context.Context, time.Duration) error { return nil }
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"mirror", "new", "--host", "lattice", "--no-clipboard"}, &out, &stderr)
+	if code != 0 || len(runner.runs) != 2 || !strings.Contains(stderr.String(), "persistent session") || !strings.Contains(stderr.String(), "source helper unavailable") {
+		t.Fatalf("code=%d calls=%#v stdout=%q stderr=%q", code, runner.runs, out.String(), stderr.String())
+	}
+	if !strings.Contains(strings.Join(runner.runs[0].Args, " "), "--create") || strings.Contains(strings.Join(runner.runs[1].Args, " "), "--create") {
+		t.Fatalf("creation boundary violated: %#v", runner.runs)
+	}
+}
+
+func TestMirrorAttachLocalDryRunIsAttachOnlyAndValidatesWorkspace(t *testing.T) {
+	const session = "redeem-0123456789abcdef0123456789abcdef"
+	var out, stderr bytes.Buffer
+	code := run([]string{"mirror", "attach-local", "--session", session, "--workspace", "agentleman", "--dry-run"}, &out, &stderr)
+	if code != 0 || !strings.Contains(out.String(), "'zellij' 'attach'") || strings.Contains(out.String(), "--create") {
+		t.Fatalf("code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"mirror", "attach-local", "--session", session, "--workspace", "--bad", "--dry-run"}, &out, &stderr); code != 2 {
+		t.Fatalf("unsafe workspace code=%d stderr=%q", code, stderr.String())
 	}
 }
 

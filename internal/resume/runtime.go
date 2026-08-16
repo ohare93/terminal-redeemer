@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/niri"
+	"github.com/jmo/terminal-redeemer/internal/procmeta"
 )
 
 type SnapshotSource interface {
@@ -69,87 +68,9 @@ func (p ProcAttachmentProbe) Attached(_ context.Context, rootPID int, session st
 	if rootPID <= 0 || strings.TrimSpace(session) == "" {
 		return false, nil
 	}
-	root := strings.TrimSpace(p.ProcRoot)
-	if root == "" {
-		root = "/proc"
-	}
-	children, err := processChildren(root)
-	if err != nil {
-		return false, err
-	}
-	queue := append([]int(nil), children[rootPID]...)
-	seen := map[int]struct{}{}
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		if _, ok := seen[pid]; ok {
-			continue
-		}
-		seen[pid] = struct{}{}
-		args, err := readProcArgs(root, pid)
-		if err == nil && len(args) == 4 && filepath.Base(args[0]) == "zellij" && args[1] == "attach" && args[2] == "--" && args[3] == session {
-			return true, nil
-		}
-		queue = append(queue, children[pid]...)
-	}
-	return false, nil
-}
-
-func processChildren(root string) (map[int][]int, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, fmt.Errorf("read process table: %w", err)
-	}
-	children := make(map[int][]int)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-		payload, err := os.ReadFile(filepath.Join(root, entry.Name(), "stat"))
-		if err != nil {
-			continue
-		}
-		ppid, err := parentPID(string(payload))
-		if err != nil {
-			continue
-		}
-		children[ppid] = append(children[ppid], pid)
-	}
-	for ppid := range children {
-		sort.Ints(children[ppid])
-	}
-	return children, nil
-}
-
-func parentPID(stat string) (int, error) {
-	idx := strings.LastIndex(stat, ")")
-	if idx < 0 || idx+2 >= len(stat) {
-		return 0, fmt.Errorf("unexpected stat format")
-	}
-	fields := strings.Fields(stat[idx+2:])
-	if len(fields) < 2 {
-		return 0, fmt.Errorf("unexpected stat fields")
-	}
-	return strconv.Atoi(fields[1])
-}
-
-func readProcArgs(root string, pid int) ([]string, error) {
-	payload, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "cmdline"))
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.Split(string(payload), "\x00")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out, nil
+	return procmeta.DescendantArgvMatch(p.ProcRoot, rootPID, func(args []string) bool {
+		return len(args) == 4 && filepath.Base(args[0]) == "zellij" && args[1] == "attach" && args[2] == "--" && args[3] == session
+	})
 }
 
 type ActionRunner interface {

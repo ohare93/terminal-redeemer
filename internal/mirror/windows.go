@@ -115,6 +115,7 @@ func RenderCommand(command Command) string {
 
 type OwnedWindow struct {
 	ID          int    `json:"id"`
+	PID         int    `json:"pid,omitempty"`
 	Title       string `json:"title"`
 	WorkspaceID any    `json:"workspace_id,omitempty"`
 	AppID       string `json:"app_id"`
