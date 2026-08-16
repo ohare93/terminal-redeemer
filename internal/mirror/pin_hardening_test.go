@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,6 +160,83 @@ func TestPinDescriptorPathSwapCannotRedirectPublication(t *testing.T) {
 	entries, err := os.ReadDir(outside)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("path swap redirected publication: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestPinStoreRequiresSafeOwnedStateAndMirrorDirectories(t *testing.T) {
+	t.Run("safe modes", func(t *testing.T) {
+		for _, modes := range []struct {
+			name   string
+			state  os.FileMode
+			mirror os.FileMode
+		}{
+			{name: "private", state: 0o700, mirror: 0o700},
+			{name: "readable", state: 0o755, mirror: 0o755},
+		} {
+			t.Run(modes.name, func(t *testing.T) {
+				stateDir := filepath.Join(t.TempDir(), "state")
+				if err := os.Mkdir(stateDir, modes.state); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(stateDir, modes.state); err != nil {
+					t.Fatal(err)
+				}
+				mirrorDir := filepath.Join(stateDir, "mirror")
+				if err := os.Mkdir(mirrorDir, modes.mirror); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(mirrorDir, modes.mirror); err != nil {
+					t.Fatal(err)
+				}
+				store, err := OpenPinStore(stateDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.Write(testPin("A")); err != nil {
+					t.Fatalf("safe state=%04o mirror=%04o rejected: %v", modes.state, modes.mirror, err)
+				}
+			})
+		}
+	})
+
+	for _, location := range []string{"state", "mirror"} {
+		t.Run("unsafe "+location+" modes", func(t *testing.T) {
+			for _, mode := range []os.FileMode{0o777, 0o775, 0o702} {
+				t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+					stateDir := filepath.Join(t.TempDir(), "state")
+					if err := os.Mkdir(stateDir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					mirrorDir := filepath.Join(stateDir, "mirror")
+					if err := os.Mkdir(mirrorDir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					target := stateDir
+					if location == "mirror" {
+						target = mirrorDir
+					}
+					if err := os.Chmod(target, mode); err != nil {
+						t.Fatal(err)
+					}
+					store, err := OpenPinStore(stateDir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := store.Write(testPin("A")); err == nil {
+						t.Fatalf("accepted unsafe %s mode %04o", location, mode)
+					}
+				})
+			}
+		})
+	}
+
+	otherUID := uint32(0)
+	if os.Geteuid() == 0 {
+		otherUID = 1
+	}
+	wrongOwner := unix.Stat_t{Mode: unix.S_IFDIR | 0o700, Uid: otherUID}
+	if err := validateOwnedSafeDirectory(wrongOwner, "test directory"); err == nil {
+		t.Fatal("accepted directory owned by another user")
 	}
 }
 

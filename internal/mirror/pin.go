@@ -347,12 +347,39 @@ func (s *PinStore) openSecureChild(name string, create bool) (int, error) {
 		return -1, err
 	}
 	defer unix.Close(stateDir)
+	if err := requireOwnedSafeDirectory(stateDir, "state directory"); err != nil {
+		return -1, err
+	}
 	mirrorDir, err := openChildDirectory(stateDir, "mirror", create, 0o700, false)
 	if err != nil {
 		return -1, err
 	}
 	defer unix.Close(mirrorDir)
+	if err := requireOwnedSafeDirectory(mirrorDir, "mirror directory"); err != nil {
+		return -1, err
+	}
 	return openChildDirectory(mirrorDir, name, create, 0o700, true)
+}
+
+func requireOwnedSafeDirectory(fd int, name string) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return fmt.Errorf("inspect %s: %w", name, err)
+	}
+	return validateOwnedSafeDirectory(stat, name)
+}
+
+func validateOwnedSafeDirectory(stat unix.Stat_t, name string) error {
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return fmt.Errorf("%s is not a directory", name)
+	}
+	if stat.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("%s must be owned by the effective user", name)
+	}
+	if stat.Mode&0o022 != 0 {
+		return fmt.Errorf("%s must not be group- or other-writable", name)
+	}
+	return nil
 }
 
 func openAbsoluteDirectory(path string, create bool) (int, error) {
