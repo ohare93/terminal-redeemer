@@ -84,7 +84,7 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 		terminal.ProcessTags = tags
 	}
 	if e.config.IncludeSessionTag {
-		terminal.SessionTag = e.extractSessionTag(window.PID, window.Title)
+		terminal.SessionTag, terminal.SessionTagExact = e.extractSessionTag(window.PID, window.Title)
 		if session := strings.TrimSpace(terminal.SessionTag); session != "" && e.resolver != nil {
 			if upgraded, err := e.resolver.Resolve(session); err == nil {
 				upgraded = strings.TrimSpace(upgraded)
@@ -102,28 +102,28 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 	return out, nil
 }
 
-func (e *Enricher) extractSessionTag(pid int, windowTitle string) string {
+func (e *Enricher) extractSessionTag(pid int, windowTitle string) (string, bool) {
 	if e.sessionEvidence == nil {
-		return ""
+		return "", false
 	}
 	evidence, err := e.sessionEvidence.ObserveZellijSessions(pid)
 	if err != nil || !evidence.Complete || !evidence.KittyVerified {
-		return ""
+		return "", false
 	}
 	switch len(evidence.Candidates) {
 	case 1:
-		return evidence.Candidates[0]
+		return evidence.Candidates[0], true
 	case 0:
 		candidate := extractSessionTagFromTitle(windowTitle)
 		if candidate == "" || e.verifier == nil {
-			return ""
+			return "", false
 		}
 		ok, err := e.verifier.Exists(candidate)
 		if err == nil && ok {
-			return candidate
+			return candidate, false
 		}
 	}
-	return ""
+	return "", false
 }
 
 func defaultSessionEvidenceObserver(reader Reader) SessionEvidenceObserver {

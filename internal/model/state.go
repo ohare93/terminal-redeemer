@@ -70,6 +70,9 @@ type Terminal struct {
 	CWD         string   `json:"cwd,omitempty"`
 	ProcessTags []string `json:"process_tags,omitempty"`
 	SessionTag  string   `json:"session_tag,omitempty"`
+	// SessionTagExact is transient provenance for recovery association. It is
+	// true only for complete, unambiguous process-tree evidence.
+	SessionTagExact bool `json:"-"`
 }
 
 func Normalize(s State) State {

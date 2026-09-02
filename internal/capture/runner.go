@@ -209,7 +209,7 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 
 	visible := make(map[string][]model.Window)
 	for _, window := range state.Windows {
-		if window.Terminal == nil {
+		if window.Terminal == nil || !window.Terminal.SessionTagExact {
 			continue
 		}
 		name := window.Terminal.SessionTag
@@ -228,9 +228,16 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 			if cwd := strings.TrimSpace(window.Terminal.CWD); cwd != "" {
 				session.CWD = cwd
 			}
-			if window.WorkspaceRef != nil || window.Placement != nil {
+			if window.WorkspaceRef != nil {
 				session.WorkspaceRef = window.WorkspaceRef
+			}
+			if window.Placement != nil {
 				session.Placement = window.Placement
+			}
+			// One timestamp describes the aggregate workspace and layout. Only a
+			// complete observation can defensibly refresh it; partial evidence is
+			// still merged without making an older component appear newly observed.
+			if window.WorkspaceRef != nil && window.Placement != nil {
 				timestamp := observedAt
 				session.PlacementObservedAt = &timestamp
 			}

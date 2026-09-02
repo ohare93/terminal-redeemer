@@ -60,8 +60,8 @@ func TestSessionTagExtractionBestEffort(t *testing.T) {
 		t.Fatalf("enrich window: %v", err)
 	}
 
-	if got.Terminal == nil || got.Terminal.SessionTag != "from-env" {
-		t.Fatalf("expected env-priority session tag, got %#v", got.Terminal)
+	if got.Terminal == nil || got.Terminal.SessionTag != "from-env" || !got.Terminal.SessionTagExact {
+		t.Fatalf("expected exact process-evidence session tag, got %#v", got.Terminal)
 	}
 }
 
@@ -82,8 +82,8 @@ func TestSessionTagExtractedFromTitleWhenVerified(t *testing.T) {
 		t.Fatalf("enrich window: %v", err)
 	}
 
-	if got.Terminal == nil || got.Terminal.SessionTag != "sensible-bee" {
-		t.Fatalf("expected verified title session tag, got %#v", got.Terminal)
+	if got.Terminal == nil || got.Terminal.SessionTag != "sensible-bee" || got.Terminal.SessionTagExact {
+		t.Fatalf("expected non-exact verified title session tag, got %#v", got.Terminal)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestExactEvidenceIdentifiesSessionWhenTitleIsZellij(t *testing.T) {
 		stubEvidenceObserver{evidence: ZellijSessionEvidence{KittyVerified: true, Complete: true, Candidates: []string{"Case-Sensitive"}}},
 	)
 	got, err := enricher.EnrichWindow(model.Window{AppID: "kitty", PID: 4242, Title: "zellij"})
-	if err != nil || got.Terminal == nil || got.Terminal.SessionTag != "Case-Sensitive" {
+	if err != nil || got.Terminal == nil || got.Terminal.SessionTag != "Case-Sensitive" || !got.Terminal.SessionTagExact {
 		t.Fatalf("exact evidence not used: terminal=%+v err=%v", got.Terminal, err)
 	}
 }

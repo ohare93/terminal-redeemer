@@ -164,7 +164,7 @@ func TestCaptureCarriesPlacementForActiveHeadlessSessionSameAndNewBoot(t *testin
 		Key: "w:kitty:1", AppID: "kitty", WorkspaceID: "runtime-1",
 		WorkspaceRef: &model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 1},
 		Placement:    &model.Placement{Column: &column, Row: &row, IsFloating: &floating, TileSize: []float64{800, 600}, WindowSize: []int{802, 602}},
-		Terminal:     &model.Terminal{CWD: "/work/project", SessionTag: "alpha"},
+		Terminal:     &model.Terminal{CWD: "/work/project", SessionTag: "alpha", SessionTagExact: true},
 	}}}
 	times := []time.Time{t0, t0.Add(time.Minute)}
 	runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{visible, {}}}, func() time.Time {
@@ -198,6 +198,100 @@ func TestCaptureCarriesPlacementForActiveHeadlessSessionSameAndNewBoot(t *testin
 		t.Fatal(err)
 	}
 	assertStickySession(t, carried, t0)
+}
+
+func TestCaptureTitleFallbackCannotOverwriteStickyPlacement(t *testing.T) {
+	root := t.TempDir()
+	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	column, replacementColumn := 3, 9
+	initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column})
+	titleFallback := recoveryWindow("alpha", false, &model.WorkspaceRef{Name: "unrelated", Index: 8}, &model.Placement{Column: &replacementColumn})
+	times := []time.Time{t0, t0.Add(time.Minute)}
+	runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{initial}}, {Windows: []model.Window{titleFallback}}}}, func() time.Time {
+		now := times[0]
+		times = times[1:]
+		return now
+	})
+	runner.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+	runner.cwdResolver = nil
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Read("boot-a", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := got.Recovery.Sessions[0]
+	if session.Visible || session.WorkspaceRef == nil || session.WorkspaceRef.Name != "dev" || session.Placement == nil || session.Placement.Column == nil || *session.Placement.Column != column {
+		t.Fatalf("title-derived association changed recovery placement: %#v", session)
+	}
+	if session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0) {
+		t.Fatalf("title-derived association refreshed observation time: %v", session.PlacementObservedAt)
+	}
+}
+
+func TestCapturePartialPlacementMergesWithPriorComponents(t *testing.T) {
+	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name          string
+		second        model.Window
+		wantWorkspace string
+		wantColumn    int
+	}{
+		{
+			name:          "workspace only keeps layout",
+			second:        recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, nil),
+			wantWorkspace: "review", wantColumn: 3,
+		},
+		{
+			name: "layout only keeps workspace",
+			second: func() model.Window {
+				column := 7
+				return recoveryWindow("alpha", true, nil, &model.Placement{Column: &column})
+			}(),
+			wantWorkspace: "dev", wantColumn: 7,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			column := 3
+			initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column})
+			times := []time.Time{t0, t0.Add(time.Minute)}
+			runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{initial}}, {Windows: []model.Window{test.second}}}}, func() time.Time {
+				now := times[0]
+				times = times[1:]
+				return now
+			})
+			runner.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+			if _, err := runner.CaptureOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.CaptureOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Read("boot-a", "host", "default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := got.Recovery.Sessions[0]
+			if !session.Visible || session.WorkspaceRef == nil || session.WorkspaceRef.Name != test.wantWorkspace || session.Placement == nil || session.Placement.Column == nil || *session.Placement.Column != test.wantColumn {
+				t.Fatalf("partial observation did not merge: %#v", session)
+			}
+			if session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0) {
+				t.Fatalf("partial observation refreshed aggregate timestamp: %v", session.PlacementObservedAt)
+			}
+		})
+	}
+}
+
+func recoveryWindow(session string, exact bool, workspace *model.WorkspaceRef, placement *model.Placement) model.Window {
+	return model.Window{
+		Key: "w:kitty:1", AppID: "kitty", WorkspaceRef: workspace, Placement: placement,
+		Terminal: &model.Terminal{SessionTag: session, SessionTagExact: exact},
+	}
 }
 
 func assertStickySession(t *testing.T, checkpoint checkpoints.Checkpoint, placementTime time.Time) {
