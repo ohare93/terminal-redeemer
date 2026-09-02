@@ -25,3 +25,28 @@ Repair the observation boundary so capture, mirror inventory, and resume identif
 ## Implementation Notes
 
 First because later inventory depends on complete identity. Start at `internal/procmeta/process_tree.go` and the existing verifier/enricher call sites in collector and mirror. Do not add active-session inventory here: `internal/mirror/snapshot.go` already obtains authoritative active names through `zellijlive.Cataloger`.
+
+
+## Completion Summary
+
+- Added one bounded PID/start-time-safe session evidence API shared by procmeta enrichment, mirror capture, Zellij observation, and resume attachment checks.
+- Recognized exact `zellij attach -- <session>` descendants while rejecting ambiguous, incomplete, replaced, unreadable, and over-bound process evidence.
+- Kept title-derived sessions behind complete Kitty-verified process evidence plus live session verification.
+- Added and passed focused and full Go regression coverage; independent review found no blockers.
+
+### Files Changed
+
+- internal/procmeta/process_tree.go
+- internal/procmeta/process_tree_test.go
+- internal/procmeta/enricher.go
+- internal/procmeta/enricher_test.go
+- internal/zellijlive/process.go
+- internal/zellijlive/process_fuzz_test.go
+- internal/zellijlive/types.go
+- internal/zellijlive/zellijlive_test.go
+- internal/mirror/snapshot.go
+- internal/mirror/snapshot_test.go
+- internal/mirror/dual_new_test.go
+- internal/mirror/projection_test.go
+- internal/resume/runtime.go
+- internal/resume/runtime_test.go
