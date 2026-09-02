@@ -62,12 +62,25 @@ func TestProcAttachmentProbeRequiresLiveExactAttachOnlyDescendant(t *testing.T) 
 func writeFakeProcess(t *testing.T, root string, pid, ppid int, args []string) {
 	t.Helper()
 	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	taskDir := filepath.Join(dir, "task", strconv.Itoa(pid))
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	stat := strconv.Itoa(pid) + " (process) S " + strconv.Itoa(ppid) + " 0 0 0"
 	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "children"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if parent, err := os.OpenFile(filepath.Join(root, strconv.Itoa(ppid), "task", strconv.Itoa(ppid), "children"), os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		if _, err := parent.WriteString(strconv.Itoa(pid) + " "); err != nil {
+			_ = parent.Close()
+			t.Fatal(err)
+		}
+		if err := parent.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	payload := []byte{}
 	for _, arg := range args {

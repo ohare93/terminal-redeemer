@@ -313,10 +313,23 @@ func TestLocalProcAttachmentProbeRequiresExactStableDescendantArgv(t *testing.T)
 func writeProcFixture(t *testing.T, root string, pid int, ppid int, start int, argv []string) {
 	t.Helper()
 	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	taskDir := filepath.Join(dir, "task", strconv.Itoa(pid))
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeProcStat(t, root, pid, ppid, start)
+	if err := os.WriteFile(filepath.Join(taskDir, "children"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if parent, err := os.OpenFile(filepath.Join(root, strconv.Itoa(ppid), "task", strconv.Itoa(ppid), "children"), os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		if _, err := parent.WriteString(strconv.Itoa(pid) + " "); err != nil {
+			_ = parent.Close()
+			t.Fatal(err)
+		}
+		if err := parent.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(strings.Join(argv, "\x00")+"\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}

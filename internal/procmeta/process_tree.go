@@ -3,17 +3,33 @@ package procmeta
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+)
+
+const (
+	maxProcessNodes         = 256
+	maxProcessDepth         = 8
+	maxProcessTasks         = 256
+	maxProcessMetadataBytes = 64 << 10
 )
 
 type processIdentity struct {
 	parentPID int
 	startTime string
+}
+
+type processNode struct {
+	pid    int
+	parent int
+	depth  int
 }
 
 // ZellijSessionEvidence is a complete, point-in-time observation of the
@@ -38,8 +54,8 @@ func ExactZellijAttachSession(args []string) (string, bool) {
 
 // ObserveZellijSessionEvidence returns exact and complete session evidence for
 // a Kitty process. A nil error with Complete=false means the process tree could
-// not be observed without a PID replacement, disappearance, or unreadable
-// metadata; no candidate in that result is trustworthy.
+// not be observed without a PID replacement, disappearance, unreadable
+// metadata, or an exceeded resource bound; no candidate is trustworthy.
 func ObserveZellijSessionEvidence(ctx context.Context, procRoot string, rootPID int) (ZellijSessionEvidence, error) {
 	return observeZellijSessionEvidence(ctx, procRoot, rootPID, nil)
 }
@@ -61,16 +77,13 @@ func observeZellijSessionEvidence(ctx context.Context, procRoot string, rootPID 
 	if rootPID <= 0 {
 		return evidence, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return evidence, err
-	}
-	root := strings.TrimSpace(procRoot)
-	if root == "" {
-		root = "/proc"
-	}
-	table, children, err := processTable(ctx, root)
+	root := normalizedProcRoot(procRoot)
+	table, children, complete, err := processTable(ctx, root, rootPID)
 	if err != nil {
 		return evidence, err
+	}
+	if !complete {
+		return evidence, nil
 	}
 	if afterSnapshot != nil {
 		afterSnapshot()
@@ -102,7 +115,7 @@ func observeZellijSessionEvidence(ctx context.Context, procRoot string, rootPID 
 		pid := queue[0]
 		queue = queue[1:]
 		if _, duplicate := seen[pid]; duplicate {
-			continue
+			return evidence, nil
 		}
 		seen[pid] = struct{}{}
 		identity, ok := table[pid]
@@ -143,8 +156,11 @@ func verifyKittyProcess(root string, pid int) (verified bool, complete bool) {
 	if executableErr == nil && isKittyBasename(filepath.Base(executable)) {
 		return true, true
 	}
-	payload, commErr := os.ReadFile(filepath.Join(processDir, "comm"))
+	payload, commErr := readBoundedFile(filepath.Join(processDir, "comm"))
 	if commErr == nil {
+		if !utf8.Valid(payload) {
+			return false, false
+		}
 		comm := strings.TrimSpace(string(payload))
 		if strings.ContainsAny(comm, "/\\\x00") {
 			return false, true
@@ -166,10 +182,10 @@ func isKittyBasename(name string) bool {
 	}
 }
 
-// DescendantArgvMatch walks a bounded-by-/proc process tree below rootPID and
-// reports whether any live descendant argv satisfies match. A process must
-// retain the parent and start-time identity observed with the tree before its
-// cmdline is trusted, preventing PID-reuse and parentage TOCTOU matches.
+// DescendantArgvMatch walks a bounded process tree below rootPID and reports
+// whether any live descendant argv satisfies match. A process must retain the
+// parent and start-time identity observed with the tree before its cmdline is
+// trusted, preventing PID-reuse and parentage TOCTOU matches.
 func DescendantArgvMatch(procRoot string, rootPID int, match func([]string) bool) (bool, error) {
 	return DescendantArgvMatchContext(context.Background(), procRoot, rootPID, match)
 }
@@ -182,15 +198,9 @@ func descendantArgvMatch(ctx context.Context, procRoot string, rootPID int, matc
 	if rootPID <= 0 || match == nil {
 		return false, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	root := strings.TrimSpace(procRoot)
-	if root == "" {
-		root = "/proc"
-	}
-	table, children, err := processTable(ctx, root)
-	if err != nil {
+	root := normalizedProcRoot(procRoot)
+	table, children, complete, err := processTable(ctx, root, rootPID)
+	if err != nil || !complete {
 		return false, err
 	}
 	if afterSnapshot != nil {
@@ -213,24 +223,27 @@ func descendantArgvMatch(ctx context.Context, procRoot string, rootPID int, matc
 		pid := queue[0]
 		queue = queue[1:]
 		if _, ok := seen[pid]; ok {
-			continue
+			return false, nil
 		}
 		seen[pid] = struct{}{}
 		identity, ok := table[pid]
 		if !ok {
-			continue
+			return false, nil
 		}
 		current, err := readProcessIdentity(root, pid)
 		if err != nil || current != identity {
-			continue
+			return false, nil
 		}
 		args, err := readProcArgs(root, pid)
-		if err == nil {
-			// Recheck after cmdline to close replacement between stat and argv.
-			after, statErr := readProcessIdentity(root, pid)
-			if statErr == nil && after == identity && match(args) {
-				return true, nil
-			}
+		if err != nil {
+			return false, nil
+		}
+		after, statErr := readProcessIdentity(root, pid)
+		if statErr != nil || after != identity {
+			return false, nil
+		}
+		if match(args) {
+			return true, nil
 		}
 		queue = append(queue, children[pid]...)
 	}
@@ -240,13 +253,12 @@ func descendantArgvMatch(ctx context.Context, procRoot string, rootPID int, matc
 // DescendantPIDs returns descendants with leaves before parents, suitable for
 // bounded process-tree cleanup.
 func DescendantPIDs(procRoot string, rootPID int) ([]int, error) {
-	root := strings.TrimSpace(procRoot)
-	if root == "" {
-		root = "/proc"
-	}
-	_, children, err := processTable(context.Background(), root)
+	_, children, complete, err := processTable(context.Background(), normalizedProcRoot(procRoot), rootPID)
 	if err != nil {
 		return nil, err
+	}
+	if !complete {
+		return nil, errors.New("process tree observation incomplete")
 	}
 	queue := append([]int(nil), children[rootPID]...)
 	seen := map[int]struct{}{}
@@ -255,7 +267,7 @@ func DescendantPIDs(procRoot string, rootPID int) ([]int, error) {
 		pid := queue[0]
 		queue = queue[1:]
 		if _, ok := seen[pid]; ok {
-			continue
+			return nil, errors.New("process tree contains duplicate or cyclic edge")
 		}
 		seen[pid] = struct{}{}
 		out = append(out, pid)
@@ -267,45 +279,119 @@ func DescendantPIDs(procRoot string, rootPID int) ([]int, error) {
 	return out, nil
 }
 
-func processTable(ctx context.Context, root string) (map[int]processIdentity, map[int][]int, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+func normalizedProcRoot(root string) string {
+	if root = strings.TrimSpace(root); root == "" {
+		return "/proc"
 	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read process table: %w", err)
+	return root
+}
+
+// processTable builds one bounded snapshot from explicit per-task child edges.
+// complete is false for volatile/malformed proc metadata or exceeded bounds.
+func processTable(ctx context.Context, root string, rootPID int) (map[int]processIdentity, map[int][]int, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, false, err
 	}
 	table := make(map[int]processIdentity)
 	children := make(map[int][]int)
-	for _, entry := range entries {
+	queue := []processNode{{pid: rootPID, depth: 0}}
+	seen := make(map[int]struct{})
+	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
-		if !entry.IsDir() {
-			continue
+		if len(seen) >= maxProcessNodes {
+			return table, children, false, nil
 		}
-		pid, err := strconv.Atoi(entry.Name())
+		current := queue[0]
+		queue = queue[1:]
+		if _, duplicate := seen[current.pid]; duplicate {
+			return table, children, false, nil
+		}
+		seen[current.pid] = struct{}{}
+		identity, err := readProcessIdentity(root, current.pid)
+		if err != nil || (current.parent > 0 && identity.parentPID != current.parent) {
+			return table, children, false, nil
+		}
+		table[current.pid] = identity
+		childPIDs, err := readProcessChildren(root, current.pid)
 		if err != nil {
+			return table, children, false, nil
+		}
+		children[current.pid] = childPIDs
+		if current.depth >= maxProcessDepth {
+			if len(childPIDs) > 0 {
+				return table, children, false, nil
+			}
 			continue
 		}
-		identity, err := readProcessIdentity(root, pid)
+		if len(seen)+len(queue)+len(childPIDs) > maxProcessNodes {
+			return table, children, false, nil
+		}
+		for _, child := range childPIDs {
+			queue = append(queue, processNode{pid: child, parent: current.pid, depth: current.depth + 1})
+		}
+	}
+	return table, children, true, nil
+}
+
+func readProcessChildren(root string, pid int) ([]int, error) {
+	taskRoot := filepath.Join(root, strconv.Itoa(pid), "task")
+	tasks, err := readDirBounded(taskRoot, maxProcessTasks)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[int]struct{})
+	for _, task := range tasks {
+		if !task.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(task.Name()); err != nil {
+			return nil, fmt.Errorf("invalid task ID %q", task.Name())
+		}
+		payload, err := readBoundedFile(filepath.Join(taskRoot, task.Name(), "children"))
 		if err != nil {
-			continue
+			return nil, err
 		}
-		table[pid] = identity
-		children[identity.parentPID] = append(children[identity.parentPID], pid)
+		taskSeen := make(map[int]struct{})
+		for _, field := range strings.Fields(string(payload)) {
+			child, err := strconv.Atoi(field)
+			if err != nil || child <= 0 {
+				return nil, fmt.Errorf("invalid child PID %q", field)
+			}
+			if _, duplicate := taskSeen[child]; duplicate {
+				return nil, fmt.Errorf("duplicate child PID %d", child)
+			}
+			taskSeen[child] = struct{}{}
+			seen[child] = struct{}{}
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+	children := make([]int, 0, len(seen))
+	for child := range seen {
+		children = append(children, child)
 	}
-	for ppid := range children {
-		sort.Ints(children[ppid])
+	sort.Ints(children)
+	return children, nil
+}
+
+func readDirBounded(path string, limit int) ([]os.DirEntry, error) {
+	dir, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	return table, children, nil
+	defer dir.Close()
+	entries, err := dir.ReadDir(limit + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(entries) > limit {
+		return nil, errors.New("task bound exceeded")
+	}
+	return entries, nil
 }
 
 func readProcessIdentity(root string, pid int) (processIdentity, error) {
-	payload, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "stat"))
+	payload, err := readBoundedFile(filepath.Join(root, strconv.Itoa(pid), "stat"))
 	if err != nil {
 		return processIdentity{}, err
 	}
@@ -322,8 +408,8 @@ func parseProcessIdentity(stat string) (processIdentity, error) {
 		return processIdentity{}, fmt.Errorf("unexpected stat fields")
 	}
 	ppid, err := strconv.Atoi(fields[1])
-	if err != nil {
-		return processIdentity{}, err
+	if err != nil || ppid < 0 {
+		return processIdentity{}, fmt.Errorf("invalid parent PID")
 	}
 	// Linux starttime is field 22, or index 19 when fields begin at state (3).
 	// Minimal fixture stat rows use the entire suffix as a stable identity.
@@ -335,9 +421,12 @@ func parseProcessIdentity(stat string) (processIdentity, error) {
 }
 
 func readProcArgs(root string, pid int) ([]string, error) {
-	payload, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "cmdline"))
+	payload, err := readBoundedFile(filepath.Join(root, strconv.Itoa(pid), "cmdline"))
 	if err != nil {
 		return nil, err
+	}
+	if !utf8.Valid(payload) {
+		return nil, errors.New("process metadata is not valid UTF-8")
 	}
 	if len(payload) == 0 {
 		return nil, nil
@@ -351,4 +440,20 @@ func readProcArgs(root string, pid int) ([]string, error) {
 		out[i] = string(part)
 	}
 	return out, nil
+}
+
+func readBoundedFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	payload, err := io.ReadAll(io.LimitReader(file, maxProcessMetadataBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > maxProcessMetadataBytes {
+		return nil, errors.New("process metadata exceeds bound")
+	}
+	return payload, nil
 }
