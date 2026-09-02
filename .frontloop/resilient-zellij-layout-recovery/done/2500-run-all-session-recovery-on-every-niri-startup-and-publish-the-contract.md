@@ -28,3 +28,27 @@ Wire the verified `resume --all` path into the Home Manager/Niri lifecycle so it
 ## Implementation Notes
 
 Depends on task 4. Primary integration is `modules/home-manager/terminal-redeemer.nix`, its evaluation tests, `cmd/redeem/main.go`, doctor/config surfaces, and recovery documentation. Touch the NixOS module only if a shared option or assertion actually requires it; the startup user service is Home Manager-owned.
+
+
+## Completion Summary
+
+- Reused the Home Manager recovery oneshot for canonical `redeem resume --all` and generated one Niri spawn-at-startup hook that imports the current compositor environment before restarting it.
+- Kept periodic capture ordered after startup recovery and added enabled, composed, repeated-start-path, and disabled Nix evaluation coverage.
+- Expanded `redeem doctor` with checkpoint integrity/schema, exact current/prior eligibility, exclusion/cache, identity-completeness, and unnamed-workspace diagnostics.
+- Published the same-boot/reboot recovery and safety contract while preserving mirror documentation; full Go tests, vet, Nix flake checks, and independent review passed.
+
+### Files Changed
+
+- README.md
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- docs/CONFIG.md
+- docs/OPERATIONS.md
+- docs/adr/0001-resume-zellij-terminals-in-niri.md
+- flake.nix
+- internal/capture/runner_test.go
+- internal/doctor/checks.go
+- internal/doctor/checks_test.go
+- internal/zellijlive/catalog.go
+- internal/zellijlive/types.go
+- modules/home-manager/terminal-redeemer.nix
