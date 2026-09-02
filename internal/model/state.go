@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"time"
 )
 
 type State struct {
@@ -42,9 +43,27 @@ type WorkspaceRef struct {
 // an observed zero/false value from a field absent in older Niri payloads.
 type Placement struct {
 	Column     *int      `json:"column,omitempty"`
+	Row        *int      `json:"row,omitempty"`
 	IsFloating *bool     `json:"is_floating,omitempty"`
 	TileSize   []float64 `json:"tile_size,omitempty"`
 	WindowSize []int     `json:"window_size,omitempty"`
+}
+
+// RecoveryInventory is the authoritative active-session projection captured
+// alongside compositor state. Sessions contains exactly one metadata entry for
+// every name in ActiveSessions.
+type RecoveryInventory struct {
+	ActiveSessions []string          `json:"active_sessions"`
+	Sessions       []RecoverySession `json:"sessions"`
+}
+
+type RecoverySession struct {
+	Name                string        `json:"name"`
+	CWD                 string        `json:"cwd,omitempty"`
+	WorkspaceRef        *WorkspaceRef `json:"workspace_ref,omitempty"`
+	Placement           *Placement    `json:"placement,omitempty"`
+	PlacementObservedAt *time.Time    `json:"placement_observed_at,omitempty"`
+	Visible             bool          `json:"visible"`
 }
 
 type Terminal struct {
@@ -81,6 +100,10 @@ func Normalize(s State) State {
 				column := *placement.Column
 				placement.Column = &column
 			}
+			if placement.Row != nil {
+				row := *placement.Row
+				placement.Row = &row
+			}
 			if placement.IsFloating != nil {
 				floating := *placement.IsFloating
 				placement.IsFloating = &floating
@@ -99,6 +122,45 @@ func Normalize(s State) State {
 		}
 	}
 
+	return out
+}
+
+func NormalizeRecovery(in RecoveryInventory) RecoveryInventory {
+	out := RecoveryInventory{
+		ActiveSessions: append([]string(nil), in.ActiveSessions...),
+		Sessions:       append([]RecoverySession(nil), in.Sessions...),
+	}
+	sort.Strings(out.ActiveSessions)
+	sort.SliceStable(out.Sessions, func(i, j int) bool { return out.Sessions[i].Name < out.Sessions[j].Name })
+	for i := range out.Sessions {
+		entry := &out.Sessions[i]
+		if entry.WorkspaceRef != nil {
+			ref := *entry.WorkspaceRef
+			entry.WorkspaceRef = &ref
+		}
+		if entry.Placement != nil {
+			placement := *entry.Placement
+			if placement.Column != nil {
+				value := *placement.Column
+				placement.Column = &value
+			}
+			if placement.Row != nil {
+				value := *placement.Row
+				placement.Row = &value
+			}
+			if placement.IsFloating != nil {
+				value := *placement.IsFloating
+				placement.IsFloating = &value
+			}
+			placement.TileSize = append([]float64(nil), placement.TileSize...)
+			placement.WindowSize = append([]int(nil), placement.WindowSize...)
+			entry.Placement = &placement
+		}
+		if entry.PlacementObservedAt != nil {
+			observed := entry.PlacementObservedAt.UTC()
+			entry.PlacementObservedAt = &observed
+		}
+	}
 	return out
 }
 

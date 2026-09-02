@@ -19,7 +19,11 @@ func testCheckpoint(t *testing.T, boot, host, profile string, observed time.Time
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Checkpoint{V: SchemaVersion, BootID: boot, Host: host, Profile: profile, ObservedAt: observed, State: state, StateHash: hash}
+	integrityHash, err := RecoveryIntegrityHash(state, model.RecoveryInventory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Checkpoint{V: SchemaVersion, BootID: boot, Host: host, Profile: profile, ObservedAt: observed, State: state, StateHash: hash, IntegrityHash: integrityHash}
 }
 
 func TestReadAcceptsLegacyTitleSensitiveHash(t *testing.T) {
@@ -54,6 +58,59 @@ func TestReadAcceptsLegacyTitleSensitiveHash(t *testing.T) {
 	}
 	if got.StateHash != legacyHash || got.State.Windows[0].Title != "legacy title" {
 		t.Fatalf("legacy checkpoint changed: %#v", got)
+	}
+}
+
+func TestReadAcceptsSchemaTwoCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := model.State{Windows: []model.Window{{Key: "w-1", AppID: "kitty"}}}
+	hash, err := state.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := Checkpoint{V: 2, BootID: "boot-v2", Host: "host", Profile: "default", ObservedAt: time.Now().UTC(), State: state, StateHash: hash}
+	payload, _ := json.Marshal(legacy)
+	if err := os.WriteFile(store.Path(legacy.BootID, legacy.Host, legacy.Profile), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(legacy.BootID, legacy.Host, legacy.Profile); err != nil {
+		t.Fatalf("read schema-2 checkpoint: %v", err)
+	}
+}
+
+func TestRecoveryIntegrityDetectsTampering(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC())
+	checkpoint.Recovery = model.RecoveryInventory{
+		ActiveSessions: []string{"alpha"},
+		Sessions:       []model.RecoverySession{{Name: "alpha", CWD: "/original", Visible: false}},
+	}
+	checkpoint.IntegrityHash, err = RecoveryIntegrityHash(checkpoint.State, checkpoint.Recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.Write(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = bytes.Replace(payload, []byte("/original"), []byte("/tampered"), 1)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read("boot-a", "host", "default"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tampered recovery payload accepted: %v", err)
 	}
 }
 

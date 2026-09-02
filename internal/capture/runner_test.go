@@ -10,7 +10,39 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/storelock"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
+
+type staticCataloger struct {
+	catalog zellijlive.Catalog
+	err     error
+}
+
+func (c staticCataloger) Observe(context.Context) (zellijlive.Catalog, error) {
+	return c.catalog, c.err
+}
+
+func activeCatalog(names ...string) zellijlive.Catalog {
+	catalog := zellijlive.Catalog{Sessions: make(map[string]zellijlive.Session), Names: append([]string(nil), names...)}
+	for _, name := range names {
+		catalog.Sessions[name] = zellijlive.Session{Name: name, Status: zellijlive.StatusActive}
+	}
+	return catalog
+}
+
+type sequenceCataloger struct {
+	catalogs []zellijlive.Catalog
+	calls    int
+}
+
+func (c *sequenceCataloger) Observe(context.Context) (zellijlive.Catalog, error) {
+	i := c.calls
+	c.calls++
+	if i >= len(c.catalogs) {
+		i = len(c.catalogs) - 1
+	}
+	return c.catalogs[i], nil
+}
 
 type sequenceCollector struct {
 	mu     sync.Mutex
@@ -67,7 +99,7 @@ func newTestRunner(t *testing.T, root, boot string, collector Collector, now fun
 		t.Fatal(err)
 	}
 	return NewRunner(Config{
-		Collector: collector, CheckpointStore: store, StateDir: root,
+		Collector: collector, CheckpointStore: store, Cataloger: staticCataloger{catalog: activeCatalog()}, StateDir: root,
 		BootIDSource: func() (string, error) { return boot, nil },
 		Host:         "host", Profile: "default", Now: now,
 	}), store
@@ -121,6 +153,114 @@ func TestCaptureFailureLeavesPublishedCheckpointUsable(t *testing.T) {
 	got, err := store.Read("boot-a", "host", "default")
 	if err != nil || got.State.Windows[0].Title != "valid" {
 		t.Fatalf("prior checkpoint unusable after interrupted capture: %#v err=%v", got, err)
+	}
+}
+
+func TestCaptureCarriesPlacementForActiveHeadlessSessionSameAndNewBoot(t *testing.T) {
+	root := t.TempDir()
+	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	column, row, floating := 3, 2, false
+	visible := model.State{Windows: []model.Window{{
+		Key: "w:kitty:1", AppID: "kitty", WorkspaceID: "runtime-1",
+		WorkspaceRef: &model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 1},
+		Placement:    &model.Placement{Column: &column, Row: &row, IsFloating: &floating, TileSize: []float64{800, 600}, WindowSize: []int{802, 602}},
+		Terminal:     &model.Terminal{CWD: "/work/project", SessionTag: "alpha"},
+	}}}
+	times := []time.Time{t0, t0.Add(time.Minute)}
+	runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{visible, {}}}, func() time.Time {
+		now := times[0]
+		times = times[1:]
+		return now
+	})
+	runner.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Read("boot-a", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStickySession(t, got, t0)
+	if len(got.State.Windows) != 0 {
+		t.Fatalf("empty Niri observation not retained: %#v", got.State)
+	}
+
+	newBoot, _ := newTestRunner(t, root, "boot-b", &sequenceCollector{states: []model.State{{}}}, func() time.Time { return t0.Add(2 * time.Minute) })
+	newBoot.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+	if _, err := newBoot.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	carried, err := store.Read("boot-b", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStickySession(t, carried, t0)
+}
+
+func assertStickySession(t *testing.T, checkpoint checkpoints.Checkpoint, placementTime time.Time) {
+	t.Helper()
+	if got := checkpoint.Recovery.ActiveSessions; len(got) != 1 || got[0] != "alpha" {
+		t.Fatalf("active allow-list=%v", got)
+	}
+	session := checkpoint.Recovery.Sessions[0]
+	if session.Visible || session.CWD != "/work/project" || session.WorkspaceRef == nil || session.WorkspaceRef.Name != "dev" {
+		t.Fatalf("sticky session metadata=%#v", session)
+	}
+	if session.Placement == nil || session.Placement.Column == nil || *session.Placement.Column != 3 || session.Placement.Row == nil || *session.Placement.Row != 2 || session.Placement.IsFloating == nil || *session.Placement.IsFloating {
+		t.Fatalf("sticky placement=%#v", session.Placement)
+	}
+	if session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(placementTime) {
+		t.Fatalf("placement time=%v want %v", session.PlacementObservedAt, placementTime)
+	}
+}
+
+func TestCaptureDropsSessionOnlyAfterAuthoritativeCatalogRemoval(t *testing.T) {
+	root := t.TempDir()
+	cataloger := &sequenceCataloger{catalogs: []zellijlive.Catalog{activeCatalog("alpha"), activeCatalog()}}
+	runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{}, {}}}, time.Now)
+	runner.cataloger = cataloger
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Read("boot-a", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Recovery.ActiveSessions) != 0 || len(got.Recovery.Sessions) != 0 {
+		t.Fatalf("removed active session persisted: %#v", got.Recovery)
+	}
+}
+
+func TestCatalogFailureOrAmbiguityLeavesPriorCheckpointUntouched(t *testing.T) {
+	for name, cataloger := range map[string]zellijlive.Cataloger{
+		"failure":   staticCataloger{err: errors.New("catalog failed")},
+		"duplicate": staticCataloger{catalog: zellijlive.Catalog{Names: []string{"alpha", "alpha"}, Sessions: activeCatalog("alpha").Sessions}},
+		"invalid": staticCataloger{catalog: zellijlive.Catalog{
+			Names: []string{"alpha"}, Sessions: map[string]zellijlive.Session{"alpha": {Name: "alpha", Status: zellijlive.StatusSocketInvalid}},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+			runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{capturedState("prior"), capturedState("replacement")}}, func() time.Time { return t0 })
+			if _, err := runner.CaptureOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			runner.cataloger = cataloger
+			if _, err := runner.CaptureOnce(context.Background()); err == nil {
+				t.Fatal("expected catalog rejection")
+			}
+			got, err := store.Read("boot-a", "host", "default")
+			if err != nil || got.State.Windows[0].Title != "prior" {
+				t.Fatalf("prior checkpoint changed: %#v err=%v", got, err)
+			}
+		})
 	}
 }
 

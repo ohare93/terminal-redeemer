@@ -99,6 +99,10 @@ func placementFromPayload(window windowPayload) *model.Placement {
 			column := window.Layout.PosInScrollingLayout[0]
 			placement.Column = &column
 		}
+		if len(window.Layout.PosInScrollingLayout) > 1 {
+			row := window.Layout.PosInScrollingLayout[1]
+			placement.Row = &row
+		}
 		placement.TileSize = append([]float64(nil), window.Layout.TileSize...)
 		placement.WindowSize = append([]int(nil), window.Layout.WindowSize...)
 	}

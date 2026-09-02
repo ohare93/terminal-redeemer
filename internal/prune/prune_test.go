@@ -19,7 +19,11 @@ func writeCheckpoint(t *testing.T, store *checkpoints.Store, boot string, at tim
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Write(checkpoints.Checkpoint{V: checkpoints.SchemaVersion, BootID: boot, Host: "host", Profile: "default", ObservedAt: at, State: state, StateHash: hash}); err != nil {
+	integrityHash, err := checkpoints.RecoveryIntegrityHash(state, model.RecoveryInventory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Write(checkpoints.Checkpoint{V: checkpoints.SchemaVersion, BootID: boot, Host: "host", Profile: "default", ObservedAt: at, State: state, StateHash: hash, IntegrityHash: integrityHash}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -23,20 +23,22 @@ var (
 	ErrInvalid  = errors.New("invalid rolling checkpoint")
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // Checkpoint is the latest complete state for one boot/host/profile identity.
 // EventOffset is decoded only so schema-1 rolling checkpoints remain readable;
-// schema-2 writes omit it because there is no event timeline.
+// schema-3 writes contain no event timeline.
 type Checkpoint struct {
-	V           int         `json:"v"`
-	BootID      string      `json:"boot_id"`
-	Host        string      `json:"host"`
-	Profile     string      `json:"profile"`
-	ObservedAt  time.Time   `json:"observed_at"`
-	State       model.State `json:"state"`
-	StateHash   string      `json:"state_hash"`
-	EventOffset int64       `json:"event_offset,omitempty"`
+	V             int                     `json:"v"`
+	BootID        string                  `json:"boot_id"`
+	Host          string                  `json:"host"`
+	Profile       string                  `json:"profile"`
+	ObservedAt    time.Time               `json:"observed_at"`
+	State         model.State             `json:"state"`
+	StateHash     string                  `json:"state_hash"`
+	Recovery      model.RecoveryInventory `json:"recovery,omitempty"`
+	IntegrityHash string                  `json:"integrity_hash,omitempty"`
+	EventOffset   int64                   `json:"event_offset,omitempty"`
 }
 
 func (c Checkpoint) Validate() error {
@@ -44,7 +46,7 @@ func (c Checkpoint) Validate() error {
 }
 
 func (c Checkpoint) validate(allowLegacySchema, allowLegacyTitleHash bool) error {
-	if c.V != SchemaVersion && !(allowLegacySchema && c.V == 1) {
+	if c.V != SchemaVersion && !(allowLegacySchema && (c.V == 1 || c.V == 2)) {
 		return fmt.Errorf("schema version is %d, want %d", c.V, SchemaVersion)
 	}
 	if strings.TrimSpace(c.BootID) == "" {
@@ -70,18 +72,73 @@ func (c Checkpoint) validate(allowLegacySchema, allowLegacyTitleHash bool) error
 		return fmt.Errorf("hash state: %w", err)
 	}
 	if hash != c.StateHash {
-		if allowLegacyTitleHash {
+		if allowLegacyTitleHash && c.V < SchemaVersion {
 			legacyHash, legacyErr := c.State.HashWithTitles()
 			if legacyErr != nil {
 				return fmt.Errorf("hash legacy state: %w", legacyErr)
 			}
-			if legacyHash == c.StateHash {
-				return nil
+			if legacyHash != c.StateHash {
+				return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
 			}
+		} else {
+			return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
 		}
-		return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
+	}
+	if c.V == SchemaVersion {
+		if err := validateRecovery(c.Recovery); err != nil {
+			return fmt.Errorf("recovery inventory: %w", err)
+		}
+		want, err := RecoveryIntegrityHash(c.State, c.Recovery)
+		if err != nil {
+			return fmt.Errorf("hash recovery payload: %w", err)
+		}
+		if c.IntegrityHash != want {
+			return fmt.Errorf("integrity_hash mismatch: got %q want %q", c.IntegrityHash, want)
+		}
 	}
 	return nil
+}
+
+func validateRecovery(recovery model.RecoveryInventory) error {
+	if len(recovery.ActiveSessions) != len(recovery.Sessions) {
+		return errors.New("active allow-list and session metadata differ in length")
+	}
+	active := make(map[string]bool, len(recovery.ActiveSessions))
+	for _, name := range recovery.ActiveSessions {
+		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || active[name] {
+			return fmt.Errorf("invalid or duplicate active session %q", name)
+		}
+		active[name] = true
+	}
+	seen := make(map[string]bool, len(recovery.Sessions))
+	for _, session := range recovery.Sessions {
+		if !active[session.Name] || seen[session.Name] {
+			return fmt.Errorf("metadata session %q is not unique in the active allow-list", session.Name)
+		}
+		seen[session.Name] = true
+		if session.PlacementObservedAt != nil && session.PlacementObservedAt.IsZero() {
+			return fmt.Errorf("session %q has an empty placement observation time", session.Name)
+		}
+	}
+	return nil
+}
+
+// RecoveryIntegrityHash binds normalized semantic compositor state and every
+// field in the normalized active recovery inventory.
+func RecoveryIntegrityHash(state model.State, recovery model.RecoveryInventory) (string, error) {
+	normalizedState := model.Normalize(state)
+	for i := range normalizedState.Windows {
+		normalizedState.Windows[i].Title = ""
+	}
+	payload, err := json.Marshal(struct {
+		State    model.State             `json:"state"`
+		Recovery model.RecoveryInventory `json:"recovery"`
+	}{State: normalizedState, Recovery: model.NormalizeRecovery(recovery)})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 type Issue struct {
@@ -90,6 +147,7 @@ type Issue struct {
 }
 
 type Store struct {
+	root     string
 	dir      string
 	syncFile func(*os.File) error
 	syncDir  func(string) error
@@ -105,6 +163,7 @@ func NewStore(root string) (*Store, error) {
 		return nil, fmt.Errorf("sync state dir: %w", err)
 	}
 	return &Store{
+		root:     root,
 		dir:      dir,
 		syncFile: func(file *os.File) error { return file.Sync() },
 		syncDir:  syncDirectory,
@@ -120,6 +179,22 @@ func pathName(bootID, host, profile string) string {
 
 func (s *Store) Path(bootID, host, profile string) string {
 	return filepath.Join(s.dir, pathName(bootID, host, profile))
+}
+
+// History returns valid checkpoints for a host/profile in oldest-first order.
+// Invalid files do not displace the newest valid recovery source.
+func (s *Store) History(host, profile string) ([]Checkpoint, error) {
+	all, _, err := List(s.root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Checkpoint, 0, len(all))
+	for _, checkpoint := range all {
+		if checkpoint.Host == host && checkpoint.Profile == profile {
+			out = append(out, checkpoint)
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) Read(bootID, host, profile string) (Checkpoint, error) {
@@ -147,6 +222,7 @@ func readPath(path string) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("%w: decode %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
 	checkpoint.State = model.Normalize(checkpoint.State)
+	checkpoint.Recovery = model.NormalizeRecovery(checkpoint.Recovery)
 	if err := checkpoint.validate(true, true); err != nil {
 		return Checkpoint{}, fmt.Errorf("%w: validate %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
@@ -159,6 +235,7 @@ func readPath(path string) (Checkpoint, error) {
 func (s *Store) Write(checkpoint Checkpoint) (path string, err error) {
 	checkpoint.ObservedAt = checkpoint.ObservedAt.UTC()
 	checkpoint.State = model.Normalize(checkpoint.State)
+	checkpoint.Recovery = model.NormalizeRecovery(checkpoint.Recovery)
 	if err := checkpoint.Validate(); err != nil {
 		return "", fmt.Errorf("validate rolling checkpoint: %w", err)
 	}

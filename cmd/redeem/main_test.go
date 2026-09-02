@@ -195,13 +195,17 @@ func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	integrityHash, err := checkpoints.RecoveryIntegrityHash(state, model.RecoveryInventory{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := checkpoints.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Write(checkpoints.Checkpoint{
 		V: checkpoints.SchemaVersion, BootID: "prior-boot", Host: "local", Profile: "default",
-		ObservedAt: now, State: state, StateHash: hash,
+		ObservedAt: now, State: state, StateHash: hash, IntegrityHash: integrityHash,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -365,10 +369,14 @@ func TestPruneRunCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	integrityHash, err := checkpoints.RecoveryIntegrityHash(state, model.RecoveryInventory{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for boot, ageDays := range map[string]int{"older": -60, "newest-prior": -40} {
 		if _, err := store.Write(checkpoints.Checkpoint{
 			V: checkpoints.SchemaVersion, BootID: boot, Host: "host-a", Profile: "default",
-			ObservedAt: time.Now().UTC().AddDate(0, 0, ageDays), State: state, StateHash: hash,
+			ObservedAt: time.Now().UTC().AddDate(0, 0, ageDays), State: state, StateHash: hash, IntegrityHash: integrityHash,
 		}); err != nil {
 			t.Fatal(err)
 		}

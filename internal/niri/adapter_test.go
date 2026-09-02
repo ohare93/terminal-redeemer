@@ -97,8 +97,8 @@ func TestParseSnapshotCapturesDurableWorkspaceAndOptionalPlacementFixture(t *tes
 	if ref := *named.WorkspaceRef; ref.Name != "work" || ref.Output != "DP-1" || ref.Index != 1 {
 		t.Fatalf("durable named workspace reference = %#v", ref)
 	}
-	if named.Placement == nil || named.Placement.Column == nil || *named.Placement.Column != 3 {
-		t.Fatalf("column placement missing: %#v", named.Placement)
+	if named.Placement == nil || named.Placement.Column == nil || *named.Placement.Column != 3 || named.Placement.Row == nil || *named.Placement.Row != 1 {
+		t.Fatalf("column/row placement missing: %#v", named.Placement)
 	}
 	if named.Placement.IsFloating == nil || *named.Placement.IsFloating {
 		t.Fatalf("observed false floating state missing: %#v", named.Placement)
