@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/bootid"
 	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
 	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 func TestMain(m *testing.M) {
@@ -243,6 +245,84 @@ func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("dry run attempted an unexpected Zellij command")
+	}
+}
+
+func TestResumeAllDryRunUsesExactCatalogStickyInventoryAndDetailedReasons(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC().Add(-time.Minute)
+	boot, err := bootid.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	column := 4
+	workspace := model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 2}
+	placement := model.Placement{Column: &column}
+	recovery := model.RecoveryInventory{
+		ActiveSessions: []string{"headless"},
+		Sessions:       []model.RecoverySession{{Name: "headless", CWD: "/tmp/project", WorkspaceRef: &workspace, Placement: &placement, PlacementObservedAt: &now}},
+	}
+	state := model.State{}
+	hash, err := state.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrityHash, err := checkpoints.RecoveryIntegrityHash(state, recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := checkpoints.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Write(checkpoints.Checkpoint{
+		V: checkpoints.SchemaVersion, BootID: boot, Host: "local", Profile: "default", ObservedAt: now,
+		State: state, StateHash: hash, Recovery: recovery, IntegrityHash: integrityHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := filepath.Join(t.TempDir(), "niri.json")
+	if err := os.WriteFile(fixture, []byte(`{"workspaces":[{"id":"current-dev","idx":5,"name":"dev","output":"DP-2"}],"windows":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("stateDir: "+root+"\nhost: local\nprofile: default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalObserve := observeResumeCatalog
+	observeResumeCatalog = func(context.Context, string) (zellijlive.Catalog, error) {
+		return zellijlive.Catalog{
+			Names: []string{"cache-only", "headless", "without-placement"},
+			Sessions: map[string]zellijlive.Session{
+				"headless":          {Name: "headless", Status: zellijlive.StatusActive},
+				"without-placement": {Name: "without-placement", Status: zellijlive.StatusActive},
+				"cache-only":        {Name: "cache-only", Status: zellijlive.StatusDeadResurrectable},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { observeResumeCatalog = originalObserve })
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"--config", configPath, "resume", "--all", "--dry-run", "--fixture", fixture}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("resume --all code=%d stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"source=current_boot_active_catalog",
+		`session="headless" status=ready candidate_source=current_boot_active_catalog zellij_status=active placement_source=current_boot_sticky`,
+		"placement_column=4",
+		`workspace_method=name workspace_id="current-dev"`,
+		`session="without-placement" status=degraded`,
+		`placement_source=none`,
+		`reason="sticky workspace or placement unavailable; launch on current workspace"`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), `session="cache-only"`) {
+		t.Fatalf("dead cache was selected on same boot: %s", out.String())
 	}
 }
 

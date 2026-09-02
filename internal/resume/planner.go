@@ -43,10 +43,11 @@ type SelectOptions struct {
 }
 
 type Selection struct {
-	Status     CandidateStatus
-	Checkpoint *checkpoints.Checkpoint
-	Age        time.Duration
-	Reason     string
+	Status          CandidateStatus
+	CandidateSource string
+	Checkpoint      *checkpoints.Checkpoint
+	Age             time.Duration
+	Reason          string
 }
 
 // Select chooses by capture time before inspecting terminal contents. This is
@@ -129,21 +130,30 @@ type WorkspaceTarget struct {
 }
 
 type Item struct {
-	WindowKey         string
-	AppID             string
-	Session           string
-	CWD               string
-	Status            Status
-	Reason            string
-	CapturedWorkspace model.WorkspaceRef
-	CapturedPlacement *model.Placement
-	Workspace         *WorkspaceTarget
-	LayoutStatus      LayoutStatus
-	LayoutReason      string
+	WindowKey           string
+	AppID               string
+	Session             string
+	CWD                 string
+	Status              Status
+	Reason              string
+	CandidateSource     string
+	ZellijStatus        string
+	PlacementSource     string
+	PlacementObservedAt *time.Time
+	PlacementAge        time.Duration
+	PlacementWarning    string
+	CurrentWindowKey    string
+	CurrentWindowID     int
+	CapturedWorkspace   model.WorkspaceRef
+	CapturedPlacement   *model.Placement
+	Workspace           *WorkspaceTarget
+	LayoutStatus        LayoutStatus
+	LayoutReason        string
 }
 
 type Plan struct {
 	CandidateStatus CandidateStatus
+	CandidateSource string
 	BootID          string
 	CapturedAt      time.Time
 	Age             time.Duration
@@ -168,6 +178,7 @@ type Summary struct {
 func (p *Planner) Build(selection Selection, current model.State, availableSessions []string) Plan {
 	plan := Plan{
 		CandidateStatus: selection.Status,
+		CandidateSource: selection.CandidateSource,
 		Age:             selection.Age,
 		Reason:          selection.Reason,
 	}
@@ -194,7 +205,7 @@ func (p *Planner) Build(selection Selection, current model.State, availableSessi
 	}
 
 	available := stringSet(availableSessions)
-	open := currentSessions(current)
+	open := currentSessionWindows(current)
 	seenCaptured := make(map[string]struct{})
 	for _, window := range capturedWindows {
 		item := newItem(window, selection.Checkpoint.State)
@@ -212,9 +223,11 @@ func (p *Planner) Build(selection Selection, current model.State, availableSessi
 			continue
 		}
 		seenCaptured[session] = struct{}{}
-		if _, ok := open[session]; ok {
+		if window, ok := open[session]; ok {
 			item.Status = StatusAlreadyOpen
 			item.Reason = "matching Zellij session is already open in a terminal window"
+			item.CurrentWindowKey = window.Key
+			item.CurrentWindowID, _ = runtimeWindowID(window.Key)
 			plan.Items = append(plan.Items, item)
 			continue
 		}
@@ -332,12 +345,24 @@ func terminalWindows(state model.State) []model.Window {
 
 func currentSessions(state model.State) map[string]struct{} {
 	out := make(map[string]struct{})
-	for _, window := range state.Windows {
+	for session := range currentSessionWindows(state) {
+		out[session] = struct{}{}
+	}
+	return out
+}
+
+func currentSessionWindows(state model.State) map[string]model.Window {
+	out := make(map[string]model.Window)
+	windows := append([]model.Window(nil), state.Windows...)
+	sort.SliceStable(windows, func(i, j int) bool { return windows[i].Key < windows[j].Key })
+	for _, window := range windows {
 		if !isTerminal(window.AppID) || window.Terminal == nil {
 			continue
 		}
 		if session := strings.TrimSpace(window.Terminal.SessionTag); session != "" {
-			out[session] = struct{}{}
+			if _, exists := out[session]; !exists {
+				out[session] = window
+			}
 		}
 	}
 	return out

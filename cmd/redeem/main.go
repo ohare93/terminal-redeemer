@@ -27,6 +27,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/prune"
 	"github.com/jmo/terminal-redeemer/internal/resume"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 func main() {
@@ -924,11 +925,16 @@ func (s rawSnapshotter) Snapshot(context.Context) ([]byte, error) {
 	return append([]byte(nil), s...), nil
 }
 
+var observeResumeCatalog = func(ctx context.Context, bootID string) (zellijlive.Catalog, error) {
+	return (zellijlive.CommandCataloger{BootID: bootID}).Observe(ctx)
+}
+
 func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
-	dryRun := fs.Bool("dry-run", false, "plan prior-boot terminal reconciliation without mutating")
+	dryRun := fs.Bool("dry-run", false, "plan terminal reconciliation without mutating")
+	all := fs.Bool("all", false, "recover all current ACTIVE sessions, or the newest prior-active allow-list after reboot")
 	maxAge := fs.Duration("max-age", resolvedConfig.Resume.MaxCheckpointAge, "maximum checkpoint age")
 	unresolved := fs.String("unresolved-workspace", resolvedConfig.Resume.UnresolvedWorkspace, "unresolved workspace policy: current, skip, or fail")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "current Niri JSON fixture path")
@@ -982,18 +988,25 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		writef(stderr, "resume boot ID failed: %v\n", err)
 		return 1
 	}
-	selection := resume.Select(resumeCheckpoints, resume.SelectOptions{
+	now := time.Now().UTC()
+	selectOptions := resume.SelectOptions{
 		CurrentBootID: currentBootID,
 		Host:          strings.TrimSpace(resolvedConfig.Host),
 		Profile:       strings.TrimSpace(resolvedConfig.Profile),
-		Now:           time.Now().UTC(),
+		Now:           now,
 		MaxAge:        *maxAge,
-	})
+	}
+	selection := resume.Select(resumeCheckpoints, selectOptions)
+	if *all {
+		selection = resume.SelectAll(resumeCheckpoints, selectOptions)
+	}
 
 	planner := resume.NewPlanner(resume.PlannerConfig{UnresolvedWorkspace: policy})
 	var current model.State
 	var available []string
-	if selection.Status == resume.CandidateReady {
+	var catalog zellijlive.Catalog
+	needsLiveInventory := selection.Status == resume.CandidateReady || (*all && selection.Checkpoint != nil && selection.Status == resume.CandidateStale)
+	if needsLiveInventory {
 		enricher := procmeta.NewEnricher(procmeta.ProcReader{}, procmeta.Config{
 			Whitelist:         resolvedConfig.ProcessMetadata.Whitelist,
 			WhitelistExtra:    resolvedConfig.ProcessMetadata.WhitelistExtra,
@@ -1004,15 +1017,28 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 			writef(stderr, "resume current Niri state failed: %v\n", err)
 			return 1
 		}
-		available, err = procmeta.NewZellijSessionVerifier(nil).List()
-		if err != nil {
-			writef(stderr, "resume Zellij session discovery failed: %v\n", err)
-			return 1
+		if *all {
+			catalogCtx, cancel := context.WithTimeout(context.Background(), *timeout)
+			catalog, err = observeResumeCatalog(catalogCtx, currentBootID)
+			cancel()
+			if err != nil {
+				writef(stderr, "resume exact Zellij catalog failed: %v\n", err)
+				return 1
+			}
+		} else {
+			available, err = procmeta.NewZellijSessionVerifier(nil).List()
+			if err != nil {
+				writef(stderr, "resume Zellij session discovery failed: %v\n", err)
+				return 1
+			}
 		}
 	}
 
 	plan := planner.Build(selection, current, available)
-	if !*dryRun && selection.Status == resume.CandidateReady {
+	if *all {
+		plan = planner.BuildAll(selection, current, catalog, resume.AllOptions{Now: now, MaxAge: *maxAge})
+	}
+	if !*dryRun && needsLiveInventory {
 		actions := resume.NiriActions{Runner: resume.ExecActionRunner{Command: "niri"}}
 		executor := resume.Executor{
 			Config:   resume.ExecutorConfig{LauncherCommand: *launcher, Timeout: *timeout, PollInterval: *pollInterval},
@@ -1033,9 +1059,17 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 
 func printResumePlan(stdout io.Writer, plan resume.Plan) {
 	if plan.CandidateStatus == resume.CandidateNotFound {
-		writef(stdout, "resume_candidate status=%s reason=%q\n", plan.CandidateStatus, plan.Reason)
+		writef(stdout, "resume_candidate status=%s", plan.CandidateStatus)
+		if plan.CandidateSource != "" {
+			writef(stdout, " source=%s", plan.CandidateSource)
+		}
+		writef(stdout, " reason=%q\n", plan.Reason)
 	} else {
-		writef(stdout, "resume_candidate status=%s boot_id=%q captured_at=%s age=%s", plan.CandidateStatus, plan.BootID, plan.CapturedAt.UTC().Format(time.RFC3339Nano), plan.Age.Round(time.Second))
+		writef(stdout, "resume_candidate status=%s", plan.CandidateStatus)
+		if plan.CandidateSource != "" {
+			writef(stdout, " source=%s", plan.CandidateSource)
+		}
+		writef(stdout, " boot_id=%q captured_at=%s age=%s", plan.BootID, plan.CapturedAt.UTC().Format(time.RFC3339Nano), plan.Age.Round(time.Second))
 		if plan.Reason != "" {
 			writef(stdout, " reason=%q", plan.Reason)
 		}
@@ -1043,6 +1077,29 @@ func printResumePlan(stdout io.Writer, plan resume.Plan) {
 	}
 	for _, item := range plan.Items {
 		writef(stdout, "resume_item window_key=%q session=%q status=%s", item.WindowKey, item.Session, item.Status)
+		if item.CandidateSource != "" {
+			writef(stdout, " candidate_source=%s", item.CandidateSource)
+		}
+		if item.ZellijStatus != "" {
+			writef(stdout, " zellij_status=%s", item.ZellijStatus)
+		}
+		if item.PlacementSource != "" {
+			writef(stdout, " placement_source=%s", item.PlacementSource)
+		}
+		if item.PlacementObservedAt != nil {
+			writef(stdout, " placement_observed_at=%s placement_age=%s", item.PlacementObservedAt.UTC().Format(time.RFC3339Nano), item.PlacementAge.Round(time.Second))
+		}
+		if item.CapturedPlacement != nil {
+			if item.CapturedPlacement.Column != nil {
+				writef(stdout, " placement_column=%d", *item.CapturedPlacement.Column)
+			}
+			if item.CapturedPlacement.Row != nil {
+				writef(stdout, " placement_row=%d", *item.CapturedPlacement.Row)
+			}
+		}
+		if item.CurrentWindowKey != "" {
+			writef(stdout, " current_window_key=%q current_window_id=%d", item.CurrentWindowKey, item.CurrentWindowID)
+		}
 		if item.Workspace != nil {
 			writef(stdout, " workspace_method=%s workspace_id=%q workspace_name=%q workspace_output=%q workspace_index=%d", item.Workspace.Method, item.Workspace.ID, item.Workspace.Name, item.Workspace.Output, item.Workspace.Index)
 		}
@@ -1051,6 +1108,9 @@ func printResumePlan(stdout io.Writer, plan resume.Plan) {
 			if item.LayoutReason != "" {
 				writef(stdout, " layout_reason=%q", item.LayoutReason)
 			}
+		}
+		if item.PlacementWarning != "" {
+			writef(stdout, " placement_warning=%q", item.PlacementWarning)
 		}
 		if item.Reason != "" {
 			writef(stdout, " reason=%q", item.Reason)
