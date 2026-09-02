@@ -30,7 +30,15 @@ redeem capture once
 
 Capture holds the writer lock while performing one complete Niri windows/workspaces query and publishing the current boot/host/profile checkpoint. Publication writes a mode-0600 temporary file, fsyncs it, atomically renames it, and fsyncs `checkpoints/`. A failed query or failure before rename leaves the previous checkpoint usable.
 
-**Upgrade note:** Before the first capture after this upgrade, stop the capture and resume services, clear old checkpoint JSON files from the configured `checkpoints/` directory separately, then restart the services; old checkpoint formats are not migrated.
+**Upgrade note:** Before the first capture after this upgrade, stop both capture units (and the resume unit when configured), remove only checkpoint JSON from the configured state directory, then start resume before enabling the capture timer. Replace `$HOME/.terminal-redeemer` below if `stateDir` is customized. Checkpoint formats are not migrated.
+
+```bash
+systemctl --user stop terminal-redeemer-capture.timer terminal-redeemer-capture.service
+systemctl --user stop terminal-redeemer-resume.service  # when resume.onStartup = true
+find "$HOME/.terminal-redeemer/checkpoints" -maxdepth 1 -type f -name '*.json' -delete
+systemctl --user start terminal-redeemer-resume.service # when resume.onStartup = true
+systemctl --user enable --now terminal-redeemer-capture.timer
+```
 
 ```bash
 redeem resume --all --dry-run

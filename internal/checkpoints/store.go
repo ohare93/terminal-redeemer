@@ -229,6 +229,10 @@ func (s *Store) Write(checkpoint Checkpoint) (path string, err error) {
 	payload = append(payload, '\n')
 
 	path = s.Path(checkpoint.BootID, checkpoint.Host, checkpoint.Profile)
+	if _, readErr := s.Read(checkpoint.BootID, checkpoint.Host, checkpoint.Profile); readErr != nil && !errors.Is(readErr, ErrNotFound) {
+		return "", fmt.Errorf("refuse to replace invalid rolling checkpoint: %w", readErr)
+	}
+
 	tmp, err := os.CreateTemp(s.dir, ".checkpoint-*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("create rolling checkpoint temp file: %w", err)

@@ -25,11 +25,11 @@ func TestSelectLatestPriorBootWithoutFallingBackFromEmpty(t *testing.T) {
 	}
 }
 
-func TestSelectExcludesLegacyAndWrongPartition(t *testing.T) {
+func TestSelectExcludesWrongHostAndProfile(t *testing.T) {
 	now := time.Now().UTC()
 	checkpoints := []checkpoints.Checkpoint{
-		{ObservedAt: now.Add(-time.Minute), Host: "local", Profile: "default", State: stateWithTerminal("legacy", "legacy", model.WorkspaceRef{Index: 1})},
-		{ObservedAt: now.Add(-2 * time.Minute), Host: "other", Profile: "default", BootID: "other-host", State: stateWithTerminal("other", "other", model.WorkspaceRef{Index: 1})},
+		{ObservedAt: now.Add(-time.Minute), Host: "local", Profile: "other", BootID: "wrong-profile", State: stateWithTerminal("profile", "profile", model.WorkspaceRef{Index: 1})},
+		{ObservedAt: now.Add(-2 * time.Minute), Host: "other", Profile: "default", BootID: "wrong-host", State: stateWithTerminal("host", "host", model.WorkspaceRef{Index: 1})},
 	}
 	got := Select(checkpoints, SelectOptions{CurrentBootID: "current", Host: "local", Profile: "default", Now: now, MaxAge: time.Hour})
 	if got.Status != CandidateNotFound || got.Checkpoint != nil {

@@ -26,19 +26,19 @@ func testCheckpoint(t *testing.T, boot, host, profile string, observed time.Time
 	return Checkpoint{BootID: boot, Host: host, Profile: profile, ObservedAt: observed, State: state, StateHash: hash, IntegrityHash: integrityHash}
 }
 
-func TestReadRejectsVersionedLegacyPayload(t *testing.T) {
+func TestReadRejectsVersionedPayload(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := store.Path("boot-old", "host", "default")
-	payload := []byte(`{"v":1,"boot_id":"boot-old","host":"host","profile":"default","observed_at":"2026-07-18T10:00:00Z","state":{},"state_hash":"legacy","event_offset":10}`)
+	payload := []byte(`{"v":1,"boot_id":"boot-old","host":"host","profile":"default","observed_at":"2026-07-18T10:00:00Z","state":{},"state_hash":"old","event_offset":10}`)
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Read("boot-old", "host", "default"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("versioned legacy checkpoint accepted: %v", err)
+		t.Fatalf("versioned checkpoint accepted: %v", err)
 	}
 }
 
@@ -127,6 +127,60 @@ func TestStoreRoundTripAndIdentityPaths(t *testing.T) {
 	if !got.ObservedAt.Equal(now) || got.StateHash != first.StateHash {
 		t.Fatalf("round trip mismatch: %#v", got)
 	}
+}
+
+func TestWritePreservesInvalidTargetAndOverwritesValidTarget(t *testing.T) {
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	invalidPayloads := map[string][]byte{
+		"versioned JSON": []byte(`{"v":1,"boot_id":"boot-a","host":"host","profile":"default","observed_at":"2026-07-18T10:00:00Z","state":{},"state_hash":"old","event_offset":10}`),
+		"corrupt JSON":   []byte(`{"boot_id":`),
+	}
+	for name, original := range invalidPayloads {
+		t.Run(name, func(t *testing.T) {
+			store, err := NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := store.Path("boot-a", "host", "default")
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := store.Write(testCheckpoint(t, "boot-a", "host", "default", now)); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Write() error = %v, want ErrInvalid", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, original) {
+				t.Fatalf("invalid target changed:\n got %q\nwant %q", got, original)
+			}
+		})
+	}
+
+	t.Run("valid checkpoint", func(t *testing.T) {
+		store, err := NewStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		original := testCheckpoint(t, "boot-a", "host", "default", now)
+		if _, err := store.Write(original); err != nil {
+			t.Fatal(err)
+		}
+		newer := original
+		newer.ObservedAt = now.Add(time.Minute)
+		if _, err := store.Write(newer); err != nil {
+			t.Fatalf("overwrite valid checkpoint: %v", err)
+		}
+		got, err := store.Read("boot-a", "host", "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.ObservedAt.Equal(newer.ObservedAt) {
+			t.Fatalf("observed_at = %s, want %s", got.ObservedAt, newer.ObservedAt)
+		}
+	})
 }
 
 func TestWriteUsesFileSyncRenameDirectorySyncOrdering(t *testing.T) {
