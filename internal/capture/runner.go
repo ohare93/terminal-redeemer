@@ -232,7 +232,7 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 			// Workspace, layout, stack occupancy, and timestamp are one observed
 			// placement fact. A partial observation must not mix new components
 			// with occupancy provenance retained from an older capture.
-			if window.WorkspaceRef != nil && window.Placement != nil {
+			if completeRecoveryPlacement(window) {
 				session.WorkspaceRef = window.WorkspaceRef
 				session.Placement = window.Placement
 				session.CapturedColumnOccupied = recoveryColumnOccupied(state, window)
@@ -248,6 +248,14 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 		sessions = append(sessions, session)
 	}
 	return model.NormalizeRecovery(model.RecoveryInventory{ActiveSessions: active, Sessions: sessions})
+}
+
+func completeRecoveryPlacement(window model.Window) bool {
+	if window.WorkspaceRef == nil || window.Placement == nil {
+		return false
+	}
+	placement := window.Placement
+	return placement.IsFloating != nil && *placement.IsFloating || placement.Column != nil && placement.Row != nil
 }
 
 // recoveryColumnOccupied is evaluated only for an exactly associated visible

@@ -254,8 +254,8 @@ func TestCaptureCarriesObservedColumnOccupancySameAndNewBoot(t *testing.T) {
 func TestCaptureTitleFallbackCannotOverwriteStickyPlacement(t *testing.T) {
 	root := t.TempDir()
 	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	column, replacementColumn := 3, 9
-	initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column})
+	column, row, replacementColumn := 3, 0, 9
+	initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column, Row: &row})
 	titleFallback := recoveryWindow("alpha", false, &model.WorkspaceRef{Name: "unrelated", Index: 8}, &model.Placement{Column: &replacementColumn})
 	times := []time.Time{t0, t0.Add(time.Minute)}
 	runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{initial}}, {Windows: []model.Window{titleFallback}}}}, func() time.Time {
@@ -295,6 +295,27 @@ func TestCapturePartialPlacementRetainsPriorAtomicObservation(t *testing.T) {
 			second: recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, nil),
 		},
 		{
+			name: "workspace and column only",
+			second: func() model.Window {
+				column := 7
+				return recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, &model.Placement{Column: &column})
+			}(),
+		},
+		{
+			name: "workspace and row only",
+			second: func() model.Window {
+				row := 4
+				return recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, &model.Placement{Row: &row})
+			}(),
+		},
+		{
+			name: "workspace and explicitly non-floating without layout",
+			second: func() model.Window {
+				floating := false
+				return recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, &model.Placement{IsFloating: &floating})
+			}(),
+		},
+		{
 			name: "layout only",
 			second: func() model.Window {
 				column := 7
@@ -330,6 +351,85 @@ func TestCapturePartialPlacementRetainsPriorAtomicObservation(t *testing.T) {
 			}
 			if session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0) {
 				t.Fatalf("partial observation refreshed aggregate timestamp: %v", session.PlacementObservedAt)
+			}
+		})
+	}
+}
+
+func TestCapturePartialPlacementForNewSessionRemainsUntrusted(t *testing.T) {
+	column, row, nonFloating := 7, 4, false
+	workspace := &model.WorkspaceRef{Name: "dev", Index: 1}
+	for _, test := range []struct {
+		name      string
+		placement *model.Placement
+	}{
+		{name: "column only", placement: &model.Placement{Column: &column}},
+		{name: "row only", placement: &model.Placement{Row: &row}},
+		{name: "non-floating without layout", placement: &model.Placement{IsFloating: &nonFloating}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner, store := newTestRunner(t, t.TempDir(), "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{
+				recoveryWindow("alpha", true, workspace, test.placement),
+			}}}}, time.Now)
+			runner.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+			if _, err := runner.CaptureOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Read("boot-a", "host", "default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := got.Recovery.Sessions[0]
+			if !session.Visible || session.WorkspaceRef != nil || session.Placement != nil || session.PlacementObservedAt != nil || session.CapturedColumnOccupied {
+				t.Fatalf("partial first observation persisted unsafe placement: %#v", session)
+			}
+		})
+	}
+}
+
+func TestCaptureCompletePlacementRefreshesAtomicObservation(t *testing.T) {
+	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	floating, nonFloating := true, false
+	column, row := 8, 2
+	for _, test := range []struct {
+		name      string
+		placement *model.Placement
+	}{
+		{name: "tiled", placement: &model.Placement{Column: &column, Row: &row, IsFloating: &nonFloating}},
+		{name: "floating", placement: &model.Placement{IsFloating: &floating, WindowSize: []int{900, 700}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			priorColumn, priorRow, otherRow := 3, 0, 1
+			initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &priorColumn, Row: &priorRow})
+			other := model.Window{Key: "w:browser:2", AppID: "firefox", WorkspaceRef: &model.WorkspaceRef{Name: "dev", Index: 1}, Placement: &model.Placement{Column: &priorColumn, Row: &otherRow}}
+			replacement := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, test.placement)
+			times := []time.Time{t0, t0.Add(time.Minute)}
+			runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{initial, other}}, {Windows: []model.Window{replacement}}}}, func() time.Time {
+				now := times[0]
+				times = times[1:]
+				return now
+			})
+			runner.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+			if _, err := runner.CaptureOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.CaptureOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.Read("boot-a", "host", "default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := got.Recovery.Sessions[0]
+			if session.WorkspaceRef == nil || session.WorkspaceRef.Name != "review" || session.Placement == nil || session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0.Add(time.Minute)) || session.CapturedColumnOccupied {
+				t.Fatalf("complete placement did not atomically refresh: %#v", session)
+			}
+			if test.name == "tiled" && (session.Placement.Column == nil || *session.Placement.Column != column || session.Placement.Row == nil || *session.Placement.Row != row) {
+				t.Fatalf("tiled placement not refreshed: %#v", session.Placement)
+			}
+			if test.name == "floating" && (session.Placement.IsFloating == nil || !*session.Placement.IsFloating || len(session.Placement.WindowSize) != 2) {
+				t.Fatalf("floating placement not refreshed: %#v", session.Placement)
 			}
 		})
 	}
