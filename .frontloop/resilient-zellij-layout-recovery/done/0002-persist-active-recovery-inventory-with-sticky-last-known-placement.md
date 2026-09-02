@@ -30,3 +30,26 @@ Evolve rolling boot checkpoints so each recovery point distinguishes the current
 ## Implementation Notes
 
 Depends on task 1. The new work belongs in checkpoint/model/capture persistence and sticky merge logic. Reuse or extract the active-catalog projection from `internal/mirror/snapshot.go`; do not build a second Zellij command workflow. Preserve current mirror pin/apply schemas and behavior. Add the recovery ADR only for checkpoint/recovery semantics.
+
+
+## Completion Summary
+
+- Added checkpoint schema v3 with authoritative active-session inventory and integrity-protected per-session recovery metadata.
+- Preserved last verified workspace, column, row, sizes, floating state, CWD, and placement time for active headless sessions across same-boot and new-boot captures.
+- Restricted placement refresh to exact unambiguous process evidence and safely merged partial workspace/layout observations.
+- Kept v1/v2 reads, rolling checkpoint durability, prune behavior, and fail-closed catalog publication; focused/full tests and independent review passed.
+
+### Files Changed
+
+- internal/model/state.go
+- internal/niri/adapter.go
+- internal/niri/adapter_test.go
+- internal/procmeta/enricher.go
+- internal/procmeta/enricher_test.go
+- internal/capture/runner.go
+- internal/capture/runner_test.go
+- internal/checkpoints/store.go
+- internal/checkpoints/store_test.go
+- internal/prune/prune_test.go
+- cmd/redeem/main_test.go
+- docs/adr/0003-sticky-active-recovery-inventory.md
