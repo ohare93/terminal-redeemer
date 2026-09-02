@@ -202,6 +202,7 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 				current.WorkspaceRef = prior.WorkspaceRef
 				current.Placement = prior.Placement
 				current.PlacementObservedAt = prior.PlacementObservedAt
+				current.CapturedColumnOccupied = prior.CapturedColumnOccupied
 			}
 			byName[prior.Name] = current
 		}
@@ -228,16 +229,13 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 			if cwd := strings.TrimSpace(window.Terminal.CWD); cwd != "" {
 				session.CWD = cwd
 			}
-			if window.WorkspaceRef != nil {
-				session.WorkspaceRef = window.WorkspaceRef
-			}
-			if window.Placement != nil {
-				session.Placement = window.Placement
-			}
-			// One timestamp describes the aggregate workspace and layout. Only a
-			// complete observation can defensibly refresh it; partial evidence is
-			// still merged without making an older component appear newly observed.
+			// Workspace, layout, stack occupancy, and timestamp are one observed
+			// placement fact. A partial observation must not mix new components
+			// with occupancy provenance retained from an older capture.
 			if window.WorkspaceRef != nil && window.Placement != nil {
+				session.WorkspaceRef = window.WorkspaceRef
+				session.Placement = window.Placement
+				session.CapturedColumnOccupied = recoveryColumnOccupied(state, window)
 				timestamp := observedAt
 				session.PlacementObservedAt = &timestamp
 			}
@@ -250,6 +248,60 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 		sessions = append(sessions, session)
 	}
 	return model.NormalizeRecovery(model.RecoveryInventory{ActiveSessions: active, Sessions: sessions})
+}
+
+// recoveryColumnOccupied is evaluated only for an exactly associated visible
+// target from a successful full-state collection. Missing layout for another
+// window in the same workspace is treated conservatively as possible stacking.
+func recoveryColumnOccupied(state model.State, target model.Window) bool {
+	if target.Placement == nil || target.Placement.Column == nil || target.Placement.Row == nil || *target.Placement.Row != 0 {
+		return false
+	}
+	for _, other := range state.Windows {
+		if other.Key == target.Key || !sameCapturedWorkspace(state.Workspaces, target, other) {
+			continue
+		}
+		if other.Placement == nil || other.Placement.Column == nil {
+			return true
+		}
+		if *other.Placement.Column == *target.Placement.Column {
+			return true
+		}
+	}
+	return false
+}
+
+func sameCapturedWorkspace(workspaces []model.Workspace, left, right model.Window) bool {
+	if left.WorkspaceID != "" && right.WorkspaceID != "" {
+		return left.WorkspaceID == right.WorkspaceID
+	}
+	leftRef, leftOK := recoveryWorkspaceRef(left, workspaces)
+	rightRef, rightOK := recoveryWorkspaceRef(right, workspaces)
+	if !leftOK || !rightOK {
+		return false
+	}
+	if leftRef.Name != "" && rightRef.Name != "" {
+		return leftRef.Name == rightRef.Name
+	}
+	if leftRef.Output != "" && rightRef.Output != "" && leftRef.Index > 0 && rightRef.Index > 0 {
+		return leftRef.Output == rightRef.Output && leftRef.Index == rightRef.Index
+	}
+	return leftRef.Index > 0 && leftRef.Index == rightRef.Index
+}
+
+func recoveryWorkspaceRef(window model.Window, workspaces []model.Workspace) (model.WorkspaceRef, bool) {
+	if window.WorkspaceRef != nil {
+		ref := *window.WorkspaceRef
+		if ref.Name != "" || ref.Output != "" || ref.Index > 0 {
+			return ref, true
+		}
+	}
+	for _, workspace := range workspaces {
+		if window.WorkspaceID != "" && workspace.ID == window.WorkspaceID {
+			return model.WorkspaceRef{Name: workspace.Name, Output: workspace.Output, Index: workspace.Index}, true
+		}
+	}
+	return model.WorkspaceRef{}, false
 }
 
 func recoverySessions(checkpoint checkpoints.Checkpoint) []model.RecoverySession {

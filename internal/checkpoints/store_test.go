@@ -89,9 +89,15 @@ func TestRecoveryIntegrityDetectsTampering(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpoint := testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC())
+	column, row := 2, 0
+	observed := checkpoint.ObservedAt
 	checkpoint.Recovery = model.RecoveryInventory{
 		ActiveSessions: []string{"alpha"},
-		Sessions:       []model.RecoverySession{{Name: "alpha", CWD: "/original", Visible: false}},
+		Sessions: []model.RecoverySession{{
+			Name: "alpha", WorkspaceRef: &model.WorkspaceRef{Name: "dev"},
+			Placement: &model.Placement{Column: &column, Row: &row}, PlacementObservedAt: &observed,
+			CapturedColumnOccupied: true,
+		}},
 	}
 	checkpoint.IntegrityHash, err = RecoveryIntegrityHash(checkpoint.State, checkpoint.Recovery)
 	if err != nil {
@@ -105,7 +111,7 @@ func TestRecoveryIntegrityDetectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload = bytes.Replace(payload, []byte("/original"), []byte("/tampered"), 1)
+	payload = bytes.Replace(payload, []byte(`"captured_column_occupied":true`), []byte(`"captured_column_occupied":false`), 1)
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}

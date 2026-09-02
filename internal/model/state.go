@@ -59,12 +59,13 @@ type RecoveryInventory struct {
 }
 
 type RecoverySession struct {
-	Name                string        `json:"name"`
-	CWD                 string        `json:"cwd,omitempty"`
-	WorkspaceRef        *WorkspaceRef `json:"workspace_ref,omitempty"`
-	Placement           *Placement    `json:"placement,omitempty"`
-	PlacementObservedAt *time.Time    `json:"placement_observed_at,omitempty"`
-	Visible             bool          `json:"visible"`
+	Name                   string        `json:"name"`
+	CWD                    string        `json:"cwd,omitempty"`
+	WorkspaceRef           *WorkspaceRef `json:"workspace_ref,omitempty"`
+	Placement              *Placement    `json:"placement,omitempty"`
+	PlacementObservedAt    *time.Time    `json:"placement_observed_at,omitempty"`
+	CapturedColumnOccupied bool          `json:"captured_column_occupied,omitempty"`
+	Visible                bool          `json:"visible"`
 }
 
 type Terminal struct {

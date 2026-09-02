@@ -131,7 +131,7 @@ func (p *Planner) BuildAll(selection Selection, current model.State, catalog zel
 			item.PlacementSource = PlacementSourcePriorRecovery
 		}
 		copyRecoveryPlacement(&item, recovery, options)
-		item.CapturedColumnOccupied = capturedColumnOccupied(checkpoint.State, item.CapturedWorkspace, item.CapturedPlacement, "", name)
+		item.CapturedColumnOccupied = recovery.CapturedColumnOccupied || capturedColumnOccupied(checkpoint.State, item.CapturedWorkspace, item.CapturedPlacement, "", name)
 
 		live := catalog.Exact(name)
 		switch live.Status {

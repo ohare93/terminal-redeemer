@@ -200,6 +200,57 @@ func TestCaptureCarriesPlacementForActiveHeadlessSessionSameAndNewBoot(t *testin
 	assertStickySession(t, carried, t0)
 }
 
+func TestCaptureCarriesObservedColumnOccupancySameAndNewBoot(t *testing.T) {
+	root := t.TempDir()
+	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	column, targetRow, otherRow := 3, 0, 1
+	workspace := model.WorkspaceRef{Name: "dev", Index: 1}
+	visible := model.State{Windows: []model.Window{
+		{
+			Key: "w:kitty:1", AppID: "kitty", WorkspaceID: "runtime-1", WorkspaceRef: &workspace,
+			Placement: &model.Placement{Column: &column, Row: &targetRow},
+			Terminal:  &model.Terminal{SessionTag: "alpha", SessionTagExact: true},
+		},
+		{
+			Key: "w:browser:2", AppID: "firefox", WorkspaceID: "runtime-1", WorkspaceRef: &workspace,
+			Placement: &model.Placement{Column: &column, Row: &otherRow},
+		},
+	}}
+	times := []time.Time{t0, t0.Add(time.Minute)}
+	runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{visible, {}}}, func() time.Time {
+		now := times[0]
+		times = times[1:]
+		return now
+	})
+	runner.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sameBoot, err := store.Read("boot-a", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session := sameBoot.Recovery.Sessions[0]; !session.CapturedColumnOccupied || session.Visible || session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0) {
+		t.Fatalf("same-boot occupancy was not retained atomically: %#v", session)
+	}
+
+	newBoot, _ := newTestRunner(t, root, "boot-b", &sequenceCollector{states: []model.State{{}}}, func() time.Time { return t0.Add(2 * time.Minute) })
+	newBoot.cataloger = staticCataloger{catalog: activeCatalog("alpha")}
+	if _, err := newBoot.CaptureOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	carried, err := store.Read("boot-b", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session := carried.Recovery.Sessions[0]; !session.CapturedColumnOccupied || session.Visible || session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0) {
+		t.Fatalf("new-boot occupancy was not retained atomically: %#v", session)
+	}
+}
+
 func TestCaptureTitleFallbackCannotOverwriteStickyPlacement(t *testing.T) {
 	root := t.TempDir()
 	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
@@ -233,34 +284,31 @@ func TestCaptureTitleFallbackCannotOverwriteStickyPlacement(t *testing.T) {
 	}
 }
 
-func TestCapturePartialPlacementMergesWithPriorComponents(t *testing.T) {
+func TestCapturePartialPlacementRetainsPriorAtomicObservation(t *testing.T) {
 	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
-		name          string
-		second        model.Window
-		wantWorkspace string
-		wantColumn    int
+		name   string
+		second model.Window
 	}{
 		{
-			name:          "workspace only keeps layout",
-			second:        recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, nil),
-			wantWorkspace: "review", wantColumn: 3,
+			name:   "workspace only",
+			second: recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, nil),
 		},
 		{
-			name: "layout only keeps workspace",
+			name: "layout only",
 			second: func() model.Window {
 				column := 7
 				return recoveryWindow("alpha", true, nil, &model.Placement{Column: &column})
 			}(),
-			wantWorkspace: "dev", wantColumn: 7,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			column := 3
-			initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column})
+			column, targetRow, otherRow := 3, 0, 1
+			initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column, Row: &targetRow})
+			other := model.Window{Key: "w:browser:2", AppID: "firefox", WorkspaceRef: &model.WorkspaceRef{Name: "dev", Index: 1}, Placement: &model.Placement{Column: &column, Row: &otherRow}}
 			times := []time.Time{t0, t0.Add(time.Minute)}
-			runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{initial}}, {Windows: []model.Window{test.second}}}}, func() time.Time {
+			runner, store := newTestRunner(t, root, "boot-a", &sequenceCollector{states: []model.State{{Windows: []model.Window{initial, other}}, {Windows: []model.Window{test.second}}}}, func() time.Time {
 				now := times[0]
 				times = times[1:]
 				return now
@@ -277,8 +325,8 @@ func TestCapturePartialPlacementMergesWithPriorComponents(t *testing.T) {
 				t.Fatal(err)
 			}
 			session := got.Recovery.Sessions[0]
-			if !session.Visible || session.WorkspaceRef == nil || session.WorkspaceRef.Name != test.wantWorkspace || session.Placement == nil || session.Placement.Column == nil || *session.Placement.Column != test.wantColumn {
-				t.Fatalf("partial observation did not merge: %#v", session)
+			if !session.Visible || session.WorkspaceRef == nil || session.WorkspaceRef.Name != "dev" || session.Placement == nil || session.Placement.Column == nil || *session.Placement.Column != column || !session.CapturedColumnOccupied {
+				t.Fatalf("partial observation changed atomic placement evidence: %#v", session)
 			}
 			if session.PlacementObservedAt == nil || !session.PlacementObservedAt.Equal(t0) {
 				t.Fatalf("partial observation refreshed aggregate timestamp: %v", session.PlacementObservedAt)
