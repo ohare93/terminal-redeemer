@@ -161,6 +161,9 @@ func (e Executor) Apply(ctx context.Context, plan Plan) Plan {
 			item.CurrentWindowKey = fmt.Sprintf("w:%s:%d", window.AppID, window.ID)
 			item.CurrentWindowID = window.ID
 		}
+		if newWindow && !e.revalidateUniqueLaunchedAttachment(ctx, item, window, process) {
+			continue
+		}
 		claimed[item.Session] = window
 
 		if !e.placeAttached(ctx, item, window, process, newWindow) {
@@ -263,6 +266,23 @@ func (e Executor) launchItem(ctx context.Context, item *Item, recoveryObservedAt
 		return ObservedWindow{}, nil, false
 	}
 	return window, process, true
+}
+
+func (e Executor) revalidateUniqueLaunchedAttachment(ctx context.Context, item *Item, launched ObservedWindow, process Process) bool {
+	matches, err := e.allAttachedSessionWindows(ctx, item.Session)
+	if err == nil && len(matches) == 1 && matches[0].ID == launched.ID && matches[0].PID == launched.PID {
+		return true
+	}
+	_ = process.Kill()
+	item.Status = StatusFailed
+	if err != nil {
+		item.Reason = "cannot safely revalidate exact session attachments before placement: " + err.Error()
+	} else if len(matches) > 1 {
+		item.Reason = "another exact session attachment appeared before placement; only the newly launched Kitty was terminated"
+	} else {
+		item.Reason = "the newly launched exact session attachment changed before placement; the launched Kitty was terminated"
+	}
+	return false
 }
 
 func (e Executor) placeAttached(ctx context.Context, item *Item, window ObservedWindow, process Process, newWindow bool) bool {
@@ -383,6 +403,27 @@ func (e Executor) sessionWindows(ctx context.Context, session string) ([]Observe
 		return nil, err
 	}
 	return e.sessionWindowsFrom(ctx, windows, session)
+}
+
+func (e Executor) allAttachedSessionWindows(ctx context.Context, session string) ([]ObservedWindow, error) {
+	windows, err := e.Observer.Windows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]ObservedWindow, 0, 1)
+	for _, window := range windows {
+		if window.PID <= 0 || window.ID <= 0 {
+			continue
+		}
+		attached, err := e.Probe.Attached(ctx, window.PID, session)
+		if err != nil {
+			return nil, err
+		}
+		if attached {
+			matches = append(matches, window)
+		}
+	}
+	return matches, nil
 }
 
 func (e Executor) sessionWindowsFrom(ctx context.Context, windows []ObservedWindow, session string) ([]ObservedWindow, error) {
@@ -554,6 +595,10 @@ func (e Executor) orderColumns(ctx context.Context, plan *Plan, targets []attach
 		}()
 	}
 
+	// Moving a column to an absolute index shifts columns between its source and
+	// destination. Highest requested indices must therefore be fixed first; an
+	// ascending pass can displace an already-verified target when unrelated
+	// columns occupy the requested range.
 	sort.SliceStable(ordered, func(i, j int) bool {
 		left, right := plan.Items[ordered[i].item], plan.Items[ordered[j].item]
 		if workspaceLess(left.Workspace, right.Workspace) {
@@ -563,7 +608,7 @@ func (e Executor) orderColumns(ctx context.Context, plan *Plan, targets []attach
 			return false
 		}
 		if *left.CapturedPlacement.Column != *right.CapturedPlacement.Column {
-			return *left.CapturedPlacement.Column < *right.CapturedPlacement.Column
+			return *left.CapturedPlacement.Column > *right.CapturedPlacement.Column
 		}
 		return left.Session < right.Session
 	})
@@ -583,33 +628,99 @@ func (e Executor) orderColumns(ctx context.Context, plan *Plan, targets []attach
 			continue
 		}
 
-		var orderErr error
-		for _, target := range group {
-			item := &plan.Items[target.item]
-			column := *item.CapturedPlacement.Column
-			actionCtx, cancel := context.WithTimeout(ctx, e.timeout())
-			err := e.Orderer.FocusWindow(actionCtx, target.window.ID)
-			cancel()
+		expected, orderErr := e.observeWorkspace(ctx, workspaceID)
+		if orderErr != nil {
+			orderErr = fmt.Errorf("capture workspace before ordering: %w", orderErr)
+		}
+		// A lower-index target can start to the right of an already-fixed target
+		// and shift it once. Repeat the descending pass until every exact target
+		// is fixed; each corrective high-to-low move leaves lower fixed indices
+		// untouched.
+		for pass := 0; orderErr == nil && !targetsAtExactColumns(expected, workspaceID, plan, group); pass++ {
+			if pass > len(group) {
+				orderErr = errors.New("absolute target columns did not converge")
+				break
+			}
+			moved := false
+			for _, target := range group {
+				item := &plan.Items[target.item]
+				column := *item.CapturedPlacement.Column
+				if windowAtExactColumn(expected, target.window.ID, workspaceID, column) {
+					continue
+				}
+				moved = true
+
+				beforeFocus, err := e.observeWorkspace(ctx, workspaceID)
+				if err != nil {
+					orderErr = fmt.Errorf("capture workspace before focus: %w", err)
+					break
+				}
+				if !sameWorkspaceState(beforeFocus, expected) {
+					orderErr = errors.New("workspace changed unexpectedly between verified ordering actions")
+					break
+				}
+				afterFocus, err := expectedFocusedState(beforeFocus, target.window.ID)
+				if err != nil {
+					orderErr = err
+					break
+				}
+				actionCtx, cancel := context.WithTimeout(ctx, e.timeout())
+				err = e.Orderer.FocusWindow(actionCtx, target.window.ID)
+				cancel()
+				if err != nil {
+					orderErr = fmt.Errorf("focus exact window %d: %w", target.window.ID, err)
+					break
+				}
+				if _, err = e.waitForWorkspaceTransition(ctx, workspaceID, beforeFocus, afterFocus, "exact focus"); err != nil {
+					orderErr = err
+					break
+				}
+
+				beforeMove, err := e.observeWorkspace(ctx, workspaceID)
+				if err != nil {
+					orderErr = fmt.Errorf("capture workspace before column move: %w", err)
+					break
+				}
+				if !sameWorkspaceState(beforeMove, afterFocus) {
+					orderErr = errors.New("workspace changed unexpectedly after exact focus")
+					break
+				}
+				afterMove, err := expectedColumnMove(beforeMove, target.window.ID, column)
+				if err != nil {
+					orderErr = err
+					break
+				}
+				actionCtx, cancel = context.WithTimeout(ctx, e.timeout())
+				err = e.Orderer.MoveColumnToIndex(actionCtx, column)
+				cancel()
+				if err != nil {
+					orderErr = fmt.Errorf("move focused column to index %d: %w", column, err)
+					break
+				}
+				if _, err = e.waitForWorkspaceTransition(ctx, workspaceID, beforeMove, afterMove, "whole-column move"); err != nil {
+					orderErr = err
+					break
+				}
+				expected = afterMove
+			}
+			if !moved && orderErr == nil {
+				orderErr = errors.New("absolute target columns made no progress")
+			}
+		}
+		if orderErr == nil {
+			final, err := e.observeWorkspace(ctx, workspaceID)
 			if err != nil {
-				orderErr = fmt.Errorf("focus exact window %d: %w", target.window.ID, err)
-				break
-			}
-			if ok, reason := e.waitForObserved(ctx, nil, target.window, func(window ObservedWindow) bool { return window.IsFocused }, "exact focus"); !ok {
-				orderErr = errors.New(reason)
-				break
-			}
-			actionCtx, cancel = context.WithTimeout(ctx, e.timeout())
-			err = e.Orderer.MoveColumnToIndex(actionCtx, column)
-			cancel()
-			if err != nil {
-				orderErr = fmt.Errorf("move focused column to index %d: %w", column, err)
-				break
-			}
-			if ok, reason := e.waitForObserved(ctx, nil, target.window, func(window ObservedWindow) bool {
-				return window.IsFocused && window.Column != nil && *window.Column == column
-			}, "column move and exact focus"); !ok {
-				orderErr = errors.New(reason)
-				break
+				orderErr = fmt.Errorf("final workspace observation: %w", err)
+			} else if !sameWorkspaceState(final, expected) {
+				orderErr = errors.New("workspace changed unexpectedly before final ordering verification")
+			} else {
+				for _, target := range group {
+					column := *plan.Items[target.item].CapturedPlacement.Column
+					if !windowAtExactColumn(final, target.window.ID, workspaceID, column) {
+						orderErr = fmt.Errorf("final workspace observation does not place exact window %d at column %d", target.window.ID, column)
+						break
+					}
+				}
 			}
 		}
 		if orderErr != nil {
@@ -623,6 +734,126 @@ func (e Executor) orderColumns(ctx context.Context, plan *Plan, targets []attach
 		}
 		start = end
 	}
+}
+
+func (e Executor) observeWorkspace(ctx context.Context, workspaceID string) ([]ObservedWindow, error) {
+	observeCtx, cancel := context.WithTimeout(ctx, e.timeout())
+	defer cancel()
+	windows, err := e.Observer.Windows(observeCtx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ObservedWindow, 0, len(windows))
+	for _, window := range windows {
+		if window.WorkspaceID == workspaceID {
+			out = append(out, window)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (e Executor) waitForWorkspaceTransition(ctx context.Context, workspaceID string, before, expected []ObservedWindow, description string) ([]ObservedWindow, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, e.timeout())
+	defer cancel()
+	var lastErr error
+	for {
+		observed, err := e.observeWorkspace(waitCtx, workspaceID)
+		if err != nil {
+			lastErr = err
+		} else if sameWorkspaceState(observed, expected) {
+			return observed, nil
+		} else if !sameWorkspaceState(observed, before) {
+			return nil, fmt.Errorf("%s produced an unexpected workspace mutation", description)
+		}
+		if err := e.sleep(waitCtx); err != nil {
+			if lastErr != nil {
+				return nil, fmt.Errorf("%s could not be observed: %w", description, lastErr)
+			}
+			return nil, fmt.Errorf("%s was not observed before timeout", description)
+		}
+	}
+}
+
+func expectedFocusedState(before []ObservedWindow, targetID int) ([]ObservedWindow, error) {
+	after := append([]ObservedWindow(nil), before...)
+	found := false
+	for i := range after {
+		after[i].IsFocused = after[i].ID == targetID
+		found = found || after[i].ID == targetID
+	}
+	if !found {
+		return nil, fmt.Errorf("exact window %d is absent from its affected workspace", targetID)
+	}
+	return after, nil
+}
+
+func expectedColumnMove(before []ObservedWindow, targetID, destination int) ([]ObservedWindow, error) {
+	after := append([]ObservedWindow(nil), before...)
+	var source *int
+	for i := range before {
+		if before[i].ID == targetID {
+			if !before[i].IsFocused {
+				return nil, fmt.Errorf("exact window %d lost focus before column move", targetID)
+			}
+			source = before[i].Column
+			break
+		}
+	}
+	if source == nil {
+		return nil, fmt.Errorf("exact window %d has no observable source column", targetID)
+	}
+	for i := range after {
+		if after[i].Column == nil {
+			continue
+		}
+		column := *after[i].Column
+		switch {
+		case column == *source:
+			column = destination
+		case *source < destination && column > *source && column <= destination:
+			column--
+		case *source > destination && column >= destination && column < *source:
+			column++
+		}
+		value := column
+		after[i].Column = &value
+	}
+	return after, nil
+}
+
+func sameWorkspaceState(left, right []ObservedWindow) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].ID != right[i].ID || left[i].PID != right[i].PID || left[i].AppID != right[i].AppID || left[i].WorkspaceID != right[i].WorkspaceID || left[i].IsFocused != right[i].IsFocused || !sameOptionalInt(left[i].Column, right[i].Column) || !sameOptionalInt(left[i].Row, right[i].Row) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameOptionalInt(left, right *int) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func targetsAtExactColumns(windows []ObservedWindow, workspaceID string, plan *Plan, targets []attachedTarget) bool {
+	for _, target := range targets {
+		if !windowAtExactColumn(windows, target.window.ID, workspaceID, *plan.Items[target.item].CapturedPlacement.Column) {
+			return false
+		}
+	}
+	return true
+}
+
+func windowAtExactColumn(windows []ObservedWindow, id int, workspaceID string, column int) bool {
+	for _, window := range windows {
+		if window.ID == id {
+			return window.WorkspaceID == workspaceID && window.Column != nil && *window.Column == column
+		}
+	}
+	return false
 }
 
 func workspaceLess(left, right *WorkspaceTarget) bool {
@@ -641,8 +872,9 @@ func workspaceLess(left, right *WorkspaceTarget) bool {
 func stackedReason(plan *Plan, group []attachedTarget) string {
 	columns := make(map[int]struct{}, len(group))
 	for _, target := range group {
-		placement := plan.Items[target.item].CapturedPlacement
-		if placement.Row != nil && *placement.Row > 0 {
+		item := plan.Items[target.item]
+		placement := item.CapturedPlacement
+		if item.CapturedColumnOccupied || placement.Row != nil && *placement.Row > 0 {
 			return "captured stacked rows are unsupported without consume or expel actions"
 		}
 		column := *placement.Column

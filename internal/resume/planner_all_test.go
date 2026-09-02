@@ -131,6 +131,30 @@ func TestAllZeroPlacementObservationIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestAllCarriesHiddenCapturedColumnOccupancyIntoTransientPlan(t *testing.T) {
+	now := time.Now().UTC()
+	column, targetRow, otherRow := 2, 0, 1
+	checkpoint := allCheckpoint("current", now, "hidden")
+	checkpoint.Recovery.Sessions[0].WorkspaceRef = &model.WorkspaceRef{Name: "dev"}
+	checkpoint.Recovery.Sessions[0].Placement = &model.Placement{Column: &column, Row: &targetRow}
+	checkpoint.Recovery.Sessions[0].PlacementObservedAt = &now
+	checkpoint.State = model.State{
+		Workspaces: []model.Workspace{{ID: "captured-dev", Name: "dev"}},
+		Windows: []model.Window{{
+			Key: "w:browser:7", AppID: "firefox", WorkspaceID: "captured-dev",
+			Placement: &model.Placement{Column: &column, Row: &otherRow},
+		}},
+	}
+	selection := SelectAll([]checkpoints.Checkpoint{checkpoint}, SelectOptions{CurrentBootID: "current", Now: now, MaxAge: time.Hour})
+	catalog := testCatalog(zellijlive.Session{Name: "hidden", Status: zellijlive.StatusActive})
+	current := model.State{Workspaces: []model.Workspace{{ID: "ws-dev", Name: "dev"}}}
+
+	item := assertSessionStatus(t, NewPlanner(PlannerConfig{}).BuildAll(selection, current, catalog, AllOptions{Now: now, MaxAge: time.Hour}), "hidden", StatusReady)
+	if !item.CapturedColumnOccupied {
+		t.Fatalf("hidden non-terminal stack occupancy was not carried into plan: %#v", item)
+	}
+}
+
 func TestAllAlreadyOpenRetainsExactNiriIdentityAndRerunPlanIsIdempotent(t *testing.T) {
 	now := time.Now().UTC()
 	checkpoint := allCheckpoint("current", now, "open")

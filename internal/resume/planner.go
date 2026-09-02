@@ -130,25 +130,26 @@ type WorkspaceTarget struct {
 }
 
 type Item struct {
-	WindowKey           string
-	AppID               string
-	Session             string
-	CWD                 string
-	Status              Status
-	Reason              string
-	CandidateSource     string
-	ZellijStatus        string
-	PlacementSource     string
-	PlacementObservedAt *time.Time
-	PlacementAge        time.Duration
-	PlacementWarning    string
-	CurrentWindowKey    string
-	CurrentWindowID     int
-	CapturedWorkspace   model.WorkspaceRef
-	CapturedPlacement   *model.Placement
-	Workspace           *WorkspaceTarget
-	LayoutStatus        LayoutStatus
-	LayoutReason        string
+	WindowKey              string
+	AppID                  string
+	Session                string
+	CWD                    string
+	Status                 Status
+	Reason                 string
+	CandidateSource        string
+	ZellijStatus           string
+	PlacementSource        string
+	PlacementObservedAt    *time.Time
+	PlacementAge           time.Duration
+	PlacementWarning       string
+	CurrentWindowKey       string
+	CurrentWindowID        int
+	CapturedWorkspace      model.WorkspaceRef
+	CapturedPlacement      *model.Placement
+	CapturedColumnOccupied bool
+	Workspace              *WorkspaceTarget
+	LayoutStatus           LayoutStatus
+	LayoutReason           string
 }
 
 type Plan struct {
@@ -318,7 +319,39 @@ func newItem(window model.Window, state model.State) Item {
 		item.CWD = strings.TrimSpace(window.Terminal.CWD)
 	}
 	item.CapturedWorkspace = capturedWorkspaceRef(window, state.Workspaces)
+	item.CapturedColumnOccupied = capturedColumnOccupied(state, item.CapturedWorkspace, item.CapturedPlacement, window.Key, item.Session)
 	return item
+}
+
+// capturedColumnOccupied carries stack evidence only in the transient plan. A
+// row-zero target that shared its captured column cannot safely be restored by
+// guessing consume/expel actions, even when the other row was not a terminal.
+func capturedColumnOccupied(state model.State, workspace model.WorkspaceRef, placement *model.Placement, targetKey, targetSession string) bool {
+	if placement == nil || placement.Column == nil || placement.Row == nil || *placement.Row != 0 {
+		return false
+	}
+	for _, window := range state.Windows {
+		if window.Key == targetKey || window.Placement == nil || window.Placement.Column == nil || *window.Placement.Column != *placement.Column {
+			continue
+		}
+		if targetKey == "" && window.Terminal != nil && strings.TrimSpace(window.Terminal.SessionTag) == targetSession {
+			continue
+		}
+		if sameWorkspaceRef(workspace, capturedWorkspaceRef(window, state.Workspaces)) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameWorkspaceRef(left, right model.WorkspaceRef) bool {
+	if left.Name != "" && right.Name != "" {
+		return left.Name == right.Name
+	}
+	if left.Output != "" && right.Output != "" && left.Index > 0 && right.Index > 0 {
+		return left.Output == right.Output && left.Index == right.Index
+	}
+	return left.Index > 0 && left.Index == right.Index
 }
 
 func capturedWorkspaceRef(window model.Window, workspaces []model.Workspace) model.WorkspaceRef {
