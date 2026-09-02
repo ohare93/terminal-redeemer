@@ -33,3 +33,21 @@ Add the `redeem resume --all` planning contract that selects the right sessions 
 ## Implementation Notes
 
 Depends on task 2. Extend the existing planner and CLI rather than introducing a parallel resume pipeline. `--all` changes candidate selection and explanation, then feeds the existing plan/executor types. Preserve plain resume behavior and the existing max-checkpoint-age option, changing only its documented treatment of currently active sessions.
+
+
+## Completion Summary
+
+- Added `redeem resume --all` planning through the existing resume pipeline for same-boot active sessions and reboot-time prior-active allow-listed sessions.
+- Used authoritative Zellij catalog states to exclude unrelated historical, missing, duplicate, prefix-only, and socket-invalid sessions while permitting bounded eligible resurrection.
+- Retained exact open-window identity, degraded missing/old placement per session, and detailed dry-run source/status/age/target reporting.
+- Added per-launch catalog revalidation to close resurrection TOCTOU, rejected unaged placement, and preserved plain resume plus direct attach-only safety; tests and independent review passed.
+
+### Files Changed
+
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- internal/resume/planner.go
+- internal/resume/planner_all.go
+- internal/resume/planner_all_test.go
+- internal/resume/executor.go
+- internal/resume/executor_test.go
