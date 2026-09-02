@@ -54,9 +54,15 @@ let
   pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
   renderNiriSpawn = argv: "spawn " + lib.concatMapStringsSep " " builtins.toJSON argv + ";";
   renderNiriStartup = argv: "spawn-at-startup " + lib.concatMapStringsSep " " builtins.toJSON argv + ";";
+  systemctl = "${pkgs.systemd}/bin/systemctl";
+  resumeNiriStartupShell = ''
+    ${lib.escapeShellArgs [ systemctl "--user" "import-environment" "NIRI_SOCKET" "WAYLAND_DISPLAY" "DISPLAY" "XDG_CURRENT_DESKTOP" "XDG_SESSION_TYPE" ]}
+    ${lib.escapeShellArgs [ systemctl "--user" "restart" "terminal-redeemer-resume.service" ]}
+  '';
   resumeNiriIntegrationFragment = lib.optionalString cfg.resume.onStartup ''
-    // Restart the same bounded Home Manager recovery unit on every Niri start.
-    ${renderNiriStartup [ "${pkgs.systemd}/bin/systemctl" "--user" "restart" "terminal-redeemer-resume.service" ]}
+    // Include this generated hook exactly once. It imports this compositor's
+    // graphical environment before restarting the existing recovery unit.
+    ${renderNiriStartup [ pkgs.runtimeShell "-eu" "-c" resumeNiriStartupShell ]}
   '';
   mirrorLocalCommand = [ cfg.mirror.launcherCommand ];
   mirrorHostArgs = lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
@@ -176,9 +182,9 @@ in {
         type = lib.types.lines;
         readOnly = true;
         default = resumeNiriIntegrationFragment;
-        description = "Generated Niri spawn-at-startup hook that restarts the Home Manager recovery service on every compositor start; empty when startup recovery is disabled.";
+        description = "Generated opt-in Niri spawn-at-startup hook that synchronously imports the compositor environment and restarts the existing Home Manager recovery service; consumers must include it exactly once, and it is empty when startup recovery is disabled.";
       };
-      maxCheckpointAge = lib.mkOption { type = lib.types.str; default = "24h"; description = "Maximum age accepted by prior-boot resume."; };
+      maxCheckpointAge = lib.mkOption { type = lib.types.str; default = "24h"; description = "Maximum age for prior-active dead-session resurrection and the sticky-placement warning threshold; exact ACTIVE attachment remains allowed when older."; };
       unresolvedWorkspace = lib.mkOption { type = lib.types.enum [ "skip" "current" "fail" ]; default = "current"; description = "Policy when a captured workspace cannot be resolved."; };
       timeout = lib.mkOption { type = lib.types.str; default = "10s"; description = "Bound for each resume readiness, correlation, attachment, and move-verification phase."; };
       pollInterval = lib.mkOption { type = lib.types.str; default = "100ms"; description = "Polling interval for exact Niri and Zellij evidence."; };
@@ -248,7 +254,7 @@ in {
 
     systemd.user.services.terminal-redeemer-resume = lib.mkIf cfg.resume.onStartup {
       Unit = {
-        Description = "terminal-redeemer prior-boot terminal resume";
+        Description = "terminal-redeemer all-session terminal resume";
         After = [ "graphical-session.target" ];
         Before = [ "terminal-redeemer-capture.service" ];
         PartOf = [ "graphical-session.target" ];

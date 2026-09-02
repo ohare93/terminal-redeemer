@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -138,18 +139,47 @@ func (c RecoveryInventoryCheck) Run(ctx context.Context) Result {
 	if err != nil {
 		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("exact Zellij recovery catalog unavailable: %v", err)}
 	}
-	activeCandidates, resurrectionCandidates := 0, 0
+	catalogActiveTotal, catalogDeadTotal := 0, 0
 	for _, session := range catalog.Sessions {
 		switch session.Status {
 		case zellijlive.StatusActive:
-			activeCandidates++
+			catalogActiveTotal++
 		case zellijlive.StatusDeadResurrectable:
-			resurrectionCandidates++
+			catalogDeadTotal++
 		}
 	}
-	priorActiveCandidates := 0
+	currentInventoryTotal, sameBootEligibleActive := 0, 0
+	if current != nil {
+		currentInventoryTotal = len(current.Recovery.ActiveSessions)
+		// Same-boot --all deliberately uses every exact ACTIVE catalog entry;
+		// the current checkpoint supplies sticky placement, not an allow-list.
+		sameBootEligibleActive = catalogActiveTotal
+	}
+	priorInventoryTotal := 0
+	priorEligibleActive, priorEligibleDead := 0, 0
+	priorExcluded := make(map[string]int)
 	if prior != nil {
-		priorActiveCandidates = len(prior.Recovery.ActiveSessions)
+		priorInventoryTotal = len(prior.Recovery.ActiveSessions)
+		seen := make(map[string]struct{}, priorInventoryTotal)
+		for _, rawName := range prior.Recovery.ActiveSessions {
+			name := strings.TrimSpace(rawName)
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			switch status := catalog.Exact(name).Status; status {
+			case zellijlive.StatusActive:
+				priorEligibleActive++
+			case zellijlive.StatusDeadResurrectable:
+				priorEligibleDead++
+			default:
+				label := string(status)
+				if label == "" {
+					label = "unknown"
+				}
+				priorExcluded[label]++
+			}
+		}
 	}
 	selected := prior
 	candidateSource := "prior_active"
@@ -158,31 +188,68 @@ func (c RecoveryInventoryCheck) Run(ctx context.Context) Result {
 		candidateSource = "current_active"
 	}
 	incompleteIdentity, unnamedIndexPlacement := recoveryWarnings(selected)
-	detail := fmt.Sprintf("active_candidates=%d prior_active_candidates=%d candidate_source=%s resurrection_cache_available=%t resurrection_candidates=%d incomplete_identity_evidence=%d unnamed_index_dependent_placements=%d", activeCandidates, priorActiveCandidates, candidateSource, catalog.ResurrectionCacheAvailable, resurrectionCandidates, incompleteIdentity, unnamedIndexPlacement)
+	detail := fmt.Sprintf("catalog_total=%d catalog_active_total=%d catalog_dead_resurrectable_total=%d current_inventory_active_total=%d prior_inventory_active_total=%d same_boot_eligible_active=%d prior_active_eligible_active=%d prior_active_eligible_dead_resurrectable=%d prior_active_excluded_unsafe=%d prior_active_excluded_statuses=%s candidate_source=%s resurrection_cache_available=%t incomplete_identity_evidence=%d unnamed_index_dependent_placements=%d", len(catalog.Sessions), catalogActiveTotal, catalogDeadTotal, currentInventoryTotal, priorInventoryTotal, sameBootEligibleActive, priorEligibleActive, priorEligibleDead, statusCountTotal(priorExcluded), formatStatusCounts(priorExcluded), candidateSource, catalog.ResurrectionCacheAvailable, incompleteIdentity, unnamedIndexPlacement)
 	if incompleteIdentity > 0 || unnamedIndexPlacement > 0 {
 		detail += "; warning=prefer exact session identity and named Niri workspaces before automatic recovery"
 	}
 	return Result{Name: c.Name(), Status: StatusPass, Detail: detail}
 }
 
+func statusCountTotal(counts map[string]int) int {
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	return total
+}
+
+func formatStatusCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return "none"
+	}
+	labels := make([]string, 0, len(counts))
+	for label := range counts {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	parts := make([]string, 0, len(labels))
+	for _, label := range labels {
+		parts = append(parts, fmt.Sprintf("%s:%d", label, counts[label]))
+	}
+	return strings.Join(parts, ",")
+}
+
 func recoveryWarnings(checkpoint *checkpoints.Checkpoint) (incompleteIdentity, unnamedIndexPlacement int) {
 	if checkpoint == nil {
 		return 0, 0
 	}
-	visible := make(map[string]bool, len(checkpoint.Recovery.Sessions))
+	visible := make(map[string]int, len(checkpoint.Recovery.Sessions))
 	for _, session := range checkpoint.Recovery.Sessions {
 		if session.Visible {
-			visible[session.Name] = true
+			visible[strings.TrimSpace(session.Name)]++
 		}
 		if session.PlacementObservedAt != nil && session.WorkspaceRef != nil && strings.TrimSpace(session.WorkspaceRef.Name) == "" && session.WorkspaceRef.Index > 0 {
 			unnamedIndexPlacement++
+		}
+	}
+	tagCounts := make(map[string]int)
+	for _, window := range checkpoint.State.Windows {
+		if recoveryTerminal(window.AppID) && window.Terminal != nil {
+			tag := strings.TrimSpace(window.Terminal.SessionTag)
+			if tag != "" {
+				tagCounts[tag]++
+			}
 		}
 	}
 	for _, window := range checkpoint.State.Windows {
 		if !recoveryTerminal(window.AppID) {
 			continue
 		}
-		if window.Terminal == nil || strings.TrimSpace(window.Terminal.SessionTag) == "" || !visible[strings.TrimSpace(window.Terminal.SessionTag)] {
+		tag := ""
+		if window.Terminal != nil {
+			tag = strings.TrimSpace(window.Terminal.SessionTag)
+		}
+		if tag == "" || tagCounts[tag] != 1 || visible[tag] != 1 {
 			incompleteIdentity++
 		}
 	}

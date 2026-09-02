@@ -206,7 +206,18 @@ func TestCheckpointAndRecoveryInventoryDiagnostics(t *testing.T) {
 			t.Fatal(writeErr)
 		}
 	}
-	writeCheckpoint("prior", observed.Add(-time.Hour), model.State{}, recovery)
+	priorRecovery := model.RecoveryInventory{
+		ActiveSessions: []string{"tracked", "dead", "duplicate", "invalid", "missing", "prefix"},
+		Sessions: []model.RecoverySession{
+			{Name: "tracked", Visible: true},
+			{Name: "dead", Visible: true},
+			{Name: "duplicate", Visible: true},
+			{Name: "invalid", Visible: true},
+			{Name: "missing", Visible: true},
+			{Name: "prefix", Visible: true},
+		},
+	}
+	writeCheckpoint("prior", observed.Add(-time.Hour), model.State{}, priorRecovery)
 	writeCheckpoint("current", observed, state, recovery)
 
 	integrity := CheckpointsIntegrityCheck{StateDir: root}.Run(context.Background())
@@ -217,15 +228,43 @@ func TestCheckpointAndRecoveryInventoryDiagnostics(t *testing.T) {
 		StateDir: root, Host: "host", Profile: "profile", CurrentBootID: func() (string, error) { return "current", nil },
 		ObserveCatalog: func(context.Context, string) (zellijlive.Catalog, error) {
 			return zellijlive.Catalog{Sessions: map[string]zellijlive.Session{
-				"tracked": {Name: "tracked", Status: zellijlive.StatusActive},
-				"dead":    {Name: "dead", Status: zellijlive.StatusDeadResurrectable},
-			}, ResurrectionCacheAvailable: true}, nil
+				"tracked":          {Name: "tracked", Status: zellijlive.StatusActive},
+				"unrelated-active": {Name: "unrelated-active", Status: zellijlive.StatusActive},
+				"dead":             {Name: "dead", Status: zellijlive.StatusDeadResurrectable},
+				"cache-only":       {Name: "cache-only", Status: zellijlive.StatusDeadResurrectable},
+				"duplicate":        {Name: "duplicate", Status: zellijlive.StatusDuplicate},
+				"invalid":          {Name: "invalid", Status: zellijlive.StatusSocketInvalid},
+				"prefix-long":      {Name: "prefix-long", Status: zellijlive.StatusActive},
+			}, Names: []string{"tracked", "unrelated-active", "dead", "cache-only", "duplicate", "invalid", "prefix-long"}, ResurrectionCacheAvailable: true}, nil
 		},
 	}.Run(context.Background())
-	for _, want := range []string{"active_candidates=1", "prior_active_candidates=1", "resurrection_cache_available=true", "resurrection_candidates=1", "incomplete_identity_evidence=1", "unnamed_index_dependent_placements=1", "warning="} {
+	for _, want := range []string{"catalog_total=7", "catalog_active_total=3", "catalog_dead_resurrectable_total=2", "current_inventory_active_total=1", "prior_inventory_active_total=6", "same_boot_eligible_active=3", "prior_active_eligible_active=1", "prior_active_eligible_dead_resurrectable=1", "prior_active_excluded_unsafe=4", "prior_active_excluded_statuses=duplicate:1,missing:1,prefix_only:1,socket_invalid:1", "resurrection_cache_available=true", "incomplete_identity_evidence=1", "unnamed_index_dependent_placements=1", "warning="} {
 		if diagnostic.Status != StatusPass || !strings.Contains(diagnostic.Detail, want) {
 			t.Fatalf("recovery diagnostic missing %q: %+v", want, diagnostic)
 		}
+	}
+}
+
+func TestRecoveryWarningsTreatIdentityEvidenceConservatively(t *testing.T) {
+	t.Parallel()
+
+	checkpoint := &checkpoints.Checkpoint{
+		State: model.State{Windows: []model.Window{
+			{Key: "exact-a", AppID: "kitty", Terminal: &model.Terminal{SessionTag: "duplicate"}},
+			{Key: "exact-b", AppID: "kitty", Terminal: &model.Terminal{SessionTag: "duplicate"}},
+			{Key: "title-only", AppID: "kitty", Terminal: &model.Terminal{}},
+			{Key: "unique", AppID: "kitty", Terminal: &model.Terminal{SessionTag: "unique"}},
+			{Key: "not-terminal", AppID: "browser"},
+		}},
+		Recovery: model.RecoveryInventory{Sessions: []model.RecoverySession{
+			{Name: "duplicate", Visible: true},
+			{Name: "unique", Visible: true},
+		}},
+	}
+
+	incomplete, unnamed := recoveryWarnings(checkpoint)
+	if incomplete != 3 || unnamed != 0 {
+		t.Fatalf("duplicate tags and title-only evidence must warn, got incomplete=%d unnamed=%d", incomplete, unnamed)
 	}
 }
 

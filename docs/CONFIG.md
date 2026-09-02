@@ -65,7 +65,7 @@ mirror:
 
 ## Resume policy
 
-`resume.onStartup` is consumed by the Home Manager module. It installs the existing `redeem resume --all` user oneshot and exposes `resume.niriIntegrationFragment`; add that generated `spawn-at-startup` line once to Niri's configuration so every compositor start restarts the same unit. Setting `onStartup` in a hand-written YAML file does not install either integration.
+`resume.onStartup` is consumed by the Home Manager module. On its own it installs the `redeem resume --all` user oneshot for initial graphical-session startup and exposes `resume.niriIntegrationFragment`; it does not edit Niri configuration. Consumers must include that generated fragment exactly once in Niri's configuration. Its single native `spawn-at-startup` command synchronously imports the new compositor's `NIRI_SOCKET` and graphical environment into the systemd user manager before restarting the same unit on initial and repeated compositor launches. Setting `onStartup` in a hand-written YAML file does not install either integration.
 
 On the same Linux boot, `--all` reconciles every exact ACTIVE catalog session and uses its current-boot sticky placement when available. After a reboot it selects the newest schema-3 prior recovery point and considers only that checkpoint's prior-active allow-list; cache-only historical sessions are excluded. Plain `redeem resume` remains the narrower prior-visible manual mode.
 
@@ -96,7 +96,7 @@ programs.terminal-redeemer = {
 };
 ```
 
-The module separately exports the read-only recovery `resume.niriIntegrationFragment`; it is empty while `resume.onStartup` is false. The module exports read-only `mirror.localCommand`, `newCommand`, `openCommand`, `saveCommand`, `applyCommand`, and `followCommand` argv. Only local/new/open appear in the generated opt-in mirror Niri fragment. Save/apply remain explicit manual commands and follow remains a foreground TUI; the module creates no follow unit, timer, rule, or persisted selection. Leaving `sourceHost` and `sourceWorkspace` empty preserves command argv without selectors.
+The module separately exports the read-only recovery `resume.niriIntegrationFragment`; it is empty while `resume.onStartup` is false and is not a shortcut fragment. The distinct generated opt-in mirror Niri fragment contains only local/new/open shortcuts. The module also exports read-only `mirror.localCommand`, `newCommand`, `openCommand`, `saveCommand`, `applyCommand`, and `followCommand` argv. Save/apply remain explicit manual commands and follow remains a foreground TUI; the module creates no follow unit, timer, rule, or persisted selection. Leaving `sourceHost` and `sourceWorkspace` empty preserves command argv without selectors.
 
 `mirror.snapshotCommand` is also the trusted source-helper prefix. For dual-visible `mirror new`, it must end with the exact argv suffix `[mirror, snapshot]`; Redeem preserves any preceding wrapper argv and replaces only that suffix with `mirror attach-local`. Unsupported wrappers degrade after creation with a warning. Lattice and Overton should run compatible Redeem and pinned Zellij versions; version skew leaves the persistent Overton-created session intact but may prevent the source view.
 

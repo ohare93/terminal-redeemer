@@ -141,6 +141,14 @@
             captureExec = if builtins.isList captureExecRaw then builtins.concatStringsSep " " captureExecRaw else captureExecRaw;
             resumeExec = if builtins.isList resumeExecRaw then builtins.concatStringsSep " " resumeExecRaw else resumeExecRaw;
             pruneExec = if builtins.isList pruneExecRaw then builtins.concatStringsSep " " pruneExecRaw else pruneExecRaw;
+            expectedResumeExec = "${pkgs.lib.getExe self.packages.${system}.terminal-redeemer} --config /home/test/.config/terminal-redeemer/config.yaml resume --all";
+            startupFragment = cfg.programs.terminal-redeemer.resume.niriIntegrationFragment;
+            startupFragmentText = builtins.unsafeDiscardStringContext startupFragment;
+            includedNiriConfig = ''
+              layout { }
+              ${startupFragment}
+            '';
+            countOccurrences = needle: value: builtins.length (pkgs.lib.splitString needle value) - 1;
           in
           assert rendered.capture.interval == "30s";
           assert rendered.capture.niriCommand == "niri msg -j windows";
@@ -149,8 +157,11 @@
           assert rendered.processMetadata.whitelistExtra == [ "tmux" ];
           assert rendered.processMetadata.includeSessionTag == false;
           assert rendered.resume.onStartup;
-          assert pkgs.lib.hasInfix ''spawn-at-startup "'' cfg.programs.terminal-redeemer.resume.niriIntegrationFragment;
-          assert pkgs.lib.hasInfix ''"--user" "restart" "terminal-redeemer-resume.service";'' cfg.programs.terminal-redeemer.resume.niriIntegrationFragment;
+          assert countOccurrences "spawn-at-startup " startupFragment == 1;
+          assert countOccurrences "terminal-redeemer-resume.service" startupFragment == 1;
+          assert pkgs.lib.hasInfix (builtins.unsafeDiscardStringContext "import-environment NIRI_SOCKET WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE\\n${pkgs.systemd}/bin/systemctl --user restart terminal-redeemer-resume.service") startupFragmentText;
+          assert countOccurrences "spawn-at-startup " includedNiriConfig == 1;
+          assert pkgs.lib.hasInfix startupFragmentText (builtins.unsafeDiscardStringContext includedNiriConfig);
           assert rendered.resume.terminalCommand == "foot";
           assert rendered.resume.maxCheckpointAge == "12h";
           assert rendered.resume.unresolvedWorkspace == "current";
@@ -180,10 +191,11 @@
           assert builtins.match ".* capture once" captureExec != null;
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" pruneExec != null;
           assert builtins.match ".* prune run" pruneExec != null;
-          assert builtins.match ".* --config .*/terminal-redeemer/config.yaml resume --all" resumeExec != null;
-          assert builtins.match ".*resume.*resume.*" resumeExec == null;
+          assert resumeExec == expectedResumeExec;
           assert resumeService.Service.Type == "oneshot";
+          assert resumeService.Service.ExecStart == [ expectedResumeExec ];
           assert resumeService.Service.Restart == "on-failure";
+          assert resumeService.Unit.Description == "terminal-redeemer all-session terminal resume";
           assert resumeService.Unit.StartLimitBurst == 5;
           assert builtins.elem "graphical-session.target" resumeService.Unit.After;
           assert builtins.elem "graphical-session.target" resumeService.Unit.PartOf;
@@ -283,7 +295,8 @@
             rendered = hmUser.programs.terminal-redeemer.renderedConfig;
           in
           assert rendered.resume.onStartup;
-          assert pkgs.lib.hasInfix ''"restart" "terminal-redeemer-resume.service"'' hmUser.programs.terminal-redeemer.resume.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix "import-environment NIRI_SOCKET" hmUser.programs.terminal-redeemer.resume.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix "restart terminal-redeemer-resume.service" hmUser.programs.terminal-redeemer.resume.niriIntegrationFragment;
           assert rendered.resume.terminalCommand == "foot";
           assert rendered.mirror.sourceHost == "source.example";
           assert pkgs.lib.hasInfix ''Mod+Return { spawn "kitty"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;

@@ -9,7 +9,7 @@
 5. **Foreground workspace follow.** Temporarily add missing visible projections from one runtime-selected workspace until the command exits.
 6. **Same-boot and reboot recovery.** Rolling local checkpoints let `resume --all` reconcile current exact ACTIVE sessions after Niri restarts and restrict reboot resurrection to the newest prior-active allow-list.
 
-The Home Manager module exports only the three shortcuts as an opt-in Niri fragment. It also exports direct argv for new/open/save/apply/follow, but installs no follow service, timer, rule, or saved selection.
+The Home Manager module exports the three mirror shortcuts in one opt-in Niri fragment and exports a separate opt-in recovery startup fragment. It also exports direct argv for new/open/save/apply/follow, but installs no follow service, timer, rule, or saved selection.
 
 ## Remote sessions
 
@@ -72,6 +72,6 @@ Capture stores one complete schema-3 checkpoint per boot, host, and profile, inc
 - [Prior-boot resume decision](docs/adr/0001-resume-zellij-terminals-in-niri.md)
 - [Bounded mirror continuity decision](docs/adr/0002-bounded-mirror-continuity.md)
 
-Home Manager can schedule capture and optionally run the same `redeem resume --all` oneshot at graphical-session startup. When enabled, add the generated `resume.niriIntegrationFragment` once to Niri's configuration; its native `spawn-at-startup` hook restarts that service on every compositor start, while periodic capture remains ordered afterward. Startup recovery is disabled by default. Disable any competing startup terminal restorer before enabling it.
+Home Manager can schedule capture and optionally install the `redeem resume --all` oneshot for initial graphical-session startup. When enabled, consumers must include the generated `resume.niriIntegrationFragment` exactly once in Niri's configuration; its single native `spawn-at-startup` hook synchronously imports the new compositor's graphical environment, including `NIRI_SOCKET`, before restarting that same service on every compositor start. The fragment supplies restart behavior and `onStartup` alone supplies only the initial graphical service. Periodic capture remains ordered afterward. Startup recovery is disabled by default. Disable any competing startup terminal restorer before enabling it.
 
 Physical deployment, activation, dual-host validation, and reboot testing remain user-owned.

@@ -38,7 +38,7 @@ Workspace targets resolve by exact name, then output plus index, then index. Unr
 
 ### Startup policy
 
-Manual `redeem resume` is the default. When enabled, Home Manager's existing graphical-session oneshot invokes `redeem resume --all` with bounded readiness/restart policy and the shared capture/resume operation lock. Its generated Niri `spawn-at-startup` integration restarts that same unit on every compositor launch, including same-boot restarts; it does not add another service, recovery command, or event subscriber. Periodic complete capture is ordered after initial recovery and may leave sticky placement stale by at most the capture interval. Repeated recovery invocation is idempotent.
+Manual `redeem resume` is the default. When enabled, Home Manager's graphical-session oneshot invokes `redeem resume --all` with bounded readiness/restart policy and the shared capture/resume operation lock; `onStartup` alone installs this initial graphical service. Consumers include the generated Niri fragment exactly once to supply repeated-launch behavior. Its single native `spawn-at-startup` command synchronously imports the new compositor's `NIRI_SOCKET` and graphical environment into the systemd user manager before restarting that same unit on every compositor launch, including same-boot restarts; it does not add another service, recovery command, or event subscriber. Periodic complete capture is ordered after initial recovery and may leave sticky placement stale by at most the capture interval. Repeated recovery invocation is idempotent.
 
 ## Consequences
 
