@@ -122,14 +122,14 @@ func TestNiriActionsMoveUsesExactWindowAndResolvedWorkspace(t *testing.T) {
 	}
 }
 
-func TestNiriOptionalLayoutReportsUnsupportedColumnSeparately(t *testing.T) {
+func TestNiriOptionalLayoutLeavesColumnForVerifiedOrderingPhase(t *testing.T) {
 	runner := &recordingActions{}
 	floating := true
 	column := 3
 	result := (NiriActions{Runner: runner}).ApplyLayout(context.Background(), 42, model.Placement{
 		Column: &column, IsFloating: &floating, WindowSize: []int{900, 700},
 	})
-	if result.Status != LayoutDegraded || result.Reason == "" {
+	if result.Status != LayoutApplied || result.Reason != "" {
 		t.Fatalf("layout result = %#v", result)
 	}
 	wantActions := []string{"move-window-to-floating", "set-window-width", "set-window-height"}
@@ -140,5 +140,34 @@ func TestNiriOptionalLayoutReportsUnsupportedColumnSeparately(t *testing.T) {
 		if runner.calls[i].action != want {
 			t.Fatalf("call %d = %#v, want %s", i, runner.calls[i], want)
 		}
+	}
+}
+
+func TestSnapshotObserverExposesFocusAndColumnForVerification(t *testing.T) {
+	observer := SnapshotObserver{Source: staticSnapshot(`{"windows":[{"id":42,"pid":900,"app_id":"kitty","workspace_id":7,"is_focused":true,"layout":{"pos_in_scrolling_layout":[3,0]}}]}`)}
+	windows, err := observer.Windows(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 1 || !windows[0].IsFocused || windows[0].Column == nil || *windows[0].Column != 3 || windows[0].Row == nil || *windows[0].Row != 0 {
+		t.Fatalf("observed windows=%#v", windows)
+	}
+}
+
+func TestNiriActionsUseExactFocusThenFocusedColumnIndex(t *testing.T) {
+	runner := &recordingActions{}
+	actions := NiriActions{Runner: runner}
+	if err := actions.FocusWindow(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := actions.MoveColumnToIndex(context.Background(), 3); err != nil {
+		t.Fatal(err)
+	}
+	want := []actionCall{
+		{action: "focus-window", args: []string{"--id", "42"}},
+		{action: "move-column-to-index", args: []string{"3"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls=%#v want=%#v", runner.calls, want)
 	}
 }

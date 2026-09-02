@@ -3,6 +3,7 @@ package resume
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -36,12 +37,15 @@ func (p *fakeProcess) killCount() int {
 }
 
 type fakeDesktop struct {
-	mu                  sync.Mutex
-	windows             []ObservedWindow
-	attached            map[int]string
-	moves               []string
-	moveErr             error
-	skipMoveObservation bool
+	mu                    sync.Mutex
+	windows               []ObservedWindow
+	attached              map[int]string
+	moves                 []string
+	moveErr               error
+	skipMoveObservation   bool
+	orderActions          []string
+	skipFocusObservation  map[int]bool
+	skipColumnObservation map[int]bool
 }
 
 func (d *fakeDesktop) Windows(context.Context) ([]ObservedWindow, error) {
@@ -71,6 +75,38 @@ func (d *fakeDesktop) MoveToWorkspace(_ context.Context, id int, target Workspac
 		}
 	}
 	return errors.New("window missing")
+}
+func (d *fakeDesktop) FocusWindow(_ context.Context, id int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.orderActions = append(d.orderActions, fmt.Sprintf("focus:%d", id))
+	if d.skipFocusObservation[id] {
+		return nil
+	}
+	found := false
+	for i := range d.windows {
+		d.windows[i].IsFocused = d.windows[i].ID == id
+		found = found || d.windows[i].ID == id
+	}
+	if !found {
+		return errors.New("window missing")
+	}
+	return nil
+}
+func (d *fakeDesktop) MoveColumnToIndex(_ context.Context, column int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.windows {
+		if d.windows[i].IsFocused {
+			d.orderActions = append(d.orderActions, fmt.Sprintf("column:%d:%d", d.windows[i].ID, column))
+			if !d.skipColumnObservation[d.windows[i].ID] {
+				value := column
+				d.windows[i].Column = &value
+			}
+			return nil
+		}
+	}
+	return errors.New("no focused window")
 }
 
 type fakeLauncher struct {
@@ -428,7 +464,7 @@ func TestExecutorMoveFailureLeavesAttachedWindowForSafeRerun(t *testing.T) {
 		t.Fatal("successfully attached terminal was killed after required move failure")
 	}
 	rerun := executor.Apply(context.Background(), plan)
-	if rerun.Items[0].Status != StatusAlreadyOpen || len(launcher.specs) != 1 {
+	if rerun.Items[0].Status != StatusFailed || !strings.Contains(rerun.Items[0].Reason, "left open") || len(launcher.specs) != 1 {
 		t.Fatalf("unsafe rerun: result=%#v launches=%d", rerun.Items[0], len(launcher.specs))
 	}
 }
@@ -490,7 +526,8 @@ func TestExecutorOptionalLayoutFailureDoesNotFalsifyRequiredSuccess(t *testing.T
 	executor := testExecutor(desktop, launcher)
 	executor.Layout = fakeLayout{result: LayoutResult{Status: LayoutDegraded, Reason: "column unsupported"}}
 	item := readyItem("a", "session", "ws")
-	item.CapturedPlacement = &model.Placement{Column: intPointer(2)}
+	floating := false
+	item.CapturedPlacement = &model.Placement{Column: intPointer(2), IsFloating: &floating}
 	got := executor.Apply(context.Background(), Plan{Items: []Item{item}})
 	if got.Items[0].Status != StatusRestored || got.Items[0].LayoutStatus != LayoutDegraded {
 		t.Fatalf("result = %#v", got.Items[0])
@@ -504,6 +541,117 @@ func TestExecutorSuppressesDuplicateReadyItemsWithinExecution(t *testing.T) {
 	got := testExecutor(desktop, launcher).Apply(context.Background(), plan)
 	if got.Items[0].Status != StatusRestored || got.Items[1].Status != StatusAlreadyOpen || len(launcher.specs) != 1 {
 		t.Fatalf("result=%#v launches=%d", got.Items, len(launcher.specs))
+	}
+}
+
+func TestExecutorTwoPhaseRestoresExistingAndNewWindowsThenOrdersColumns(t *testing.T) {
+	columnOne, columnTwo := 1, 2
+	desktop := &fakeDesktop{
+		windows: []ObservedWindow{
+			{ID: 77, PID: 777, AppID: "firefox", WorkspaceID: "other", IsFocused: true},
+			{ID: 88, PID: 888, AppID: "kitty", WorkspaceID: "old"},
+		},
+		attached: map[int]string{888: "existing"},
+	}
+	launcher := &fakeLauncher{desktop: desktop}
+	executor := testExecutor(desktop, launcher)
+	executor.Layout = fakeLayout{result: LayoutResult{Status: LayoutNotRequested}}
+	executor.Orderer = desktop
+
+	newItem := readyItem("new", "new", "ws")
+	newItem.Workspace.Index = 2
+	newItem.CapturedPlacement = &model.Placement{Column: &columnTwo}
+	existing := readyItem("existing", "existing", "ws")
+	existing.Status = StatusAlreadyOpen
+	existing.Workspace.Index = 2
+	existing.CapturedPlacement = &model.Placement{Column: &columnOne}
+
+	got := executor.Apply(context.Background(), Plan{Items: []Item{newItem, existing}})
+	if got.Items[0].Status != StatusRestored || got.Items[1].Status != StatusAlreadyOpen {
+		t.Fatalf("statuses = %#v", got.Items)
+	}
+	if len(launcher.specs) != 1 || !reflect.DeepEqual(desktop.moves, []string{"ws", "ws"}) {
+		t.Fatalf("launches=%d moves=%#v", len(launcher.specs), desktop.moves)
+	}
+	wantOrder := []string{"focus:88", "column:88:1", "focus:2001", "column:2001:2", "focus:77"}
+	if !reflect.DeepEqual(desktop.orderActions, wantOrder) {
+		t.Fatalf("order actions=%#v want=%#v", desktop.orderActions, wantOrder)
+	}
+	if got.Items[0].LayoutStatus != LayoutApplied || got.Items[1].LayoutStatus != LayoutApplied {
+		t.Fatalf("layout statuses = %#v", got.Items)
+	}
+
+	rerun := executor.Apply(context.Background(), Plan{Items: []Item{newItem, existing}})
+	if len(launcher.specs) != 1 || rerun.Items[0].Status != StatusAlreadyOpen || rerun.Items[1].Status != StatusAlreadyOpen {
+		t.Fatalf("rerun launched duplicate or lost attachments: launches=%d items=%#v", len(launcher.specs), rerun.Items)
+	}
+}
+
+func TestExecutorRejectsDuplicateExistingAttachmentsBeforeMutation(t *testing.T) {
+	desktop := &fakeDesktop{
+		windows: []ObservedWindow{
+			{ID: 1, PID: 101, AppID: "kitty", WorkspaceID: "old"},
+			{ID: 2, PID: 102, AppID: "kitty", WorkspaceID: "old"},
+		},
+		attached: map[int]string{101: "same", 102: "same"},
+	}
+	launcher := &fakeLauncher{desktop: desktop}
+	got := testExecutor(desktop, launcher).Apply(context.Background(), Plan{Items: []Item{readyItem("a", "same", "ws")}})
+	if got.Items[0].Status != StatusFailed || !strings.Contains(got.Items[0].Reason, "multiple Niri windows") {
+		t.Fatalf("result=%#v", got.Items[0])
+	}
+	if len(launcher.specs) != 0 || len(desktop.moves) != 0 {
+		t.Fatalf("ambiguous attachment mutated desktop: launches=%d moves=%#v", len(launcher.specs), desktop.moves)
+	}
+}
+
+func TestExecutorOrderingVerificationFailureDegradesOnlyAffectedWorkspace(t *testing.T) {
+	for _, failure := range []string{"focus", "column"} {
+		t.Run(failure, func(t *testing.T) {
+			column := 1
+			desktop := &fakeDesktop{attached: map[int]string{}, skipFocusObservation: map[int]bool{}, skipColumnObservation: map[int]bool{}}
+			launcher := &fakeLauncher{desktop: desktop}
+			executor := testExecutor(desktop, launcher)
+			executor.Layout = fakeLayout{result: LayoutResult{Status: LayoutNotRequested}}
+			executor.Orderer = desktop
+			first := readyItem("a", "first", "ws-a")
+			first.Workspace.Index = 1
+			first.CapturedPlacement = &model.Placement{Column: &column}
+			second := readyItem("b", "second", "ws-b")
+			second.Workspace.Index = 2
+			second.CapturedPlacement = &model.Placement{Column: &column}
+			if failure == "focus" {
+				desktop.skipFocusObservation[2001] = true
+			} else {
+				desktop.skipColumnObservation[2001] = true
+			}
+
+			got := executor.Apply(context.Background(), Plan{Items: []Item{first, second}})
+			if got.Items[0].LayoutStatus != LayoutDegraded || got.Items[1].LayoutStatus != LayoutApplied {
+				t.Fatalf("layout results=%#v", got.Items)
+			}
+			if !strings.Contains(got.Items[0].LayoutReason, "workspace column ordering failed") {
+				t.Fatalf("failure reason=%q", got.Items[0].LayoutReason)
+			}
+		})
+	}
+}
+
+func TestExecutorRejectsCapturedStackedRowsWithoutGuessing(t *testing.T) {
+	column, row := 1, 1
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	executor := testExecutor(desktop, launcher)
+	executor.Layout = fakeLayout{result: LayoutResult{Status: LayoutNotRequested}}
+	executor.Orderer = desktop
+	item := readyItem("a", "stacked", "ws")
+	item.CapturedPlacement = &model.Placement{Column: &column, Row: &row}
+	got := executor.Apply(context.Background(), Plan{Items: []Item{item}})
+	if got.Items[0].Status != StatusRestored || got.Items[0].LayoutStatus != LayoutUnsupported || !strings.Contains(got.Items[0].LayoutReason, "stacked rows") {
+		t.Fatalf("result=%#v", got.Items[0])
+	}
+	if len(desktop.orderActions) != 0 {
+		t.Fatalf("stacked restore guessed ordering actions: %#v", desktop.orderActions)
 	}
 }
 

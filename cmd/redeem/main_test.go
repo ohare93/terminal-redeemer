@@ -15,6 +15,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
 	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/storelock"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
@@ -407,6 +408,25 @@ func TestResumeWaitsForNiriBeforeCheckpointSelection(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "resume_candidate") {
 		t.Fatalf("checkpoint selection ran before Niri readiness: %q", out.String())
+	}
+}
+
+func TestMutatingResumeHonorsRepositoryOperationLock(t *testing.T) {
+	stateDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("stateDir: "+stateDir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := storelock.Acquire(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"--config", configPath, "resume", "--fixture", filepath.Join(t.TempDir(), "missing.json")}, &out, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "resume operation lock failed") || !strings.Contains(stderr.String(), storelock.ErrLocked.Error()) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
 }
 

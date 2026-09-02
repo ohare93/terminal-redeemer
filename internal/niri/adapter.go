@@ -25,6 +25,7 @@ type windowPayload struct {
 	Title       string         `json:"title"`
 	WorkspaceID any            `json:"workspace_id"`
 	PID         int            `json:"pid"`
+	IsFocused   bool           `json:"is_focused"`
 	IsFloating  *bool          `json:"is_floating"`
 	Layout      *layoutPayload `json:"layout"`
 }
@@ -85,6 +86,7 @@ func ParseSnapshot(raw []byte) (model.State, error) {
 			WorkspaceRef: workspaceRef,
 			PID:          window.PID,
 			Title:        window.Title,
+			IsFocused:    window.IsFocused,
 			Placement:    placementFromPayload(window),
 		})
 	}

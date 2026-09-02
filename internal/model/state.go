@@ -27,6 +27,7 @@ type Window struct {
 	WorkspaceRef *WorkspaceRef `json:"workspace_ref,omitempty"`
 	PID          int           `json:"pid,omitempty"`
 	Title        string        `json:"title,omitempty"`
+	IsFocused    bool          `json:"-"`
 	Placement    *Placement    `json:"placement,omitempty"`
 	Terminal     *Terminal     `json:"terminal,omitempty"`
 }

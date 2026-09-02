@@ -27,6 +27,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 	"github.com/jmo/terminal-redeemer/internal/prune"
 	"github.com/jmo/terminal-redeemer/internal/resume"
+	"github.com/jmo/terminal-redeemer/internal/storelock"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
@@ -968,6 +969,15 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return 2
 	}
 
+	if !*dryRun {
+		operationLock, err := storelock.Acquire(*stateDir)
+		if err != nil {
+			writef(stderr, "resume operation lock failed: %v\n", err)
+			return 1
+		}
+		defer func() { _ = operationLock.Close() }()
+	}
+
 	var snapshotter collector.Snapshotter
 	if strings.TrimSpace(*fixture) != "" {
 		snapshotter = niri.FileSnapshotter{Path: *fixture}
@@ -1053,6 +1063,7 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 			Probe:    resume.ProcAttachmentProbe{},
 			Mover:    actions,
 			Layout:   actions,
+			Orderer:  actions,
 		}
 		if *all {
 			executor.Cataloger = resumeCataloger{bootID: currentBootID}

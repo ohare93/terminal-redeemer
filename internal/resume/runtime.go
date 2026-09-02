@@ -39,7 +39,18 @@ func (o SnapshotObserver) Windows(ctx context.Context) ([]ObservedWindow, error)
 		if err != nil {
 			continue
 		}
-		out = append(out, ObservedWindow{ID: id, PID: window.PID, AppID: window.AppID, WorkspaceID: window.WorkspaceID})
+		observed := ObservedWindow{ID: id, PID: window.PID, AppID: window.AppID, WorkspaceID: window.WorkspaceID, IsFocused: window.IsFocused}
+		if window.Placement != nil {
+			if window.Placement.Column != nil {
+				column := *window.Placement.Column
+				observed.Column = &column
+			}
+			if window.Placement.Row != nil {
+				row := *window.Placement.Row
+				observed.Row = &row
+			}
+		}
+		out = append(out, observed)
 	}
 	return out, nil
 }
@@ -123,11 +134,7 @@ func (a NiriActions) ApplyLayout(ctx context.Context, windowID int, placement mo
 		return LayoutResult{Status: LayoutDegraded, Reason: "invalid window ID for optional layout"}
 	}
 	requested := 0
-	failures := make([]string, 0, 4)
-	if placement.Column != nil {
-		requested++
-		failures = append(failures, "column order unsupported without focus/order heuristics")
-	}
+	failures := make([]string, 0, 3)
 	if placement.IsFloating != nil {
 		requested++
 		action := "move-window-to-tiling"
@@ -156,6 +163,20 @@ func (a NiriActions) ApplyLayout(ctx context.Context, windowID int, placement mo
 		return LayoutResult{Status: LayoutDegraded, Reason: strings.Join(failures, "; ")}
 	}
 	return LayoutResult{Status: LayoutApplied}
+}
+
+func (a NiriActions) FocusWindow(ctx context.Context, windowID int) error {
+	if windowID <= 0 {
+		return fmt.Errorf("invalid Niri window focus")
+	}
+	return a.runner().Run(ctx, "focus-window", "--id", strconv.Itoa(windowID))
+}
+
+func (a NiriActions) MoveColumnToIndex(ctx context.Context, index int) error {
+	if index < 0 {
+		return fmt.Errorf("invalid Niri column index")
+	}
+	return a.runner().Run(ctx, "move-column-to-index", strconv.Itoa(index))
 }
 
 func (a NiriActions) runner() ActionRunner {

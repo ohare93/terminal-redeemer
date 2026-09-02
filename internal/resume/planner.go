@@ -228,6 +228,11 @@ func (p *Planner) Build(selection Selection, current model.State, availableSessi
 			item.Reason = "matching Zellij session is already open in a terminal window"
 			item.CurrentWindowKey = window.Key
 			item.CurrentWindowID, _ = runtimeWindowID(window.Key)
+			if target, resolved := ResolveWorkspace(item.CapturedWorkspace, current.Workspaces); resolved {
+				item.Workspace = &target
+			} else {
+				item.PlacementWarning = "captured workspace cannot be resolved; existing window is retained"
+			}
 			plan.Items = append(plan.Items, item)
 			continue
 		}

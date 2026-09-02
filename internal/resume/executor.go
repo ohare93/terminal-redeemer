@@ -3,8 +3,10 @@ package resume
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +47,9 @@ type ObservedWindow struct {
 	PID         int
 	AppID       string
 	WorkspaceID string
+	Column      *int
+	Row         *int
+	IsFocused   bool
 }
 
 type WindowObserver interface {
@@ -68,6 +73,11 @@ type LayoutApplier interface {
 	ApplyLayout(context.Context, int, model.Placement) LayoutResult
 }
 
+type ColumnOrderer interface {
+	FocusWindow(context.Context, int) error
+	MoveColumnToIndex(context.Context, int) error
+}
+
 type Sleeper interface {
 	Sleep(context.Context, time.Duration) error
 }
@@ -86,56 +96,151 @@ type Executor struct {
 	Probe     AttachmentProbe
 	Mover     WorkspaceMover
 	Layout    LayoutApplier
+	Orderer   ColumnOrderer
 	Sleeper   Sleeper
 	Cataloger zellijlive.Cataloger
 	Now       func() time.Time
 }
 
-// Apply executes actionable plan items sequentially. Sequential execution is
-// intentional: it keeps process ownership and exact PID correlation local to
-// one item while unrelated windows may appear freely.
+// Apply performs reconciliation in two phases. The first phase verifies and
+// attaches every target window, preserving the sequential exact-PID launch
+// path. Only after all possible targets exist does the second phase order
+// columns by exact window ID.
 func (e Executor) Apply(ctx context.Context, plan Plan) Plan {
 	plan.Items = append([]Item(nil), plan.Items...)
+	if err := e.validate(); err != nil {
+		for i := range plan.Items {
+			if actionable(plan.Items[i].Status) {
+				plan.Items[i].Status = StatusFailed
+				plan.Items[i].Reason = err.Error()
+			}
+		}
+		return resummarize(plan)
+	}
+
+	initial, focusedID := e.mapExisting(ctx, &plan)
+	claimed := make(map[string]ObservedWindow)
+	targets := make([]attachedTarget, 0, len(plan.Items))
 	for i := range plan.Items {
 		item := &plan.Items[i]
-		if item.Status != StatusReady && item.Status != StatusDegraded {
+		if !actionable(item.Status) {
 			continue
 		}
-		e.applyItem(ctx, item, plan.CapturedAt)
+		window, ok := initial[i]
+		if !ok {
+			window, ok = claimed[item.Session]
+		}
+		if !ok {
+			matches, err := e.sessionWindows(ctx, item.Session)
+			if err != nil {
+				item.Status = StatusFailed
+				item.Reason = "cannot safely check for an already-open session: " + err.Error()
+				continue
+			}
+			if len(matches) > 1 {
+				item.Status = StatusFailed
+				item.Reason = "multiple Niri windows have exact attachment evidence for this Zellij session"
+				continue
+			}
+			if len(matches) == 1 {
+				window, ok = matches[0], true
+			}
+		}
+
+		var process Process
+		newWindow := false
+		if !ok {
+			window, process, ok = e.launchItem(ctx, item, plan.CapturedAt)
+			newWindow = ok
+			if !ok {
+				continue
+			}
+		} else {
+			item.Status = StatusAlreadyOpen
+			item.Reason = "matching Zellij session is already open in exactly one verified Niri window"
+			item.CurrentWindowKey = fmt.Sprintf("w:%s:%d", window.AppID, window.ID)
+			item.CurrentWindowID = window.ID
+		}
+		claimed[item.Session] = window
+
+		if !e.placeAttached(ctx, item, window, process, newWindow) {
+			continue
+		}
+		e.applyOptionalLayout(ctx, item, window.ID)
+		targets = append(targets, attachedTarget{item: i, window: window})
 	}
+
+	e.orderColumns(ctx, &plan, targets, focusedID)
+	return resummarize(plan)
+}
+
+type attachedTarget struct {
+	item   int
+	window ObservedWindow
+}
+
+func actionable(status Status) bool {
+	return status == StatusReady || status == StatusDegraded || status == StatusAlreadyOpen
+}
+
+func resummarize(plan Plan) Plan {
 	plan.Summary = Summary{}
 	plan.summarize()
 	return plan
 }
 
-func (e Executor) applyItem(ctx context.Context, item *Item, recoveryObservedAt time.Time) {
-	if err := e.validate(); err != nil {
-		item.Status = StatusFailed
-		item.Reason = err.Error()
-		return
-	}
-
-	open, err := e.sessionAlreadyOpen(ctx, item.Session)
+// mapExisting is a mutation-free preflight. In particular, ambiguous existing
+// attachments are rejected before any window for that item is launched or moved.
+func (e Executor) mapExisting(ctx context.Context, plan *Plan) (map[int]ObservedWindow, int) {
+	mapped := make(map[int]ObservedWindow)
+	windows, err := e.Observer.Windows(ctx)
 	if err != nil {
-		item.Status = StatusFailed
-		item.Reason = "cannot safely check for an already-open session: " + err.Error()
-		return
+		for i := range plan.Items {
+			if actionable(plan.Items[i].Status) {
+				plan.Items[i].Status = StatusFailed
+				plan.Items[i].Reason = "cannot observe existing Niri windows: " + err.Error()
+			}
+		}
+		return mapped, 0
 	}
-	if open {
-		item.Status = StatusAlreadyOpen
-		item.Reason = "matching Zellij session became open before launch"
-		return
+	focusedID := 0
+	for _, window := range windows {
+		if window.IsFocused {
+			focusedID = window.ID
+		}
 	}
+	for i := range plan.Items {
+		item := &plan.Items[i]
+		if !actionable(item.Status) {
+			continue
+		}
+		matches, probeErr := e.sessionWindowsFrom(ctx, windows, item.Session)
+		if probeErr != nil {
+			item.Status = StatusFailed
+			item.Reason = "cannot verify existing session attachment: " + probeErr.Error()
+			continue
+		}
+		switch len(matches) {
+		case 1:
+			mapped[i] = matches[0]
+		case 0:
+		default:
+			item.Status = StatusFailed
+			item.Reason = "multiple Niri windows have exact attachment evidence for this Zellij session"
+		}
+	}
+	return mapped, focusedID
+}
 
-	spec := KittyLaunchSpec(e.Config.LauncherCommand, *item)
+func (e Executor) launchItem(ctx context.Context, item *Item, recoveryObservedAt time.Time) (ObservedWindow, Process, bool) {
 	if !e.revalidateAllCandidate(ctx, item, recoveryObservedAt) {
-		return
+		return ObservedWindow{}, nil, false
 	}
-	process, err := e.Launcher.Start(ctx, spec)
+	process, err := e.Launcher.Start(ctx, KittyLaunchSpec(e.Config.LauncherCommand, *item))
 	if err != nil {
 		item.Status = StatusFailed
 		item.Reason = "Kitty launch failed: " + err.Error()
-		return
+		return ObservedWindow{}, nil, false
 	}
 	if process == nil || process.PID() <= 0 || process.Done() == nil {
 		if process != nil {
@@ -143,58 +248,60 @@ func (e Executor) applyItem(ctx context.Context, item *Item, recoveryObservedAt 
 		}
 		item.Status = StatusFailed
 		item.Reason = "launcher does not provide a reliable client PID for Niri correlation"
-		return
+		return ObservedWindow{}, nil, false
 	}
-
 	window, outcome, reason := e.waitForWindow(ctx, process)
 	if outcome != "" {
 		_ = process.Kill()
-		item.Status = outcome
-		item.Reason = reason
-		return
+		item.Status, item.Reason = outcome, reason
+		return ObservedWindow{}, nil, false
 	}
-
 	attached, outcome, reason := e.waitForAttachment(ctx, process, item.Session)
 	if !attached {
 		_ = process.Kill()
-		item.Status = outcome
-		item.Reason = reason
-		return
+		item.Status, item.Reason = outcome, reason
+		return ObservedWindow{}, nil, false
 	}
+	return window, process, true
+}
 
-	wasDegraded := item.Status == StatusDegraded
-	if !wasDegraded {
-		if item.Workspace == nil {
-			_ = process.Kill()
+func (e Executor) placeAttached(ctx context.Context, item *Item, window ObservedWindow, process Process, newWindow bool) bool {
+	if item.Workspace == nil {
+		if item.Status == StatusReady {
+			if process != nil {
+				_ = process.Kill()
+			}
 			item.Status = StatusFailed
 			item.Reason = "ready item has no resolved workspace target"
-			return
+			return false
 		}
-		moveCtx, cancel := context.WithTimeout(ctx, e.timeout())
-		err = e.Mover.MoveToWorkspace(moveCtx, window.ID, *item.Workspace)
-		cancel()
-		if err != nil {
-			// Attachment succeeded. Keep the terminal open so a rerun observes it
-			// as already_open instead of creating a duplicate.
-			item.Status = StatusFailed
-			item.Reason = "workspace move failed; attached terminal left open: " + err.Error()
-			return
+		if newWindow {
+			item.Status = StatusDegraded
+			if item.Reason == "" {
+				item.Reason = "session attached without a resolved workspace target"
+			}
 		}
-		if ok, reason := e.waitForWorkspace(ctx, process, window, item.Workspace.ID); !ok {
-			item.Status = StatusFailed
-			item.Reason = reason + "; attached terminal left open"
-			return
-		}
-		item.Status = StatusRestored
-		item.Reason = ""
-	} else {
-		item.Status = StatusDegraded
-		if item.Reason == "" {
-			item.Reason = "session attached without a resolved workspace target"
-		}
+		return true
 	}
 
-	e.applyOptionalLayout(ctx, item, window.ID)
+	moveCtx, cancel := context.WithTimeout(ctx, e.timeout())
+	err := e.Mover.MoveToWorkspace(moveCtx, window.ID, *item.Workspace)
+	cancel()
+	if err != nil {
+		item.Status = StatusFailed
+		item.Reason = "workspace move failed; attached terminal left open: " + err.Error()
+		return false
+	}
+	if ok, reason := e.waitForWorkspace(ctx, process, window, item.Workspace.ID); !ok {
+		item.Status = StatusFailed
+		item.Reason = reason + "; attached terminal left open"
+		return false
+	}
+	if newWindow {
+		item.Status = StatusRestored
+		item.Reason = ""
+	}
+	return true
 }
 
 func (e Executor) revalidateAllCandidate(ctx context.Context, item *Item, recoveryObservedAt time.Time) bool {
@@ -270,24 +377,29 @@ func (e Executor) validate() error {
 	return nil
 }
 
-func (e Executor) sessionAlreadyOpen(ctx context.Context, session string) (bool, error) {
+func (e Executor) sessionWindows(ctx context.Context, session string) ([]ObservedWindow, error) {
 	windows, err := e.Observer.Windows(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
+	return e.sessionWindowsFrom(ctx, windows, session)
+}
+
+func (e Executor) sessionWindowsFrom(ctx context.Context, windows []ObservedWindow, session string) ([]ObservedWindow, error) {
+	matches := make([]ObservedWindow, 0, 1)
 	for _, window := range windows {
-		if !isTerminal(window.AppID) || window.PID <= 0 {
+		if !isTerminal(window.AppID) || window.PID <= 0 || window.ID <= 0 {
 			continue
 		}
 		attached, err := e.Probe.Attached(ctx, window.PID, session)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if attached {
-			return true, nil
+			matches = append(matches, window)
 		}
 	}
-	return false, nil
+	return matches, nil
 }
 
 func (e Executor) waitForWindow(ctx context.Context, process Process) (ObservedWindow, Status, string) {
@@ -371,31 +483,194 @@ func (e Executor) waitForAttachment(ctx context.Context, process Process, sessio
 }
 
 func (e Executor) waitForWorkspace(ctx context.Context, process Process, expected ObservedWindow, workspaceID string) (bool, string) {
+	return e.waitForObserved(ctx, process, expected, func(window ObservedWindow) bool {
+		return window.WorkspaceID == workspaceID
+	}, "workspace movement")
+}
+
+func (e Executor) waitForObserved(ctx context.Context, process Process, expected ObservedWindow, matches func(ObservedWindow) bool, description string) (bool, string) {
 	waitCtx, cancel := context.WithTimeout(ctx, e.timeout())
 	defer cancel()
 	var lastErr error
 	for {
-		select {
-		case err := <-process.Done():
-			return false, processExitReason("attached terminal exited before workspace movement was observed", err)
-		default:
+		if process != nil {
+			select {
+			case err := <-process.Done():
+				return false, processExitReason("attached terminal exited before "+description+" was observed", err)
+			default:
+			}
 		}
 		windows, err := e.Observer.Windows(waitCtx)
 		if err != nil {
 			lastErr = err
 		} else {
 			for _, window := range windows {
-				if window.ID == expected.ID && window.PID == expected.PID && window.WorkspaceID == workspaceID {
+				if window.ID == expected.ID && (expected.PID <= 0 || window.PID == expected.PID) && matches(window) {
 					return true, ""
 				}
 			}
 		}
 		if err := e.sleep(waitCtx); err != nil {
 			if lastErr != nil {
-				return false, "workspace movement could not be verified: " + lastErr.Error()
+				return false, description + " could not be verified: " + lastErr.Error()
 			}
-			return false, "workspace movement was not observed before timeout"
+			return false, description + " was not observed before timeout"
 		}
+	}
+}
+
+func (e Executor) orderColumns(ctx context.Context, plan *Plan, targets []attachedTarget, focusedID int) {
+	ordered := make([]attachedTarget, 0, len(targets))
+	for _, target := range targets {
+		item := &plan.Items[target.item]
+		if item.CapturedPlacement == nil || item.CapturedPlacement.Column == nil {
+			continue
+		}
+		if item.Workspace == nil {
+			markColumnResult(item, LayoutUnsupported, "column order requires a resolved workspace")
+			continue
+		}
+		ordered = append(ordered, target)
+	}
+	if len(ordered) == 0 {
+		return
+	}
+	if e.Orderer == nil {
+		for _, target := range ordered {
+			markColumnResult(&plan.Items[target.item], LayoutUnsupported, "verified Niri column ordering is unavailable")
+		}
+		return
+	}
+
+	if focusedID > 0 {
+		defer func() {
+			restoreCtx, cancel := context.WithTimeout(ctx, e.timeout())
+			defer cancel()
+			if e.Orderer.FocusWindow(restoreCtx, focusedID) == nil {
+				_, _ = e.waitForObserved(restoreCtx, nil, ObservedWindow{ID: focusedID}, func(window ObservedWindow) bool {
+					return window.IsFocused
+				}, "focus restoration")
+			}
+		}()
+	}
+
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := plan.Items[ordered[i].item], plan.Items[ordered[j].item]
+		if workspaceLess(left.Workspace, right.Workspace) {
+			return true
+		}
+		if workspaceLess(right.Workspace, left.Workspace) {
+			return false
+		}
+		if *left.CapturedPlacement.Column != *right.CapturedPlacement.Column {
+			return *left.CapturedPlacement.Column < *right.CapturedPlacement.Column
+		}
+		return left.Session < right.Session
+	})
+
+	for start := 0; start < len(ordered); {
+		workspaceID := plan.Items[ordered[start].item].Workspace.ID
+		end := start + 1
+		for end < len(ordered) && plan.Items[ordered[end].item].Workspace.ID == workspaceID {
+			end++
+		}
+		group := ordered[start:end]
+		if reason := stackedReason(plan, group); reason != "" {
+			for _, target := range group {
+				markColumnResult(&plan.Items[target.item], LayoutUnsupported, reason)
+			}
+			start = end
+			continue
+		}
+
+		var orderErr error
+		for _, target := range group {
+			item := &plan.Items[target.item]
+			column := *item.CapturedPlacement.Column
+			actionCtx, cancel := context.WithTimeout(ctx, e.timeout())
+			err := e.Orderer.FocusWindow(actionCtx, target.window.ID)
+			cancel()
+			if err != nil {
+				orderErr = fmt.Errorf("focus exact window %d: %w", target.window.ID, err)
+				break
+			}
+			if ok, reason := e.waitForObserved(ctx, nil, target.window, func(window ObservedWindow) bool { return window.IsFocused }, "exact focus"); !ok {
+				orderErr = errors.New(reason)
+				break
+			}
+			actionCtx, cancel = context.WithTimeout(ctx, e.timeout())
+			err = e.Orderer.MoveColumnToIndex(actionCtx, column)
+			cancel()
+			if err != nil {
+				orderErr = fmt.Errorf("move focused column to index %d: %w", column, err)
+				break
+			}
+			if ok, reason := e.waitForObserved(ctx, nil, target.window, func(window ObservedWindow) bool {
+				return window.IsFocused && window.Column != nil && *window.Column == column
+			}, "column move and exact focus"); !ok {
+				orderErr = errors.New(reason)
+				break
+			}
+		}
+		if orderErr != nil {
+			for _, target := range group {
+				markColumnResult(&plan.Items[target.item], LayoutDegraded, "workspace column ordering failed: "+orderErr.Error())
+			}
+		} else {
+			for _, target := range group {
+				markColumnResult(&plan.Items[target.item], LayoutApplied, "")
+			}
+		}
+		start = end
+	}
+}
+
+func workspaceLess(left, right *WorkspaceTarget) bool {
+	if left.Index != right.Index {
+		return left.Index < right.Index
+	}
+	if left.Output != right.Output {
+		return left.Output < right.Output
+	}
+	if left.Name != right.Name {
+		return left.Name < right.Name
+	}
+	return left.ID < right.ID
+}
+
+func stackedReason(plan *Plan, group []attachedTarget) string {
+	columns := make(map[int]struct{}, len(group))
+	for _, target := range group {
+		placement := plan.Items[target.item].CapturedPlacement
+		if placement.Row != nil && *placement.Row > 0 {
+			return "captured stacked rows are unsupported without consume or expel actions"
+		}
+		column := *placement.Column
+		if _, exists := columns[column]; exists {
+			return "captured stacked rows are unsupported without consume or expel actions"
+		}
+		columns[column] = struct{}{}
+	}
+	return ""
+}
+
+func markColumnResult(item *Item, status LayoutStatus, reason string) {
+	if status == LayoutApplied {
+		if item.LayoutStatus == LayoutNotRequested || item.LayoutStatus == "" {
+			item.LayoutStatus = LayoutApplied
+		}
+		return
+	}
+	if status == LayoutDegraded || item.LayoutStatus == LayoutDegraded {
+		item.LayoutStatus = LayoutDegraded
+	} else {
+		item.LayoutStatus = status
+	}
+	if reason != "" {
+		if item.LayoutReason != "" {
+			item.LayoutReason += "; "
+		}
+		item.LayoutReason += reason
 	}
 }
 
@@ -404,9 +679,14 @@ func (e Executor) applyOptionalLayout(ctx context.Context, item *Item, windowID 
 		item.LayoutStatus = LayoutNotRequested
 		return
 	}
+	_, _, haveSize := preferredSize(*item.CapturedPlacement)
+	if item.CapturedPlacement.IsFloating == nil && !haveSize {
+		item.LayoutStatus = LayoutNotRequested
+		return
+	}
 	if e.Layout == nil {
 		item.LayoutStatus = LayoutUnsupported
-		item.LayoutReason = "optional Niri layout actions are unavailable"
+		item.LayoutReason = "optional Niri floating and sizing actions are unavailable"
 		return
 	}
 	layoutCtx, cancel := context.WithTimeout(ctx, e.timeout())

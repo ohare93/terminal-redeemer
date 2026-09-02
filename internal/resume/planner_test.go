@@ -67,7 +67,10 @@ func TestPlannerReconcilesAlreadyOpenDuplicateUnavailableAndReady(t *testing.T) 
 	}
 
 	plan := NewPlanner(PlannerConfig{UnresolvedWorkspace: UnresolvedSkip}).Build(selection, current, []string{"open", "duplicate", "ready"})
-	assertItemStatus(t, plan, "w-open-a", StatusAlreadyOpen)
+	openItem := assertItemStatus(t, plan, "w-open-a", StatusAlreadyOpen)
+	if openItem.Workspace == nil || openItem.Workspace.ID != "runtime-dev" {
+		t.Fatalf("already-open workspace target = %#v", openItem.Workspace)
+	}
 	assertItemStatus(t, plan, "w-open-b", StatusSkipped)
 	assertItemStatus(t, plan, "w-duplicate-a", StatusReady)
 	assertItemStatus(t, plan, "w-duplicate-b", StatusSkipped)
