@@ -326,6 +326,69 @@ func TestResumeAllDryRunUsesExactCatalogStickyInventoryAndDetailedReasons(t *tes
 	}
 }
 
+func TestResumeAllExecutionReobservesStalePriorActiveBeforeLaunch(t *testing.T) {
+	root := t.TempDir()
+	observed := time.Now().UTC().Add(-72 * time.Hour)
+	state := model.State{}
+	recovery := model.RecoveryInventory{
+		ActiveSessions: []string{"prior-active"},
+		Sessions:       []model.RecoverySession{{Name: "prior-active"}},
+	}
+	hash, err := state.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrityHash, err := checkpoints.RecoveryIntegrityHash(state, recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := checkpoints.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Write(checkpoints.Checkpoint{
+		V: checkpoints.SchemaVersion, BootID: "prior-boot", Host: "local", Profile: "default", ObservedAt: observed,
+		State: state, StateHash: hash, Recovery: recovery, IntegrityHash: integrityHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(t.TempDir(), "niri.json")
+	if err := os.WriteFile(fixture, []byte(`{"workspaces":[],"windows":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("stateDir: "+root+"\nhost: local\nprofile: default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalObserve := observeResumeCatalog
+	calls := 0
+	observeResumeCatalog = func(context.Context, string) (zellijlive.Catalog, error) {
+		calls++
+		status := zellijlive.StatusActive
+		if calls > 1 {
+			status = zellijlive.StatusDeadResurrectable
+		}
+		return zellijlive.Catalog{
+			Names:    []string{"prior-active"},
+			Sessions: map[string]zellijlive.Session{"prior-active": {Name: "prior-active", Status: status}},
+		}, nil
+	}
+	t.Cleanup(func() { observeResumeCatalog = originalObserve })
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"--config", configPath, "resume", "--all", "--fixture", fixture, "--max-age", "24h"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
+	}
+	if calls != 2 {
+		t.Fatalf("catalog observations=%d want 2", calls)
+	}
+	if !strings.Contains(out.String(), `session="prior-active" status=unavailable`) || !strings.Contains(out.String(), "resurrection is blocked") {
+		t.Fatalf("status change was not blocked: %s", out.String())
+	}
+}
+
 func TestResumeWaitsForNiriBeforeCheckpointSelection(t *testing.T) {
 	stateDir := t.TempDir()
 	missingFixture := filepath.Join(t.TempDir(), "not-ready.json")

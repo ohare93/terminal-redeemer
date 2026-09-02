@@ -929,6 +929,12 @@ var observeResumeCatalog = func(ctx context.Context, bootID string) (zellijlive.
 	return (zellijlive.CommandCataloger{BootID: bootID}).Observe(ctx)
 }
 
+type resumeCataloger struct{ bootID string }
+
+func (cataloger resumeCataloger) Observe(ctx context.Context) (zellijlive.Catalog, error) {
+	return observeResumeCatalog(ctx, cataloger.bootID)
+}
+
 func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1041,12 +1047,15 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	if !*dryRun && needsLiveInventory {
 		actions := resume.NiriActions{Runner: resume.ExecActionRunner{Command: "niri"}}
 		executor := resume.Executor{
-			Config:   resume.ExecutorConfig{LauncherCommand: *launcher, Timeout: *timeout, PollInterval: *pollInterval},
+			Config:   resume.ExecutorConfig{LauncherCommand: *launcher, Timeout: *timeout, PollInterval: *pollInterval, RecoveryMaxAge: *maxAge},
 			Launcher: resume.ExecLauncher{},
 			Observer: resume.SnapshotObserver{Source: snapshotter},
 			Probe:    resume.ProcAttachmentProbe{},
 			Mover:    actions,
 			Layout:   actions,
+		}
+		if *all {
+			executor.Cataloger = resumeCataloger{bootID: currentBootID}
 		}
 		plan = executor.Apply(context.Background(), plan)
 	}

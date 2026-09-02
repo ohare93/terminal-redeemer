@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 type LayoutStatus string
@@ -75,16 +76,19 @@ type ExecutorConfig struct {
 	LauncherCommand string
 	Timeout         time.Duration
 	PollInterval    time.Duration
+	RecoveryMaxAge  time.Duration
 }
 
 type Executor struct {
-	Config   ExecutorConfig
-	Launcher Launcher
-	Observer WindowObserver
-	Probe    AttachmentProbe
-	Mover    WorkspaceMover
-	Layout   LayoutApplier
-	Sleeper  Sleeper
+	Config    ExecutorConfig
+	Launcher  Launcher
+	Observer  WindowObserver
+	Probe     AttachmentProbe
+	Mover     WorkspaceMover
+	Layout    LayoutApplier
+	Sleeper   Sleeper
+	Cataloger zellijlive.Cataloger
+	Now       func() time.Time
 }
 
 // Apply executes actionable plan items sequentially. Sequential execution is
@@ -97,14 +101,14 @@ func (e Executor) Apply(ctx context.Context, plan Plan) Plan {
 		if item.Status != StatusReady && item.Status != StatusDegraded {
 			continue
 		}
-		e.applyItem(ctx, item)
+		e.applyItem(ctx, item, plan.CapturedAt)
 	}
 	plan.Summary = Summary{}
 	plan.summarize()
 	return plan
 }
 
-func (e Executor) applyItem(ctx context.Context, item *Item) {
+func (e Executor) applyItem(ctx context.Context, item *Item, recoveryObservedAt time.Time) {
 	if err := e.validate(); err != nil {
 		item.Status = StatusFailed
 		item.Reason = err.Error()
@@ -124,6 +128,9 @@ func (e Executor) applyItem(ctx context.Context, item *Item) {
 	}
 
 	spec := KittyLaunchSpec(e.Config.LauncherCommand, *item)
+	if !e.revalidateAllCandidate(ctx, item, recoveryObservedAt) {
+		return
+	}
 	process, err := e.Launcher.Start(ctx, spec)
 	if err != nil {
 		item.Status = StatusFailed
@@ -188,6 +195,66 @@ func (e Executor) applyItem(ctx context.Context, item *Item) {
 	}
 
 	e.applyOptionalLayout(ctx, item, window.ID)
+}
+
+func (e Executor) revalidateAllCandidate(ctx context.Context, item *Item, recoveryObservedAt time.Time) bool {
+	if item.CandidateSource == "" {
+		return true
+	}
+	if e.Cataloger == nil {
+		item.Status = StatusFailed
+		item.Reason = "exact Zellij catalog re-observation is unavailable before resume --all launch"
+		return false
+	}
+	observeCtx, cancel := context.WithTimeout(ctx, e.timeout())
+	catalog, err := e.Cataloger.Observe(observeCtx)
+	cancel()
+	if err != nil {
+		item.Status = StatusFailed
+		item.Reason = "exact Zellij catalog re-observation failed before launch: " + err.Error()
+		return false
+	}
+	live := catalog.Exact(item.Session)
+	switch zellijlive.Status(item.ZellijStatus) {
+	case zellijlive.StatusActive:
+		if live.Status != zellijlive.StatusActive {
+			item.Status = StatusUnavailable
+			item.Reason = "planned active session changed to exact Zellij safety status " + string(live.Status) + "; resurrection is blocked"
+			return false
+		}
+	case zellijlive.StatusDeadResurrectable:
+		if item.CandidateSource != CandidateSourcePriorActive {
+			item.Status = StatusUnavailable
+			item.Reason = "dead-session resurrection is not permitted by candidate source " + item.CandidateSource
+			return false
+		}
+		switch live.Status {
+		case zellijlive.StatusActive:
+			// A previously eligible dead prior-active session may become active.
+		case zellijlive.StatusDeadResurrectable:
+			if e.Config.RecoveryMaxAge <= 0 || recoveryObservedAt.IsZero() || checkpointAge(recoveryObservedAt, e.now()) > e.Config.RecoveryMaxAge {
+				item.Status = StatusStale
+				item.Reason = "dead-resurrectable prior-active session blocked because recovery point exceeds maximum age"
+				return false
+			}
+		default:
+			item.Status = StatusUnavailable
+			item.Reason = "prior-active session changed to exact Zellij safety status " + string(live.Status)
+			return false
+		}
+	default:
+		item.Status = StatusUnavailable
+		item.Reason = "planned resume --all item lacks a permitted exact Zellij safety status"
+		return false
+	}
+	return true
+}
+
+func (e Executor) now() time.Time {
+	if e.Now != nil {
+		return e.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (e Executor) validate() error {

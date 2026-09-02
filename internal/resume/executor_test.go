@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 type fakeProcess struct {
@@ -112,6 +113,27 @@ type fakeLayout struct{ result LayoutResult }
 
 func (l fakeLayout) ApplyLayout(context.Context, int, model.Placement) LayoutResult { return l.result }
 
+type sequenceCataloger struct {
+	catalogs []zellijlive.Catalog
+	err      error
+	calls    int
+}
+
+func (c *sequenceCataloger) Observe(context.Context) (zellijlive.Catalog, error) {
+	c.calls++
+	if c.err != nil {
+		return zellijlive.Catalog{}, c.err
+	}
+	if len(c.catalogs) == 0 {
+		return zellijlive.Catalog{}, nil
+	}
+	index := c.calls - 1
+	if index >= len(c.catalogs) {
+		index = len(c.catalogs) - 1
+	}
+	return c.catalogs[index], nil
+}
+
 type probeObservation struct {
 	attached bool
 	err      error
@@ -160,6 +182,80 @@ func testExecutor(desktop *fakeDesktop, launcher *fakeLauncher) Executor {
 
 func readyItem(key, session, workspace string) Item {
 	return Item{WindowKey: key, AppID: "kitty", Session: session, CWD: "/tmp/" + session, Status: StatusReady, Workspace: &WorkspaceTarget{ID: workspace, Name: workspace}}
+}
+
+func TestExecutorAllReobservesExactCatalogBeforeEachLaunch(t *testing.T) {
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	cataloger := &sequenceCataloger{catalogs: []zellijlive.Catalog{
+		testCatalog(zellijlive.Session{Name: "first", Status: zellijlive.StatusActive}),
+		testCatalog(zellijlive.Session{Name: "second", Status: zellijlive.StatusActive}),
+	}}
+	executor := testExecutor(desktop, launcher)
+	executor.Cataloger = cataloger
+	executor.Config.RecoveryMaxAge = time.Hour
+	executor.Now = func() time.Time { return now }
+	first := readyItem("a", "first", "ws-a")
+	first.CandidateSource, first.ZellijStatus = CandidateSourceCurrentActive, string(zellijlive.StatusActive)
+	second := readyItem("b", "second", "ws-b")
+	second.CandidateSource, second.ZellijStatus = CandidateSourceCurrentActive, string(zellijlive.StatusActive)
+
+	got := executor.Apply(context.Background(), Plan{CapturedAt: now.Add(-time.Minute), Items: []Item{first, second}})
+	if got.Summary.Restored != 2 || cataloger.calls != 2 || len(launcher.specs) != 2 {
+		t.Fatalf("result=%#v catalog_calls=%d launches=%d", got, cataloger.calls, len(launcher.specs))
+	}
+}
+
+func TestExecutorAllBlocksPlannedActiveThatBecomesDead(t *testing.T) {
+	now := time.Now().UTC()
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	executor := testExecutor(desktop, launcher)
+	executor.Cataloger = &sequenceCataloger{catalogs: []zellijlive.Catalog{testCatalog(zellijlive.Session{Name: "session", Status: zellijlive.StatusDeadResurrectable})}}
+	executor.Config.RecoveryMaxAge = 24 * time.Hour
+	executor.Now = func() time.Time { return now }
+	item := readyItem("a", "session", "ws")
+	item.CandidateSource, item.ZellijStatus = CandidateSourcePriorActive, string(zellijlive.StatusActive)
+
+	got := executor.Apply(context.Background(), Plan{CapturedAt: now.Add(-72 * time.Hour), Items: []Item{item}})
+	if got.Items[0].Status != StatusUnavailable || !strings.Contains(got.Items[0].Reason, "resurrection is blocked") || len(launcher.specs) != 0 {
+		t.Fatalf("result=%#v launches=%d", got.Items[0], len(launcher.specs))
+	}
+}
+
+func TestExecutorAllAllowsEligiblePlannedDeadThatBecomesActive(t *testing.T) {
+	now := time.Now().UTC()
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	executor := testExecutor(desktop, launcher)
+	executor.Cataloger = &sequenceCataloger{catalogs: []zellijlive.Catalog{testCatalog(zellijlive.Session{Name: "session", Status: zellijlive.StatusActive})}}
+	executor.Config.RecoveryMaxAge = time.Hour
+	executor.Now = func() time.Time { return now }
+	item := readyItem("a", "session", "ws")
+	item.CandidateSource, item.ZellijStatus = CandidateSourcePriorActive, string(zellijlive.StatusDeadResurrectable)
+
+	got := executor.Apply(context.Background(), Plan{CapturedAt: now.Add(-time.Minute), Items: []Item{item}})
+	if got.Items[0].Status != StatusRestored || len(launcher.specs) != 1 {
+		t.Fatalf("result=%#v launches=%d", got.Items[0], len(launcher.specs))
+	}
+}
+
+func TestExecutorAllRechecksPriorRecoveryAgeForDeadSession(t *testing.T) {
+	now := time.Now().UTC()
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	executor := testExecutor(desktop, launcher)
+	executor.Cataloger = &sequenceCataloger{catalogs: []zellijlive.Catalog{testCatalog(zellijlive.Session{Name: "session", Status: zellijlive.StatusDeadResurrectable})}}
+	executor.Config.RecoveryMaxAge = time.Hour
+	executor.Now = func() time.Time { return now }
+	item := readyItem("a", "session", "ws")
+	item.CandidateSource, item.ZellijStatus = CandidateSourcePriorActive, string(zellijlive.StatusDeadResurrectable)
+
+	got := executor.Apply(context.Background(), Plan{CapturedAt: now.Add(-time.Hour - time.Second), Items: []Item{item}})
+	if got.Items[0].Status != StatusStale || !strings.Contains(got.Items[0].Reason, "exceeds maximum age") || len(launcher.specs) != 0 {
+		t.Fatalf("result=%#v launches=%d", got.Items[0], len(launcher.specs))
+	}
 }
 
 func TestExecutorRestoresMultipleSessionsByExactPIDAndRerunIsIdempotent(t *testing.T) {

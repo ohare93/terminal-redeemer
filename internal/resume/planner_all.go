@@ -136,11 +136,17 @@ func (p *Planner) BuildAll(selection Selection, current model.State, catalog zel
 		switch live.Status {
 		case zellijlive.StatusActive:
 			// Current active attachment is never blocked by checkpoint age.
+			if item.PlacementWarning == "sticky placement exceeds maximum checkpoint age" {
+				item.PlacementWarning += "; active attachment remains allowed"
+			}
 		case zellijlive.StatusDeadResurrectable:
 			if selection.CandidateSource != CandidateSourcePriorActive {
 				continue
 			}
 			if selection.Status == CandidateStale {
+				if item.PlacementWarning == "sticky placement exceeds maximum checkpoint age" {
+					item.PlacementWarning += "; dead-session resurrection is blocked"
+				}
 				item.Status = StatusStale
 				item.Reason = "dead-resurrectable prior-active session blocked because recovery point exceeds maximum age"
 				plan.Items = append(plan.Items, item)
@@ -193,6 +199,11 @@ func currentExactSessionWindows(state model.State) map[string]model.Window {
 }
 
 func copyRecoveryPlacement(item *Item, recovery model.RecoverySession, options AllOptions) {
+	if recovery.PlacementObservedAt == nil || recovery.PlacementObservedAt.IsZero() {
+		item.PlacementSource = PlacementSourceNone
+		item.PlacementWarning = "no sticky placement observation is available"
+		return
+	}
 	if recovery.WorkspaceRef != nil {
 		item.CapturedWorkspace = *recovery.WorkspaceRef
 	}
@@ -202,16 +213,11 @@ func copyRecoveryPlacement(item *Item, recovery model.RecoverySession, options A
 		placement.WindowSize = append([]int(nil), placement.WindowSize...)
 		item.CapturedPlacement = &placement
 	}
-	if recovery.PlacementObservedAt == nil {
-		item.PlacementSource = PlacementSourceNone
-		item.PlacementWarning = "no sticky placement observation is available"
-		return
-	}
 	observed := recovery.PlacementObservedAt.UTC()
 	item.PlacementObservedAt = &observed
 	item.PlacementAge = checkpointAge(observed, options.Now)
 	if options.MaxAge > 0 && item.PlacementAge > options.MaxAge {
-		item.PlacementWarning = "sticky placement exceeds maximum checkpoint age; active attachment remains allowed"
+		item.PlacementWarning = "sticky placement exceeds maximum checkpoint age"
 	}
 }
 

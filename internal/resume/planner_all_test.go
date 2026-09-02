@@ -2,6 +2,7 @@ package resume
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,10 +100,35 @@ func TestAllStalePriorBlocksOnlyDeadResurrectionAndOldPlacementOnlyWarns(t *test
 	plan := NewPlanner(PlannerConfig{}).BuildAll(selection, current, catalog, AllOptions{Now: now, MaxAge: 24 * time.Hour})
 
 	active := assertSessionStatus(t, plan, "active", StatusReady)
-	if active.PlacementWarning == "" || active.Workspace == nil {
+	if !strings.Contains(active.PlacementWarning, "active attachment remains allowed") || active.Workspace == nil {
 		t.Fatalf("old active placement blocked or warning absent: %#v", active)
 	}
-	assertSessionStatus(t, plan, "dead", StatusStale)
+	dead := assertSessionStatus(t, plan, "dead", StatusStale)
+	if !strings.Contains(dead.PlacementWarning, "dead-session resurrection is blocked") || strings.Contains(dead.PlacementWarning, "active attachment remains allowed") {
+		t.Fatalf("dead-session warning is inaccurate: %#v", dead)
+	}
+}
+
+func TestAllZeroPlacementObservationIsUnavailable(t *testing.T) {
+	now := time.Now().UTC()
+	zero := time.Time{}
+	column := 2
+	checkpoint := allCheckpoint("current", now, "session")
+	checkpoint.Recovery.Sessions[0].WorkspaceRef = &model.WorkspaceRef{Name: "dev"}
+	checkpoint.Recovery.Sessions[0].Placement = &model.Placement{Column: &column}
+	checkpoint.Recovery.Sessions[0].PlacementObservedAt = &zero
+	selection := SelectAll([]checkpoints.Checkpoint{checkpoint}, SelectOptions{CurrentBootID: "current", Now: now, MaxAge: time.Hour})
+	catalog := testCatalog(zellijlive.Session{Name: "session", Status: zellijlive.StatusActive})
+	current := model.State{Workspaces: []model.Workspace{{ID: "ws-dev", Name: "dev"}}}
+
+	plan := NewPlanner(PlannerConfig{}).BuildAll(selection, current, catalog, AllOptions{Now: now, MaxAge: time.Hour})
+	item := assertSessionStatus(t, plan, "session", StatusDegraded)
+	if item.PlacementSource != PlacementSourceNone || item.PlacementObservedAt != nil || item.CapturedPlacement != nil || item.Workspace != nil || item.CapturedWorkspace != (model.WorkspaceRef{}) {
+		t.Fatalf("zero-aged placement was applied: %#v", item)
+	}
+	if item.PlacementWarning != "no sticky placement observation is available" {
+		t.Fatalf("placement warning = %q", item.PlacementWarning)
+	}
 }
 
 func TestAllAlreadyOpenRetainsExactNiriIdentityAndRerunPlanIsIdempotent(t *testing.T) {
