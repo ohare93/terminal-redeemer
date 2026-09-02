@@ -31,3 +31,30 @@ Refactor execution into a verified reconciliation pass that launches only missin
 ## Implementation Notes
 
 Depends on task 3. Refactor around the existing executor launch/correlation loop, `SnapshotObserver`, `ProcAttachmentProbe`, and `NiriActions`; do not replace them. The actual delta is existing-window reconciliation, two-phase execution, verified ordering and focus restoration, and operation-lock coverage.
+
+
+## Completion Summary
+
+- Refactored resume into exact preflight reconciliation, sequential missing-session launch/relocation, and a second verified per-workspace column-ordering phase.
+- Added complete workspace transition checks, descending absolute ordering with final all-target verification, affected-workspace degradation, and best-effort focus restoration.
+- Closed duplicate-attachment and focus/order races while preserving exact PID correlation, stable attachment checks, attach-only launches, and independent floating/size handling.
+- Persisted conservative stacked-column evidence through sticky headless/new-boot captures and rejected partial layout evidence; shared capture/resume operation locking and all required tests passed independent review.
+
+### Files Changed
+
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- internal/model/state.go
+- internal/niri/adapter.go
+- internal/capture/runner.go
+- internal/capture/runner_test.go
+- internal/checkpoints/store.go
+- internal/checkpoints/store_test.go
+- internal/resume/executor.go
+- internal/resume/executor_test.go
+- internal/resume/planner.go
+- internal/resume/planner_test.go
+- internal/resume/planner_all.go
+- internal/resume/planner_all_test.go
+- internal/resume/runtime.go
+- internal/resume/runtime_test.go
