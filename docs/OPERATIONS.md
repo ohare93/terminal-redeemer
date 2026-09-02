@@ -18,7 +18,7 @@ The Home Manager module exports the three shortcuts as an opt-in Niri fragment a
 
 Local capture/resume requires a Linux boot ID, Niri, Kitty, and Zellij. Remote access additionally requires SSH and source-side `redeem mirror snapshot`. Dual-visible creation requires a compatible source-side `redeem mirror attach-local`; deployment/version skew is tolerated as a post-creation warning. The optional image bridge requires `wl-paste`, SCP, and Kitty remote control.
 
-`redeem doctor` is read-only. It validates configuration, checkpoint schema/integrity, and Niri readiness; checks direct launchers and configured mirror executables; and reports exact ACTIVE versus prior-active candidate counts, resurrection-cache availability, incomplete terminal identity evidence, and sticky placements that depend on unnamed workspace indices. It does not create or repair state.
+`redeem doctor` is read-only. It validates configuration, checkpoint integrity, and Niri readiness; checks direct launchers and configured mirror executables; and reports exact ACTIVE versus prior-active candidate counts, resurrection-cache availability, incomplete terminal identity evidence, and sticky placements that depend on unnamed workspace indices. It does not create or repair state.
 
 ## Capture and resume
 
@@ -30,13 +30,15 @@ redeem capture once
 
 Capture holds the writer lock while performing one complete Niri windows/workspaces query and publishing the current boot/host/profile checkpoint. Publication writes a mode-0600 temporary file, fsyncs it, atomically renames it, and fsyncs `checkpoints/`. A failed query or failure before rename leaves the previous checkpoint usable.
 
+**Upgrade note:** Before the first capture after this upgrade, stop the capture and resume services, clear old checkpoint JSON files from the configured `checkpoints/` directory separately, then restart the services; old checkpoint formats are not migrated.
+
 ```bash
 redeem resume --all --dry-run
 redeem resume --all
 redeem resume # narrower prior-visible manual mode
 ```
 
-Resume waits for a valid Niri query and rejects malformed checkpoints. Same-boot `--all` uses every current exact ACTIVE Zellij session with current-boot sticky placement. After reboot it filters host/profile, selects the newest schema-3 prior recovery point, and intersects current active/dead-resurrectable evidence with only that prior-active allow-list; it never admits unrelated cache history or silently chooses an older candidate. `--max-age` blocks stale prior dead-session resurrection and warns on old placement, while current exact ACTIVE attachment remains allowed.
+Resume waits for a valid Niri query and rejects malformed checkpoints. Same-boot `--all` uses every current exact ACTIVE Zellij session with current-boot sticky placement. After reboot it filters host/profile, selects the newest prior recovery point, and intersects current active/dead-resurrectable evidence with only that prior-active allow-list; it never admits unrelated cache history or silently chooses an older candidate. `--max-age` blocks stale prior dead-session resurrection and warns on old placement, while current exact ACTIVE attachment remains allowed.
 
 For each terminal, resume requires a direct Kitty launcher PID, exactly one matching Niri `client_pid`, and exact descendant `zellij attach -- <session>` evidence. It never uses session prefixes, app-ID/launch ordering, nearest-window fallback, create/attach-or-create, or force-run flags. Existing exact windows are reconciled before missing sessions are launched. Named workspaces are preferred; unnamed output/index and index-only fallbacks can drift and are reported by doctor. A second verified pass restores deterministic terminal column order only for one-window-per-column targets; stacked rows and unrelated-window ordering are not reconstructed. Rerunning detects an already open session instead of creating a duplicate.
 

@@ -77,13 +77,9 @@ func (c CheckpointsIntegrityCheck) Run(_ context.Context) Result {
 	}
 	if len(issues) > 0 {
 		issue := issues[0]
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("schema=%d integrity=invalid checkpoint=%s error=%v", checkpoints.SchemaVersion, filepath.Base(issue.Path), issue.Err)}
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("integrity=invalid checkpoint=%s error=%v", filepath.Base(issue.Path), issue.Err)}
 	}
-	schemaCounts := make(map[int]int)
-	for _, checkpoint := range valid {
-		schemaCounts[checkpoint.V]++
-	}
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("schema=%d integrity=valid checkpoints=%d schema_1=%d schema_2=%d schema_3=%d", checkpoints.SchemaVersion, len(valid), schemaCounts[1], schemaCounts[2], schemaCounts[checkpoints.SchemaVersion])}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("integrity=valid checkpoints=%d", len(valid))}
 }
 
 type RecoveryInventoryCheck struct {
@@ -115,7 +111,7 @@ func (c RecoveryInventoryCheck) Run(ctx context.Context) Result {
 	var current, prior *checkpoints.Checkpoint
 	for i := range valid {
 		checkpoint := valid[i]
-		if checkpoint.V != checkpoints.SchemaVersion || (c.Host != "" && checkpoint.Host != c.Host) || (c.Profile != "" && checkpoint.Profile != c.Profile) {
+		if (c.Host != "" && checkpoint.Host != c.Host) || (c.Profile != "" && checkpoint.Profile != c.Profile) {
 			continue
 		}
 		if checkpoint.BootID == strings.TrimSpace(bootID) {

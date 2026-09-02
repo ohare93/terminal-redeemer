@@ -181,13 +181,6 @@ func (s State) Hash() (string, error) {
 	return hashNormalized(norm)
 }
 
-// HashWithTitles reproduces the pre-semantic-hash format so rolling
-// checkpoints written by older releases remain readable during migration.
-// New checkpoints must use Hash.
-func (s State) HashWithTitles() (string, error) {
-	return hashNormalized(Normalize(s))
-}
-
 func hashNormalized(norm State) (string, error) {
 	payload, err := json.Marshal(norm)
 	if err != nil {

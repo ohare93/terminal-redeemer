@@ -19,14 +19,14 @@ const (
 )
 
 // SelectAll chooses the recovery point which supplies placement and, after a
-// boot change, the authoritative prior-active allow-list. A schema-3 checkpoint
-// from the current boot switches selection to current catalog ACTIVE sessions.
+// boot change, the authoritative prior-active allow-list. A checkpoint from the
+// current boot switches selection to current catalog ACTIVE sessions.
 func SelectAll(candidates []checkpoints.Checkpoint, options SelectOptions) Selection {
 	currentBootID := strings.TrimSpace(options.CurrentBootID)
 	var current, prior *checkpoints.Checkpoint
 	for i := range candidates {
 		checkpoint := candidates[i]
-		if checkpoint.V < checkpoints.SchemaVersion || strings.TrimSpace(checkpoint.BootID) == "" {
+		if strings.TrimSpace(checkpoint.BootID) == "" {
 			continue
 		}
 		if options.Host != "" && checkpoint.Host != options.Host {
@@ -52,7 +52,7 @@ func SelectAll(candidates []checkpoints.Checkpoint, options SelectOptions) Selec
 		}
 	}
 	if prior == nil {
-		return Selection{Status: CandidateNotFound, CandidateSource: CandidateSourcePriorActive, Reason: "no eligible schema-3 prior-boot active recovery point"}
+		return Selection{Status: CandidateNotFound, CandidateSource: CandidateSourcePriorActive, Reason: "no eligible prior-boot active recovery point"}
 	}
 	selection := Selection{
 		Status: CandidateReady, CandidateSource: CandidateSourcePriorActive,

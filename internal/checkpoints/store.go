@@ -3,6 +3,7 @@
 package checkpoints
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,32 +24,19 @@ var (
 	ErrInvalid  = errors.New("invalid rolling checkpoint")
 )
 
-const SchemaVersion = 3
-
 // Checkpoint is the latest complete state for one boot/host/profile identity.
-// EventOffset is decoded only so schema-1 rolling checkpoints remain readable;
-// schema-3 writes contain no event timeline.
 type Checkpoint struct {
-	V             int                     `json:"v"`
 	BootID        string                  `json:"boot_id"`
 	Host          string                  `json:"host"`
 	Profile       string                  `json:"profile"`
 	ObservedAt    time.Time               `json:"observed_at"`
 	State         model.State             `json:"state"`
 	StateHash     string                  `json:"state_hash"`
-	Recovery      model.RecoveryInventory `json:"recovery,omitempty"`
-	IntegrityHash string                  `json:"integrity_hash,omitempty"`
-	EventOffset   int64                   `json:"event_offset,omitempty"`
+	Recovery      model.RecoveryInventory `json:"recovery"`
+	IntegrityHash string                  `json:"integrity_hash"`
 }
 
 func (c Checkpoint) Validate() error {
-	return c.validate(false, false)
-}
-
-func (c Checkpoint) validate(allowLegacySchema, allowLegacyTitleHash bool) error {
-	if c.V != SchemaVersion && !(allowLegacySchema && (c.V == 1 || c.V == 2)) {
-		return fmt.Errorf("schema version is %d, want %d", c.V, SchemaVersion)
-	}
 	if strings.TrimSpace(c.BootID) == "" {
 		return errors.New("boot_id is required")
 	}
@@ -64,37 +52,22 @@ func (c Checkpoint) validate(allowLegacySchema, allowLegacyTitleHash bool) error
 	if strings.TrimSpace(c.StateHash) == "" {
 		return errors.New("state_hash is required")
 	}
-	if c.V == 1 && c.EventOffset <= 0 {
-		return errors.New("event_offset must be positive for schema version 1")
-	}
 	hash, err := c.State.Hash()
 	if err != nil {
 		return fmt.Errorf("hash state: %w", err)
 	}
 	if hash != c.StateHash {
-		if allowLegacyTitleHash && c.V < SchemaVersion {
-			legacyHash, legacyErr := c.State.HashWithTitles()
-			if legacyErr != nil {
-				return fmt.Errorf("hash legacy state: %w", legacyErr)
-			}
-			if legacyHash != c.StateHash {
-				return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
-			}
-		} else {
-			return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
-		}
+		return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
 	}
-	if c.V == SchemaVersion {
-		if err := validateRecovery(c.Recovery); err != nil {
-			return fmt.Errorf("recovery inventory: %w", err)
-		}
-		want, err := RecoveryIntegrityHash(c.State, c.Recovery)
-		if err != nil {
-			return fmt.Errorf("hash recovery payload: %w", err)
-		}
-		if c.IntegrityHash != want {
-			return fmt.Errorf("integrity_hash mismatch: got %q want %q", c.IntegrityHash, want)
-		}
+	if err := validateRecovery(c.Recovery); err != nil {
+		return fmt.Errorf("recovery inventory: %w", err)
+	}
+	want, err := RecoveryIntegrityHash(c.State, c.Recovery)
+	if err != nil {
+		return fmt.Errorf("hash recovery payload: %w", err)
+	}
+	if c.IntegrityHash != want {
+		return fmt.Errorf("integrity_hash mismatch: got %q want %q", c.IntegrityHash, want)
 	}
 	return nil
 }
@@ -223,12 +196,17 @@ func readPath(path string) (Checkpoint, error) {
 		return Checkpoint{}, err
 	}
 	var checkpoint Checkpoint
-	if err := json.Unmarshal(payload, &checkpoint); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&checkpoint); err != nil {
 		return Checkpoint{}, fmt.Errorf("%w: decode %s: %v", ErrInvalid, filepath.Base(path), err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return Checkpoint{}, fmt.Errorf("%w: decode %s: trailing JSON value", ErrInvalid, filepath.Base(path))
 	}
 	checkpoint.State = model.Normalize(checkpoint.State)
 	checkpoint.Recovery = model.NormalizeRecovery(checkpoint.Recovery)
-	if err := checkpoint.validate(true, true); err != nil {
+	if err := checkpoint.Validate(); err != nil {
 		return Checkpoint{}, fmt.Errorf("%w: validate %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
 	return checkpoint, nil

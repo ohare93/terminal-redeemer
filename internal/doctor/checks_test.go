@@ -202,7 +202,7 @@ func TestCheckpointAndRecoveryInventoryDiagnostics(t *testing.T) {
 		if integrityErr != nil {
 			t.Fatal(integrityErr)
 		}
-		if _, writeErr := store.Write(checkpoints.Checkpoint{V: checkpoints.SchemaVersion, BootID: boot, Host: "host", Profile: "profile", ObservedAt: at, State: state, StateHash: hash, Recovery: recovery, IntegrityHash: integrity}); writeErr != nil {
+		if _, writeErr := store.Write(checkpoints.Checkpoint{BootID: boot, Host: "host", Profile: "profile", ObservedAt: at, State: state, StateHash: hash, Recovery: recovery, IntegrityHash: integrity}); writeErr != nil {
 			t.Fatal(writeErr)
 		}
 	}
@@ -221,7 +221,7 @@ func TestCheckpointAndRecoveryInventoryDiagnostics(t *testing.T) {
 	writeCheckpoint("current", observed, state, recovery)
 
 	integrity := CheckpointsIntegrityCheck{StateDir: root}.Run(context.Background())
-	if integrity.Status != StatusPass || !strings.Contains(integrity.Detail, "schema=3 integrity=valid") || !strings.Contains(integrity.Detail, "schema_3=2") {
+	if integrity.Status != StatusPass || integrity.Detail != "integrity=valid checkpoints=2" {
 		t.Fatalf("unexpected integrity diagnostic: %+v", integrity)
 	}
 	diagnostic := RecoveryInventoryCheck{

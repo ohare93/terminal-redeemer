@@ -8,11 +8,11 @@ Niri observes windows, while Zellij remains authoritative for which persistent s
 
 ## Decision
 
-Schema 3 rolling checkpoints contain two distinct observations: normalized Niri state and an authoritative active Zellij allow-list with one recovery record per active name. Each record stores CWD, durable workspace reference, scrolling column and row, floating state, tile and window dimensions, placement observation time, and whether the session was visible in the current Niri capture.
+Rolling checkpoints contain two distinct observations: normalized Niri state and an authoritative active Zellij allow-list with one recovery record per active name. Each record stores CWD, durable workspace reference, scrolling column and row, floating state, tile and window dimensions, placement observation time, and whether the session was visible in the current Niri capture.
 
 Capture obtains the allow-list through `zellijlive.Cataloger`. Catalog failure, duplicate or inconsistent names, invalid sockets, and ambiguous statuses abort publication. Dead-resurrectable cache entries are not active. An exactly associated visible window refreshes placement. An active session without one retains its newest valid matching placement, first from the current boot and then from valid prior boots. A complete catalog omission removes the session from the current allow-list.
 
-Schema 3 keeps the rolling one-file-per-boot design and its writer lock, temporary write, file fsync, atomic rename, and directory fsync. Its integrity hash binds semantic compositor state and the complete normalized recovery inventory. Schema 1 and 2 remain readable and may provide exact legacy visible placement; their event offset is migration-only and is never written into schema 3.
+The single unversioned checkpoint format keeps the rolling one-file-per-boot design and its writer lock, temporary write, file fsync, atomic rename, and directory fsync. Its integrity hash binds semantic compositor state and the complete normalized recovery inventory. Older checkpoint formats are unsupported.
 
 This inventory is checkpoint-owned. Mirror snapshots, projections, and pins neither store nor influence recovery carry-forward.
 

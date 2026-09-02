@@ -16,7 +16,7 @@ func TestAllSameBootTargetsOnlyExactActiveCatalogWithStickyFallback(t *testing.T
 	column := 3
 	observed := now.Add(-time.Minute)
 	checkpoint := checkpoints.Checkpoint{
-		V: checkpoints.SchemaVersion, BootID: "current", Host: "local", Profile: "default", ObservedAt: now.Add(-time.Second),
+		BootID: "current", Host: "local", Profile: "default", ObservedAt: now.Add(-time.Second),
 		Recovery: model.RecoveryInventory{
 			ActiveSessions: []string{"placed", "old-catalog-name"},
 			Sessions: []model.RecoverySession{
@@ -173,15 +173,13 @@ func TestAllAlreadyOpenRetainsExactNiriIdentityAndRerunPlanIsIdempotent(t *testi
 	}
 }
 
-func TestSelectAllRequiresSchemaThreeAndDoesNotFallbackFromNewestEmptyPrior(t *testing.T) {
+func TestSelectAllDoesNotFallbackFromNewestEmptyPrior(t *testing.T) {
 	now := time.Now().UTC()
-	legacy := allCheckpoint("legacy", now.Add(-time.Minute), "legacy")
-	legacy.V = 2
-	empty := allCheckpoint("empty", now.Add(-2*time.Minute))
+	empty := allCheckpoint("empty", now.Add(-time.Minute))
 	older := allCheckpoint("older", now.Add(-time.Hour), "older")
-	selection := SelectAll([]checkpoints.Checkpoint{older, empty, legacy}, SelectOptions{CurrentBootID: "current", Now: now, MaxAge: time.Hour})
+	selection := SelectAll([]checkpoints.Checkpoint{older, empty}, SelectOptions{CurrentBootID: "current", Now: now, MaxAge: time.Hour})
 	if selection.Status != CandidateEmpty || selection.Checkpoint == nil || selection.Checkpoint.BootID != "empty" {
-		t.Fatalf("selection fell back or used legacy inventory: %#v", selection)
+		t.Fatalf("selection fell back from newest empty inventory: %#v", selection)
 	}
 }
 
@@ -191,7 +189,7 @@ func allCheckpoint(boot string, observed time.Time, sessions ...string) checkpoi
 		metadata = append(metadata, model.RecoverySession{Name: name})
 	}
 	return checkpoints.Checkpoint{
-		V: checkpoints.SchemaVersion, BootID: boot, ObservedAt: observed,
+		BootID: boot, ObservedAt: observed,
 		Recovery: model.RecoveryInventory{ActiveSessions: append([]string(nil), sessions...), Sessions: metadata},
 	}
 }

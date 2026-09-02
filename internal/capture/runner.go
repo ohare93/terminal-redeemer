@@ -139,7 +139,7 @@ func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
 	}
 
 	path, err := r.checkpointStore.Write(checkpoints.Checkpoint{
-		V: checkpoints.SchemaVersion, BootID: bootID, Host: r.host, Profile: r.profile,
+		BootID: bootID, Host: r.host, Profile: r.profile,
 		ObservedAt: observedAt, State: state, StateHash: stateHash,
 		Recovery: recovery, IntegrityHash: integrityHash,
 	})
@@ -190,7 +190,7 @@ func buildRecoveryInventory(state model.State, active []string, history []checkp
 	// History is oldest-first. Walk newest-first, retaining the newest CWD and
 	// newest actual placement independently for each still-active session.
 	for i := len(history) - 1; i >= 0; i-- {
-		for _, prior := range recoverySessions(history[i]) {
+		for _, prior := range history[i].Recovery.Sessions {
 			current, activeNow := byName[prior.Name]
 			if !activeNow {
 				continue
@@ -310,32 +310,4 @@ func recoveryWorkspaceRef(window model.Window, workspaces []model.Workspace) (mo
 		}
 	}
 	return model.WorkspaceRef{}, false
-}
-
-func recoverySessions(checkpoint checkpoints.Checkpoint) []model.RecoverySession {
-	if checkpoint.V >= 3 {
-		return checkpoint.Recovery.Sessions
-	}
-	byName := make(map[string][]model.Window)
-	for _, window := range checkpoint.State.Windows {
-		if window.Terminal != nil && window.Terminal.SessionTag != "" {
-			byName[window.Terminal.SessionTag] = append(byName[window.Terminal.SessionTag], window)
-		}
-	}
-	out := make([]model.RecoverySession, 0, len(byName))
-	for name, windows := range byName {
-		if len(windows) != 1 {
-			continue
-		}
-		window := windows[0]
-		session := model.RecoverySession{Name: name, CWD: window.Terminal.CWD, Visible: true}
-		if window.WorkspaceRef != nil || window.Placement != nil {
-			session.WorkspaceRef = window.WorkspaceRef
-			session.Placement = window.Placement
-			observed := checkpoint.ObservedAt.UTC()
-			session.PlacementObservedAt = &observed
-		}
-		out = append(out, session)
-	}
-	return out
 }

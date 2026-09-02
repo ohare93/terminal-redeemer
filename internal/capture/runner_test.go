@@ -130,7 +130,7 @@ func TestCaptureOnceMaintainsOneLatestCheckpointPerBoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.ObservedAt.Equal(t0.Add(time.Minute)) || got.State.Windows[0].Title != "latest" || got.V != checkpoints.SchemaVersion {
+	if !got.ObservedAt.Equal(t0.Add(time.Minute)) || got.State.Windows[0].Title != "latest" {
 		t.Fatalf("checkpoint was not refreshed: %#v", got)
 	}
 	all, issues, err := checkpoints.List(root)

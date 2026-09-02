@@ -62,17 +62,6 @@ func TestStateHashIgnoresWindowTitles(t *testing.T) {
 	if beforeHash != afterHash {
 		t.Fatalf("title-only change affected semantic hash: %q != %q", beforeHash, afterHash)
 	}
-	legacyBefore, err := before.HashWithTitles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyAfter, err := after.HashWithTitles()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacyBefore == legacyAfter {
-		t.Fatal("legacy title-sensitive hashes should distinguish title changes")
-	}
 	if Normalize(after).Windows[0].Title != "running ⠂" {
 		t.Fatal("Normalize must preserve the latest title in stored state")
 	}
