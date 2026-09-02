@@ -156,7 +156,7 @@ func TestCaptureFailureLeavesPublishedCheckpointUsable(t *testing.T) {
 	}
 }
 
-func TestCaptureCarriesPlacementForActiveHeadlessSessionSameAndNewBoot(t *testing.T) {
+func TestCaptureEmptyPostRestartObservationRetainsStickyPlacementSameAndNewBoot(t *testing.T) {
 	root := t.TempDir()
 	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
 	column, row, floating := 3, 2, false

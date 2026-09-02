@@ -55,7 +55,7 @@
         checks.packaged-cli = pkgs.runCommand "terminal-redeemer-packaged-cli" { } ''
           ${self.packages.${system}.terminal-redeemer}/bin/redeem --help > root-help
           grep -q "Refresh this boot's rolling terminal checkpoint" root-help
-          grep -q "Restore exact prior-boot terminal placement" root-help
+          grep -q "Restore prior-boot placement or reconcile all recovery sessions" root-help
           grep -q "Create, pick, pin, apply, or temporarily follow remote terminals" root-help
           grep -q "Read-only capture/resume/mirror diagnostics" root-help
 
@@ -73,6 +73,8 @@
           grep -q -- "-max-total" mirror-follow-help
           grep -q -- "minimum 2s" mirror-follow-help
           ${self.packages.${system}.terminal-redeemer}/bin/redeem resume --help > /dev/null 2> resume-help
+          grep -q -- "same boot: reconcile all exact ACTIVE sessions" resume-help
+          grep -q -- "maximum age for prior dead-session resurrection" resume-help
           touch "$out"
         '';
 
@@ -147,6 +149,8 @@
           assert rendered.processMetadata.whitelistExtra == [ "tmux" ];
           assert rendered.processMetadata.includeSessionTag == false;
           assert rendered.resume.onStartup;
+          assert pkgs.lib.hasInfix ''spawn-at-startup "'' cfg.programs.terminal-redeemer.resume.niriIntegrationFragment;
+          assert pkgs.lib.hasInfix ''"--user" "restart" "terminal-redeemer-resume.service";'' cfg.programs.terminal-redeemer.resume.niriIntegrationFragment;
           assert rendered.resume.terminalCommand == "foot";
           assert rendered.resume.maxCheckpointAge == "12h";
           assert rendered.resume.unresolvedWorkspace == "current";
@@ -176,7 +180,7 @@
           assert builtins.match ".* capture once" captureExec != null;
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" pruneExec != null;
           assert builtins.match ".* prune run" pruneExec != null;
-          assert builtins.match ".* --config .*/terminal-redeemer/config.yaml resume" resumeExec != null;
+          assert builtins.match ".* --config .*/terminal-redeemer/config.yaml resume --all" resumeExec != null;
           assert builtins.match ".*resume.*resume.*" resumeExec == null;
           assert resumeService.Service.Type == "oneshot";
           assert resumeService.Service.Restart == "on-failure";
@@ -194,6 +198,7 @@
           assert captureTimer.Timer.OnUnitActiveSec == "30s";
           assert !(captureTimer.Timer ? Persistent);
           assert builtins.elem "graphical-session.target" captureTimer.Unit.After;
+          assert builtins.elem "terminal-redeemer-resume.service" captureTimer.Unit.After;
           assert builtins.elem "graphical-session.target" captureTimer.Unit.PartOf;
           assert captureTimer.Install.WantedBy == [ "graphical-session.target" ];
           assert cfg.systemd.user.timers.terminal-redeemer-prune.Timer.OnCalendar == "hourly";
@@ -225,11 +230,13 @@
           in
           assert rendered.capture.interval == "60s";
           assert !rendered.resume.onStartup;
+          assert cfg.programs.terminal-redeemer.resume.niriIntegrationFragment == "";
           assert rendered.resume.maxCheckpointAge == "24h";
           assert rendered.resume.unresolvedWorkspace == "current";
           assert captureTimer.Timer.OnActiveSec == "60s";
           assert captureTimer.Timer.OnUnitActiveSec == "60s";
           assert !(captureTimer.Timer ? Persistent);
+          assert !(builtins.elem "terminal-redeemer-resume.service" captureTimer.Unit.After);
           assert !(cfg.systemd.user.services ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.timers ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.services ? terminal-redeemer-resume);
@@ -276,6 +283,7 @@
             rendered = hmUser.programs.terminal-redeemer.renderedConfig;
           in
           assert rendered.resume.onStartup;
+          assert pkgs.lib.hasInfix ''"restart" "terminal-redeemer-resume.service"'' hmUser.programs.terminal-redeemer.resume.niriIntegrationFragment;
           assert rendered.resume.terminalCommand == "foot";
           assert rendered.mirror.sourceHost == "source.example";
           assert pkgs.lib.hasInfix ''Mod+Return { spawn "kitty"; }'' hmUser.programs.terminal-redeemer.mirror.niriIntegrationFragment;

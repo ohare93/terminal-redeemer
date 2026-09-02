@@ -7,7 +7,7 @@
 3. **`Mod+Ctrl+Return` — manual picker.** Browse or reopen visible and headless live Lattice sessions without persistent selection.
 4. **Pinned save/apply.** Manually replace and later apply one exact projection set; it is independent of rolling checkpoints.
 5. **Foreground workspace follow.** Temporarily add missing visible projections from one runtime-selected workspace until the command exits.
-6. **Prior-boot resume.** Rolling local checkpoints restore exact live terminal sessions to their captured Niri workspaces.
+6. **Same-boot and reboot recovery.** Rolling local checkpoints let `resume --all` reconcile current exact ACTIVE sessions after Niri restarts and restrict reboot resurrection to the newest prior-active allow-list.
 
 The Home Manager module exports only the three shortcuts as an opt-in Niri fragment. It also exports direct argv for new/open/save/apply/follow, but installs no follow service, timer, rule, or saved selection.
 
@@ -50,19 +50,20 @@ redeem mirror close --host lattice
 redeem mirror paste-image
 ```
 
-## Reboot resume
+## Terminal recovery
 
 ```bash
-redeem capture once        # atomically refresh this boot's rolling checkpoint
-redeem resume --dry-run    # inspect the newest eligible prior-boot plan
-redeem resume              # idempotently apply that plan
-redeem prune run           # bound retained boot checkpoints
-redeem doctor              # read-only capture/resume/mirror diagnostics
+redeem capture once              # atomically refresh this boot's rolling checkpoint
+redeem resume --all --dry-run    # inspect same-boot ACTIVE or reboot prior-active recovery
+redeem resume --all              # idempotently reconcile the full eligible set
+redeem resume                    # narrower, prior-visible manual resume remains available
+redeem prune run                 # bound retained boot checkpoints
+redeem doctor                    # read-only recovery and mirror diagnostics
 ```
 
-Capture stores one complete checkpoint per boot, host, and profile. Publication holds the writer lock and uses a mode-0600 temporary file, file fsync, atomic rename, and directory fsync. Resume selects the newest matching prior boot before evaluating age or contents.
+Capture stores one complete schema-3 checkpoint per boot, host, and profile, including an exact ACTIVE-session allow-list and sticky placement. Publication holds the shared writer/operation lock and uses a mode-0600 temporary file, file fsync, atomic rename, and directory fsync. On the same boot, `--all` uses the current exact ACTIVE catalog and sticky placement; after reboot it selects the newest matching prior recovery point and permits only names in that prior-active allow-list. Unrelated resurrection-cache entries are never candidates.
 
-Resume is terminal-only and attach-only. It never recreates a missing captured session. It correlates each launched Kitty PID to exactly one Niri window, requires exact descendant `zellij attach -- <session>` evidence, moves only that window, and is idempotent when the session is already open.
+`--max-age` blocks stale prior dead-session resurrection and warns about stale sticky placement, but does not block attaching a session that is currently exact ACTIVE. Named workspaces are preferred over output/index and index-only fallbacks; `doctor` warns about tracked placement that depends on unnamed indices. Recovery launches Kitty directly with `zellij attach -- <session>`: it never creates, uses attach-or-create, or passes force-run flags. It reconciles existing windows before missing ones, then restores deterministic terminal column order when each target occupies its own column. Stacked rows are reported unsupported rather than guessed, and unrelated window ordering is not reconstructed.
 
 ## Setup
 
@@ -71,6 +72,6 @@ Resume is terminal-only and attach-only. It never recreates a missing captured s
 - [Prior-boot resume decision](docs/adr/0001-resume-zellij-terminals-in-niri.md)
 - [Bounded mirror continuity decision](docs/adr/0002-bounded-mirror-continuity.md)
 
-Home Manager can schedule capture and optionally run resume at graphical-session startup. Startup resume is disabled by default. Disable any competing startup terminal restorer before enabling it.
+Home Manager can schedule capture and optionally run the same `redeem resume --all` oneshot at graphical-session startup. When enabled, add the generated `resume.niriIntegrationFragment` once to Niri's configuration; its native `spawn-at-startup` hook restarts that service on every compositor start, while periodic capture remains ordered afterward. Startup recovery is disabled by default. Disable any competing startup terminal restorer before enabling it.
 
 Physical deployment, activation, dual-host validation, and reboot testing remain user-owned.

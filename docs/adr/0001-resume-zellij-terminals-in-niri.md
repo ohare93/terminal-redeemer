@@ -16,34 +16,37 @@ Periodic capture performs a complete Niri query and terminal enrichment, then at
 
 Capture and prune share an advisory repository writer lock. Checkpoint publication uses temporary-file write, file fsync, atomic rename, and checkpoint-directory fsync. A failed query or pre-rename publish leaves the prior successful file usable.
 
-Resume reads checkpoint files directly. It excludes the current boot, filters host/profile, and selects the newest prior boot before evaluating age or eligible terminal contents. It does not fall back to an older boot when that authoritative candidate is empty or stale.
+Schema-3 checkpoints also bind an authoritative ACTIVE-session allow-list and sticky per-session placement into their integrity hash. Plain manual resume excludes the current boot and remains the narrower prior-visible workflow. `resume --all` instead uses the current exact ACTIVE catalog after a same-boot compositor failure; after reboot it filters host/profile, selects the newest prior schema-3 recovery point, and permits only sessions in that prior-active allow-list which are currently exact active or dead-resurrectable. It does not admit unrelated resurrection-cache history or fall back to an older boot when the authoritative candidate is empty or stale.
+
+Maximum age blocks stale prior dead-session resurrection and warns on old sticky placement, but does not block attachment of a currently exact ACTIVE session. Sticky placement prefers named workspaces, then output plus index, then index; index-dependent tracked placement remains visible as an operational warning rather than causing automatic workspace creation or renaming.
 
 ### Exact attach-only recovery
 
-For every captured terminal, resume:
+For every eligible terminal, resume:
 
-1. verifies the case-sensitive Zellij session exists;
-2. skips it if the same verified session is already open;
-3. launches Kitty directly with `zellij attach -- <session>` and captured CWD;
-4. correlates the launcher PID to exactly one Niri `client_pid`;
-5. verifies an exact live descendant attach argv;
-6. moves only that window to the resolved workspace;
-7. observes required placement before reporting success.
+1. verifies the case-sensitive exact Zellij status and maps any already-open attachment to exactly one Niri window;
+2. launches only missing sessions directly with `zellij attach -- <session>` and captured CWD;
+3. correlates the launcher PID to exactly one Niri `client_pid`;
+4. verifies an exact live descendant attach argv and revalidates the all-session candidate before launch;
+5. moves both existing and new windows by exact ID to the resolved workspace;
+6. waits until all possible targets exist, then restores deterministic captured terminal-column order with verified focus/actions;
+7. observes required placement before reporting success and restores prior focus best effort.
 
-Missing sessions are unavailable and never recreated. A launcher that forks or daemonizes beyond exact PID correlation fails rather than triggering an app-ID/order heuristic.
+Missing or ambiguous sessions are unavailable and never recreated. Attach-or-create, create, and force-run flags are prohibited. A launcher that forks or daemonizes beyond exact PID correlation fails rather than triggering an app-ID/order heuristic.
 
-Workspace targets resolve by exact name, then output plus index, then index. Unresolved targets follow explicit `current`, `skip`, or `fail` policy. Optional layout details remain best effort and are reported separately from required placement.
+Workspace targets resolve by exact name, then output plus index, then index. Unresolved targets follow explicit `current`, `skip`, or `fail` policy. Floating and supported sizes remain best effort. Column ordering is limited to terminal targets with one window per captured column; stacked rows are explicitly unsupported rather than guessed with consume/expel, and unrelated-window ordering is not reconstructed.
 
 ### Startup policy
 
-Manual `redeem resume` is the default. Home Manager may invoke the same command from a graphical-session user service after competing startup restorers have been disabled. Repeated invocation is idempotent.
+Manual `redeem resume` is the default. When enabled, Home Manager's existing graphical-session oneshot invokes `redeem resume --all` with bounded readiness/restart policy and the shared capture/resume operation lock. Its generated Niri `spawn-at-startup` integration restarts that same unit on every compositor launch, including same-boot restarts; it does not add another service, recovery command, or event subscriber. Periodic complete capture is ordered after initial recovery and may leave sticky placement stale by at most the capture interval. Repeated recovery invocation is idempotent.
 
 ## Consequences
 
 - The last complete capture survives abrupt failure within the filesystem durability contract.
-- Current-boot capture cannot hide the newest prior-boot recovery candidate.
+- Current-boot sticky state supports same-boot compositor recovery while prior-active allow-listing bounds reboot resurrection.
 - Session attachment and workspace mutation cannot target a window chosen by prefix, app ID, creation order, or proximity.
-- The state model is intentionally terminal-only and one checkpoint per boot.
+- Ordering degrades explicitly for stacks instead of performing unsafe layout guesses.
+- The state model is intentionally terminal-only and one checkpoint per boot; mirror snapshots and pins remain separate state.
 
 ## Rejected alternatives
 

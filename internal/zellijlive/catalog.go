@@ -146,6 +146,7 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	}
 	deadDir := filepath.Join(cacheHome, "zellij", SocketContractDir, "session_info")
 	deadEntries, deadReadErr := readDir(deadDir)
+	resurrectionCacheAvailable := deadReadErr == nil
 	if deadReadErr != nil && !errors.Is(deadReadErr, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("read Zellij resurrection catalog: %w", deadReadErr)
 	}
@@ -166,7 +167,7 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return Catalog{Sessions: byName, Names: names}, nil
+	return Catalog{Sessions: byName, Names: names, ResurrectionCacheAvailable: resurrectionCacheAvailable}, nil
 }
 
 func verifyOwnedDirectory(path string, uid int) error {

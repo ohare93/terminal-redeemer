@@ -43,7 +43,7 @@ func TestHelpByDefault(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Refresh this boot's rolling terminal checkpoint",
-		"Restore exact prior-boot terminal placement",
+		"Restore prior-boot placement or reconcile all recovery sessions",
 		"Create, pick, pin, apply, or temporarily follow remote terminals",
 		"Read-only capture/resume/mirror diagnostics",
 	} {
@@ -430,8 +430,20 @@ func TestMutatingResumeHonorsRepositoryOperationLock(t *testing.T) {
 	}
 }
 
+func configureFakeZellij(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	command := filepath.Join(root, "zellij")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.3'; fi\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ZELLIJ_SOCKET_DIR", filepath.Join(root, "missing-sockets"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "missing-cache"))
+}
+
 func TestCaptureOnceEndToEndWithFixture(t *testing.T) {
-	t.Parallel()
+	configureFakeZellij(t)
 
 	root := t.TempDir()
 	fixturePath := filepath.Join(root, "niri.json")
@@ -462,6 +474,7 @@ func TestCaptureOnceEndToEndWithFixture(t *testing.T) {
 }
 
 func TestCaptureOnceEndToEndWithCommandSnapshotter(t *testing.T) {
+	configureFakeZellij(t)
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 
@@ -556,6 +569,7 @@ func TestPruneRunCommand(t *testing.T) {
 }
 
 func TestGlobalConfigAppliesCaptureDefaultsAndCLIOverrides(t *testing.T) {
+	configureFakeZellij(t)
 	root := t.TempDir()
 	fixturePath := filepath.Join(root, "niri.json")
 	err := os.WriteFile(fixturePath, []byte(`{
@@ -648,7 +662,11 @@ func TestDoctorPassExitCode(t *testing.T) {
 	}
 	for _, cmd := range []string{"kitty", "zellij", "niri"} {
 		cmdPath := filepath.Join(pathDir, cmd)
-		err := os.WriteFile(cmdPath, []byte("#!/bin/sh\nexit 0\n"), 0o700)
+		payload := "#!/bin/sh\nexit 0\n"
+		if cmd == "zellij" {
+			payload = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.3'; fi\nexit 0\n"
+		}
+		err := os.WriteFile(cmdPath, []byte(payload), 0o700)
 		if err != nil {
 			t.Fatalf("write fake command %s: %v", cmd, err)
 		}
@@ -668,10 +686,10 @@ func TestDoctorPassExitCode(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d output=%q", code, out.String())
 	}
-	if !strings.Contains(out.String(), "doctor_summary total=10 passed=10 failed=0") {
+	if !strings.Contains(out.String(), "doctor_summary total=11 passed=11 failed=0") {
 		t.Fatalf("unexpected doctor summary: %q", out.String())
 	}
-	for _, name := range []string{"boot_id", "state_paths", "niri_readiness", "resume_launcher", "zellij_listing", "resume_policy", "startup_service", "checkpoints_integrity"} {
+	for _, name := range []string{"boot_id", "state_paths", "niri_readiness", "resume_launcher", "zellij_listing", "resume_policy", "startup_service", "checkpoints_integrity", "recovery_inventory"} {
 		if !strings.Contains(out.String(), "doctor_check name="+name+" status=pass") {
 			t.Fatalf("doctor output missing passing %s check: %q", name, out.String())
 		}

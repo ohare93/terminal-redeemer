@@ -24,8 +24,9 @@ type Session struct {
 }
 
 type Catalog struct {
-	Sessions map[string]Session
-	Names    []string
+	Sessions                   map[string]Session
+	Names                      []string
+	ResurrectionCacheAvailable bool
 }
 
 func (catalog Catalog) Exact(name string) Session {

@@ -50,9 +50,14 @@ let
   settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" renderedConfig;
   configPath = "${config.xdg.configHome}/terminal-redeemer/config.yaml";
   captureExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} capture once";
-  resumeExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} resume";
+  resumeExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} resume --all";
   pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
   renderNiriSpawn = argv: "spawn " + lib.concatMapStringsSep " " builtins.toJSON argv + ";";
+  renderNiriStartup = argv: "spawn-at-startup " + lib.concatMapStringsSep " " builtins.toJSON argv + ";";
+  resumeNiriIntegrationFragment = lib.optionalString cfg.resume.onStartup ''
+    // Restart the same bounded Home Manager recovery unit on every Niri start.
+    ${renderNiriStartup [ "${pkgs.systemd}/bin/systemctl" "--user" "restart" "terminal-redeemer-resume.service" ]}
+  '';
   mirrorLocalCommand = [ cfg.mirror.launcherCommand ];
   mirrorHostArgs = lib.optionals (cfg.mirror.sourceHost != "") [ "--host" cfg.mirror.sourceHost ];
   mirrorNewCommand = [ (lib.getExe cfg.package) "mirror" "new" ]
@@ -161,9 +166,17 @@ in {
         type = lib.types.bool;
         default = false;
         description = ''
-          Run the canonical `redeem resume` command at graphical-session startup.
-          Keep this disabled until any host-local startup restoration is disabled.
+          Run the canonical `redeem resume --all` command at graphical-session startup.
+          Add `resume.niriIntegrationFragment` once to Niri's configuration so
+          compositor restarts invoke the same service. Keep this disabled until
+          any host-local startup restoration is disabled.
         '';
+      };
+      niriIntegrationFragment = lib.mkOption {
+        type = lib.types.lines;
+        readOnly = true;
+        default = resumeNiriIntegrationFragment;
+        description = "Generated Niri spawn-at-startup hook that restarts the Home Manager recovery service on every compositor start; empty when startup recovery is disabled.";
       };
       maxCheckpointAge = lib.mkOption { type = lib.types.str; default = "24h"; description = "Maximum age accepted by prior-boot resume."; };
       unresolvedWorkspace = lib.mkOption { type = lib.types.enum [ "skip" "current" "fail" ]; default = "current"; description = "Policy when a captured workspace cannot be resolved."; };
@@ -255,7 +268,8 @@ in {
     systemd.user.timers.terminal-redeemer-capture = lib.mkIf cfg.capture.enable {
       Unit = {
         Description = "terminal-redeemer periodic complete state capture";
-        After = [ "graphical-session.target" ];
+        After = [ "graphical-session.target" ]
+          ++ lib.optional cfg.resume.onStartup "terminal-redeemer-resume.service";
         PartOf = [ "graphical-session.target" ];
       };
       Timer = {

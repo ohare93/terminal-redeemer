@@ -12,6 +12,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/niri"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 type ConfigLoadCheck struct {
@@ -75,9 +76,126 @@ func (c CheckpointsIntegrityCheck) Run(_ context.Context) Result {
 	}
 	if len(issues) > 0 {
 		issue := issues[0]
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("invalid %s: %v", filepath.Base(issue.Path), issue.Err)}
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("schema=%d integrity=invalid checkpoint=%s error=%v", checkpoints.SchemaVersion, filepath.Base(issue.Path), issue.Err)}
 	}
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d rolling checkpoints)", len(valid))}
+	schemaCounts := make(map[int]int)
+	for _, checkpoint := range valid {
+		schemaCounts[checkpoint.V]++
+	}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("schema=%d integrity=valid checkpoints=%d schema_1=%d schema_2=%d schema_3=%d", checkpoints.SchemaVersion, len(valid), schemaCounts[1], schemaCounts[2], schemaCounts[checkpoints.SchemaVersion])}
+}
+
+type RecoveryInventoryCheck struct {
+	StateDir       string
+	Host           string
+	Profile        string
+	CurrentBootID  func() (string, error)
+	ObserveCatalog func(context.Context, string) (zellijlive.Catalog, error)
+}
+
+func (c RecoveryInventoryCheck) Name() string { return "recovery_inventory" }
+
+func (c RecoveryInventoryCheck) Run(ctx context.Context) Result {
+	if c.CurrentBootID == nil {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: "current boot ID source is unavailable"}
+	}
+	bootID, err := c.CurrentBootID()
+	if err != nil || strings.TrimSpace(bootID) == "" {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("current boot ID unavailable: %v", err)}
+	}
+	valid, issues, err := checkpoints.List(c.StateDir)
+	if err != nil {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: err.Error()}
+	}
+	if len(issues) > 0 {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("invalid checkpoint %s: %v", filepath.Base(issues[0].Path), issues[0].Err)}
+	}
+
+	var current, prior *checkpoints.Checkpoint
+	for i := range valid {
+		checkpoint := valid[i]
+		if checkpoint.V != checkpoints.SchemaVersion || (c.Host != "" && checkpoint.Host != c.Host) || (c.Profile != "" && checkpoint.Profile != c.Profile) {
+			continue
+		}
+		if checkpoint.BootID == strings.TrimSpace(bootID) {
+			if current == nil || checkpoint.ObservedAt.After(current.ObservedAt) {
+				copy := checkpoint
+				current = &copy
+			}
+		} else if prior == nil || checkpoint.ObservedAt.After(prior.ObservedAt) {
+			copy := checkpoint
+			prior = &copy
+		}
+	}
+
+	observe := c.ObserveCatalog
+	if observe == nil {
+		observe = func(ctx context.Context, bootID string) (zellijlive.Catalog, error) {
+			return (zellijlive.CommandCataloger{BootID: bootID}).Observe(ctx)
+		}
+	}
+	catalog, err := observe(ctx, strings.TrimSpace(bootID))
+	if err != nil {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("exact Zellij recovery catalog unavailable: %v", err)}
+	}
+	activeCandidates, resurrectionCandidates := 0, 0
+	for _, session := range catalog.Sessions {
+		switch session.Status {
+		case zellijlive.StatusActive:
+			activeCandidates++
+		case zellijlive.StatusDeadResurrectable:
+			resurrectionCandidates++
+		}
+	}
+	priorActiveCandidates := 0
+	if prior != nil {
+		priorActiveCandidates = len(prior.Recovery.ActiveSessions)
+	}
+	selected := prior
+	candidateSource := "prior_active"
+	if current != nil {
+		selected = current
+		candidateSource = "current_active"
+	}
+	incompleteIdentity, unnamedIndexPlacement := recoveryWarnings(selected)
+	detail := fmt.Sprintf("active_candidates=%d prior_active_candidates=%d candidate_source=%s resurrection_cache_available=%t resurrection_candidates=%d incomplete_identity_evidence=%d unnamed_index_dependent_placements=%d", activeCandidates, priorActiveCandidates, candidateSource, catalog.ResurrectionCacheAvailable, resurrectionCandidates, incompleteIdentity, unnamedIndexPlacement)
+	if incompleteIdentity > 0 || unnamedIndexPlacement > 0 {
+		detail += "; warning=prefer exact session identity and named Niri workspaces before automatic recovery"
+	}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: detail}
+}
+
+func recoveryWarnings(checkpoint *checkpoints.Checkpoint) (incompleteIdentity, unnamedIndexPlacement int) {
+	if checkpoint == nil {
+		return 0, 0
+	}
+	visible := make(map[string]bool, len(checkpoint.Recovery.Sessions))
+	for _, session := range checkpoint.Recovery.Sessions {
+		if session.Visible {
+			visible[session.Name] = true
+		}
+		if session.PlacementObservedAt != nil && session.WorkspaceRef != nil && strings.TrimSpace(session.WorkspaceRef.Name) == "" && session.WorkspaceRef.Index > 0 {
+			unnamedIndexPlacement++
+		}
+	}
+	for _, window := range checkpoint.State.Windows {
+		if !recoveryTerminal(window.AppID) {
+			continue
+		}
+		if window.Terminal == nil || strings.TrimSpace(window.Terminal.SessionTag) == "" || !visible[strings.TrimSpace(window.Terminal.SessionTag)] {
+			incompleteIdentity++
+		}
+	}
+	return incompleteIdentity, unnamedIndexPlacement
+}
+
+func recoveryTerminal(appID string) bool {
+	switch strings.ToLower(strings.TrimSpace(appID)) {
+	case "kitty", "alacritty", "foot", "wezterm":
+		return true
+	default:
+		return false
+	}
 }
 
 type LocalInstallCheck struct {

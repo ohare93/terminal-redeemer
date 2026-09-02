@@ -106,6 +106,10 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 		doctor.StartupServiceCheck{Enabled: resolvedConfig.Resume.OnStartup},
 		doctor.LocalInstallCheck{Path: localInstallPath()},
 		doctor.CheckpointsIntegrityCheck{StateDir: resolvedConfig.StateDir},
+		doctor.RecoveryInventoryCheck{
+			StateDir: resolvedConfig.StateDir, Host: strings.TrimSpace(resolvedConfig.Host), Profile: strings.TrimSpace(resolvedConfig.Profile),
+			CurrentBootID: bootid.Current,
+		},
 	}
 	if strings.TrimSpace(resolvedConfig.Mirror.SourceHost) != "" {
 		checks = append(checks,
@@ -941,8 +945,8 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	fs.SetOutput(stderr)
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
 	dryRun := fs.Bool("dry-run", false, "plan terminal reconciliation without mutating")
-	all := fs.Bool("all", false, "recover all current ACTIVE sessions, or the newest prior-active allow-list after reboot")
-	maxAge := fs.Duration("max-age", resolvedConfig.Resume.MaxCheckpointAge, "maximum checkpoint age")
+	all := fs.Bool("all", false, "same boot: reconcile all exact ACTIVE sessions; reboot: use only the newest prior-active allow-list")
+	maxAge := fs.Duration("max-age", resolvedConfig.Resume.MaxCheckpointAge, "maximum age for prior dead-session resurrection and sticky-placement warning threshold")
 	unresolved := fs.String("unresolved-workspace", resolvedConfig.Resume.UnresolvedWorkspace, "unresolved workspace policy: current, skip, or fail")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "current Niri JSON fixture path")
 	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "current Niri snapshot command")
@@ -1363,7 +1367,7 @@ func printHelp(w io.Writer) {
 	writeln(w)
 	writeln(w, "Commands:")
 	writeln(w, "  capture   Refresh this boot's rolling terminal checkpoint")
-	writeln(w, "  resume    Restore exact prior-boot terminal placement")
+	writeln(w, "  resume    Restore prior-boot placement or reconcile all recovery sessions")
 	writeln(w, "  mirror    Create, pick, pin, apply, or temporarily follow remote terminals")
 	writeln(w, "  prune     Prune old boot checkpoints")
 	writeln(w, "  doctor    Read-only capture/resume/mirror diagnostics")

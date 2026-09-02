@@ -7,8 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
+	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
 type staticCheck struct {
@@ -168,6 +172,60 @@ func TestCommandAvailableCheck(t *testing.T) {
 	empty := CommandAvailableCheck{CheckName: "kitty_available", Command: "   "}.Run(context.Background())
 	if empty.Status != StatusFail {
 		t.Fatalf("expected fail for empty command, got %+v", empty)
+	}
+}
+
+func TestCheckpointAndRecoveryInventoryDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	store, err := checkpoints.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := time.Now().UTC()
+	column := 2
+	workspace := model.WorkspaceRef{Output: "DP-1", Index: 3}
+	placement := model.Placement{Column: &column}
+	state := model.State{Windows: []model.Window{
+		{Key: "w:kitty:1", AppID: "kitty", Terminal: &model.Terminal{SessionTag: "tracked"}},
+		{Key: "w:kitty:2", AppID: "kitty"},
+	}}
+	recovery := model.RecoveryInventory{
+		ActiveSessions: []string{"tracked"},
+		Sessions:       []model.RecoverySession{{Name: "tracked", Visible: true, WorkspaceRef: &workspace, Placement: &placement, PlacementObservedAt: &observed}},
+	}
+	writeCheckpoint := func(boot string, at time.Time, state model.State, recovery model.RecoveryInventory) {
+		hash, hashErr := state.Hash()
+		if hashErr != nil {
+			t.Fatal(hashErr)
+		}
+		integrity, integrityErr := checkpoints.RecoveryIntegrityHash(state, recovery)
+		if integrityErr != nil {
+			t.Fatal(integrityErr)
+		}
+		if _, writeErr := store.Write(checkpoints.Checkpoint{V: checkpoints.SchemaVersion, BootID: boot, Host: "host", Profile: "profile", ObservedAt: at, State: state, StateHash: hash, Recovery: recovery, IntegrityHash: integrity}); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	writeCheckpoint("prior", observed.Add(-time.Hour), model.State{}, recovery)
+	writeCheckpoint("current", observed, state, recovery)
+
+	integrity := CheckpointsIntegrityCheck{StateDir: root}.Run(context.Background())
+	if integrity.Status != StatusPass || !strings.Contains(integrity.Detail, "schema=3 integrity=valid") || !strings.Contains(integrity.Detail, "schema_3=2") {
+		t.Fatalf("unexpected integrity diagnostic: %+v", integrity)
+	}
+	diagnostic := RecoveryInventoryCheck{
+		StateDir: root, Host: "host", Profile: "profile", CurrentBootID: func() (string, error) { return "current", nil },
+		ObserveCatalog: func(context.Context, string) (zellijlive.Catalog, error) {
+			return zellijlive.Catalog{Sessions: map[string]zellijlive.Session{
+				"tracked": {Name: "tracked", Status: zellijlive.StatusActive},
+				"dead":    {Name: "dead", Status: zellijlive.StatusDeadResurrectable},
+			}, ResurrectionCacheAvailable: true}, nil
+		},
+	}.Run(context.Background())
+	for _, want := range []string{"active_candidates=1", "prior_active_candidates=1", "resurrection_cache_available=true", "resurrection_candidates=1", "incomplete_identity_evidence=1", "unnamed_index_dependent_placements=1", "warning="} {
+		if diagnostic.Status != StatusPass || !strings.Contains(diagnostic.Detail, want) {
+			t.Fatalf("recovery diagnostic missing %q: %+v", want, diagnostic)
+		}
 	}
 }
 
