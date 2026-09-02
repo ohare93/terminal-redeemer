@@ -11,11 +11,11 @@ Wire the verified `resume --all` path into the Home Manager/Niri lifecycle so it
 ## Acceptance Criteria
 
 - When `resume.onStartup` is enabled, the generated startup integration invokes the same `redeem resume --all` systemd oneshot every time Niri starts, not only when the long-lived graphical-session target first activates.
-- The startup oneshot retains bounded readiness retries, uses the shared operation lock, and cannot race periodic capture into duplicate windows.
-- Periodic capture starts after the initial recovery attempt and later empty-window captures cannot erase sticky placement.
-- `redeem doctor` reports checkpoint schema/integrity, active versus prior-active candidate counts, resurrection-cache availability, incomplete session identity, and tracked placements that rely on unnamed workspace indices.
+- Preserve the existing Home Manager oneshot, bounded readiness policy, diagnostics, and shared-lock behavior. Do not create a second recovery command or service.
+- Periodic capture remains ordered after the initial recovery attempt, and regression coverage proves an empty post-restart Niri observation retains task-2 sticky placement.
+- `redeem doctor` reports checkpoint schema and integrity, active versus prior-active candidate counts, resurrection-cache availability, incomplete session identity, and tracked placements that rely on unnamed workspace indices.
 - The generated Niri integration and systemd service have evaluation tests, including repeated compositor startup and disabled-startup configurations.
-- README, configuration, operations guidance, CLI help, and a new ADR document same-boot recovery, reboot resurrection boundaries, `--all`, max-age semantics, named-workspace preference, ordering limits, failure reporting, and the prohibition on create/force-run behavior.
+- Update only the recovery delta in README, CLI help, configuration, operations guidance, and the recovery ADR: same-boot versus reboot selection, prior-active allow-list, `--all`, max-age semantics, named-workspace preference, ordering limitations, and create/force-run prohibition. Preserve current mirror pin/apply/follow documentation and never present mirror state as recovery state.
 - `go test ./...` and `nix flake check` pass.
 
 ## Design Decisions
@@ -27,4 +27,4 @@ Wire the verified `resume --all` path into the Home Manager/Niri lifecycle so it
 
 ## Implementation Notes
 
-Depends on task 4. Relevant files: `modules/home-manager/terminal-redeemer.nix`, `modules/nixos/terminal-redeemer.nix`, `internal/doctor/*`, `internal/config/*`, `flake.nix`, `README.md`, `docs/CONFIG.md`, `docs/OPERATIONS.md`, and `docs/adr/`.
+Depends on task 4. Primary integration is `modules/home-manager/terminal-redeemer.nix`, its evaluation tests, `cmd/redeem/main.go`, doctor/config surfaces, and recovery documentation. Touch the NixOS module only if a shared option or assertion actually requires it; the startup user service is Home Manager-owned.

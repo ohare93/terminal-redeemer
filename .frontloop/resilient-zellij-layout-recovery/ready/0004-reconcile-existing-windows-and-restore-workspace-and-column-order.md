@@ -11,15 +11,14 @@ Refactor execution into a verified reconciliation pass that launches only missin
 ## Acceptance Criteria
 
 - The executor first maps every already-open session to exactly one verified Niri window; duplicate or ambiguous attachments fail safely without launching or moving another window.
-- Missing sessions are launched sequentially with direct Kitty argv, exact PID correlation, and stable descendant attachment evidence as today.
-- Both existing and newly launched windows are moved by exact window ID using workspace name, then output plus index, then index fallback; workspace moves use `--focus false` where Niri supports it.
+- Preserve rather than reimplement the current sequential launch path: direct Kitty argv, exact launched-PID correlation, two stable exact descendant-attachment observations, and leave-attached-open behavior on optional placement failure.
+- Both existing and newly launched windows use the existing exact-window-ID workspace action. Retain `--focus false` and current name/index movement; add output-plus-index fallback only in the workspace resolver, not as a second mover implementation.
 - All target windows are available before a second ordering phase runs, and terminal columns are processed deterministically by workspace, captured column, and session-name tie-breaker.
-- Column movement focuses the exact window ID, invokes Niri `move-column-to-index`, observes the same window at the requested column, and stops/degrades that workspace if verification fails.
+- Replace the current deliberate column-order-unsupported result with a second all-windows-ready ordering phase. Focus and verify the exact window before and after `move-column-to-index`, and stop or degrade only the affected workspace on failure.
 - The previously focused window is restored best-effort after ordering; an order failure leaves successfully attached windows open and never causes duplicate relaunch on rerun.
-- Floating and size restoration still run independently and report degradation without falsifying successful attachment/workspace placement.
-- Captured stacked-row values other than the supported one-window-per-column case are preserved and reported as unsupported rather than guessed with consume/expel heuristics.
-- The entire mutating resume operation shares the repository operation lock with capture so a timer cannot publish intermediate launch/order state.
-- Executor/runtime tests cover full empty-workspace restore, partial restore, already-open relocation, concurrent unrelated windows, duplicate attachment, focus/order verification failure, lock contention, and rerun idempotency.
+- Retain the existing independent floating and size actions and their degradation reporting. Detect captured stacked rows before ordering and report unsupported rather than guessing with consume or expel actions.
+- The entire mutating resume operation shares the repository operation lock with capture so a timer cannot publish intermediate launch or ordering state.
+- Executor and runtime tests cover full empty-workspace restore, partial restore, already-open relocation, concurrent unrelated windows, duplicate attachment, focus/order verification failure, lock contention, and rerun idempotency.
 - `go test ./internal/resume ./internal/storelock ./cmd/redeem` passes.
 
 ## Design Decisions
@@ -31,4 +30,4 @@ Refactor execution into a verified reconciliation pass that launches only missin
 
 ## Implementation Notes
 
-Depends on task 3. Relevant files: `internal/resume/executor.go`, `internal/resume/runtime.go`, planner item identity, Niri adapter/model placement, and tests. Current Niri exposes `focus-window --id` and `move-column-to-index` but no window-ID form of the move action, so verification is mandatory.
+Depends on task 3. Refactor around the existing executor launch/correlation loop, `SnapshotObserver`, `ProcAttachmentProbe`, and `NiriActions`; do not replace them. The actual delta is existing-window reconciliation, two-phase execution, verified ordering and focus restoration, and operation-lock coverage.

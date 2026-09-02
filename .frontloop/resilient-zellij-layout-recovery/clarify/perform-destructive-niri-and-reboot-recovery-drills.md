@@ -25,7 +25,7 @@ Validate the shipped recovery contract on lattice with controlled compositor-fai
 
 ## Implementation Notes
 
-Depends on task 5 and likely requires deploying the resulting package/configuration through the user's external Nix setup. No source implementation should be added solely to automate destructive physical testing.
+Depends on task 5 and explicit operator approval for each disruptive action. Use shipped `resume --all --dry-run` and apply summaries, authoritative Zellij catalog evidence, and Niri snapshots; do not use mirror pins as rollback or recovery authority. No source automation is required solely for these physical drills.
 
 ## Questions
 

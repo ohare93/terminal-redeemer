@@ -11,16 +11,17 @@ Repair the observation boundary so capture, mirror inventory, and resume identif
 ## Acceptance Criteria
 
 - A Kitty process with an exact live descendant argv `zellij attach -- <session>` is associated with that case-sensitive session even when no session appears in the window title.
-- Session identity is rejected when the Kitty root cannot be verified, descendant observation is incomplete, or multiple distinct session candidates make the window ambiguous.
-- Capture and mirror use the same exact session-evidence semantics; title parsing remains only a verified fallback and cannot invent a missing session.
-- Regression tests cover the literal separator form, ambiguous descendants, disappearing process metadata, title-only fallback, and the currently observed `title=zellij` case.
+- Session evidence distinguishes one exact candidate, multiple distinct candidates, and incomplete observation; identity is rejected when the Kitty root cannot be verified, descendant observation is incomplete, or candidates are ambiguous.
+- Capture and mirror consume the same evidence API; title parsing remains only a corroborated fallback and cannot invent a missing session.
+- Regression tests extend the existing process-tree and resume-probe coverage for literal `zellij attach -- <session>`, multiple distinct candidates, root replacement, unreadable or disappearing descendants, title-only fallback, and `title=zellij`; no second attach parser is introduced.
 - `go test ./internal/procmeta ./internal/zellijlive ./internal/collector ./internal/mirror` passes.
 
 ## Design Decisions
 
-- Reuse `internal/zellijlive.ProcObserver` or its existing parser/traversal contract rather than teaching multiple independent parsers.
-- Keep exact session matching, bounded `/proc` traversal, and attach-only safety; do not infer identity from app ID, PID proximity, or creation order.
+- Extend the existing `procmeta.DescendantArgvMatchContext` traversal rather than adding another process walker or parser; it already validates root and descendant PID/start-time identity and is used by resume attachment verification.
+- Add a complete evidence result capable of distinguishing one exact candidate, multiple candidates, and incomplete observation; the current boolean matcher cannot prove uniqueness.
+- Make collector and mirror consume the same evidence API. Keep title parsing only as corroborated fallback; it must not manufacture a session when process evidence is absent or incomplete.
 
 ## Implementation Notes
 
-First task because every later recovery invariant depends on complete session identity. Relevant files: `internal/procmeta/*`, `internal/zellijlive/*`, `internal/collector/collector.go`, `internal/mirror/snapshot.go` and their tests.
+First because later inventory depends on complete identity. Start at `internal/procmeta/process_tree.go` and the existing verifier/enricher call sites in collector and mirror. Do not add active-session inventory here: `internal/mirror/snapshot.go` already obtains authoritative active names through `zellijlive.Cataloger`.

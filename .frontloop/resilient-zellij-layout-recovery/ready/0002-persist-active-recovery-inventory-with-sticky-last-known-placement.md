@@ -10,14 +10,14 @@ Evolve rolling boot checkpoints so each recovery point distinguishes the current
 
 ## Acceptance Criteria
 
-- A new checkpoint schema records the exact active Zellij session set and per-session recovery metadata: session name, CWD, workspace reference, column, row, floating state, dimensions, placement observation time, and whether the session was visible in that capture.
+- A new checkpoint schema records an authoritative active-session allow-list plus per-session recovery metadata: name, CWD, workspace reference, column, row, floating state, dimensions, placement observation time, and visibility in the capture. It reuses the active-only `zellijlive.Cataloger` semantics instead of independently parsing `list-sessions`.
 - Capture updates placement only from an exact visible session/window association; an active headless session retains its newest valid prior placement instead of losing it.
 - A successful capture with zero Kitty windows but still-active Zellij sessions preserves those sessions and their previous placements.
 - The first capture of a new boot can carry placement forward from the newest valid matching prior checkpoint, while active inventory remains specific to the new observation.
-- Dead-resurrectable cache entries are not recorded as currently active; an unavailable, ambiguous, or failed active-session catalog prevents publication and leaves the prior checkpoint usable.
+- Dead-resurrectable cache entries are never marked active. Catalog ambiguity, socket-invalid entries, duplicate names, or catalog failure prevents checkpoint publication and leaves the prior checkpoint usable. Mirror’s existing `ActiveSessions` and headless-window representation may inform conversion tests, but mirror snapshots and pins are not checkpoint storage.
 - Checkpoint integrity covers every recovery-relevant field and publication keeps the existing writer lock, temp-write, file fsync, atomic rename, and directory fsync guarantees.
 - Schema-1 and schema-2 checkpoints remain readable and can supply legacy visible placement where available; new writes use the new schema without importing the unbounded legacy event log.
-- Tests cover same-boot headless carry-forward, new-boot carry-forward, empty Niri state, active-session removal, catalog failure, legacy reads, tampering, concurrent capture, and prune retention.
+- Tests cover same-boot headless carry-forward, new-boot carry-forward, empty Niri state, active-session removal, catalog failure and ambiguity, legacy reads, tampering, concurrent capture, and prune retention.
 - `go test ./internal/model ./internal/checkpoints ./internal/capture ./internal/prune` passes.
 
 ## Design Decisions
@@ -29,4 +29,4 @@ Evolve rolling boot checkpoints so each recovery point distinguishes the current
 
 ## Implementation Notes
 
-Depends on exact identity from task 1. Relevant files: `internal/model/state.go`, `internal/checkpoints/store.go`, `internal/capture/runner.go`, `internal/niri/adapter.go`, store/capture/prune tests, and a new ADR superseding the replacement-only assumptions in `docs/adr/0001-resume-zellij-terminals-in-niri.md`.
+Depends on task 1. The new work belongs in checkpoint/model/capture persistence and sticky merge logic. Reuse or extract the active-catalog projection from `internal/mirror/snapshot.go`; do not build a second Zellij command workflow. Preserve current mirror pin/apply schemas and behavior. Add the recovery ADR only for checkpoint/recovery semantics.

@@ -13,12 +13,13 @@ Add the `redeem resume --all` planning contract that selects the right sessions 
 - For a same-boot Niri failure, `resume --all` targets every currently active exact Zellij session, using current-boot sticky placement when available and a documented degraded fallback when not.
 - After a boot change, `resume --all` considers only sessions recorded active in the newest eligible prior recovery point and currently classified as active or dead-resurrectable.
 - Unrelated historical dead-resurrectable sessions are never selected, even when the Zellij cache contains hundreds of them.
-- Current active sessions are not blocked solely because their placement is old; placement age is reported as a warning/degradation.
+- Current active sessions are not blocked solely because their placement is old; placement age is reported as a warning or degradation.
 - `resume.maxCheckpointAge` continues to prevent automatic resurrection from an excessively old prior recovery point, but does not block attachment of a currently active session.
-- Missing, prefix-only, duplicate, or socket-invalid catalog entries are never launched or recreated, and no path adds Zellij create or force-run flags.
-- Already-open exact sessions remain actionable reconciliation items carrying their current Niri window ID rather than being discarded as complete.
-- Dry-run output explains candidate source, Zellij status, placement source/age, target workspace and column, and every exclusion or degradation.
-- Existing plain `redeem resume` behavior remains available for restoring only the previously visible recovery set; `--all` is the explicit all-active/prior-active mode used by automatic recovery.
+- Reuse `zellijlive.Catalog` exact statuses and safety checks, including pinned-version, owned socket, duplicate, missing, socket-invalid, and dead-resurrectable classification. Reuse mirror pin/apply’s fail-closed active-session preflight pattern where useful; mirror pins are never the recovery allow-list.
+- Preserve the existing direct attach-only contract: `KittyLaunchSpec` remains `zellij attach -- <session>` with no shell, create, attach-or-create, or force-run flags.
+- Planner output retains exactly observed open-window identity, including Niri window ID, for later reconciliation. This supersedes the executor’s current behavior that marks a matching session `already_open` without relocation.
+- Dry-run output explains candidate source, Zellij status, placement source and age, target workspace and column, and every exclusion or degradation.
+- Existing plain `redeem resume` behavior remains available for restoring only the previously visible recovery set; `--all` is the explicit all-active or prior-active mode used by automatic recovery.
 - Planner and CLI tests cover same boot, reboot, mixed active/resurrectable/missing catalogs, stale placement, stale prior recovery point, active sessions without placement, duplicates, and idempotent reruns.
 - `go test ./internal/resume ./cmd/redeem` passes.
 
@@ -31,4 +32,4 @@ Add the `redeem resume --all` planning contract that selects the right sessions 
 
 ## Implementation Notes
 
-Depends on task 2. Main surfaces: `internal/resume/planner.go`, `cmd/redeem/main.go`, `internal/zellijlive/*`, config validation, output tests, and the recovery ADR.
+Depends on task 2. Extend the existing planner and CLI rather than introducing a parallel resume pipeline. `--all` changes candidate selection and explanation, then feeds the existing plan/executor types. Preserve plain resume behavior and the existing max-checkpoint-age option, changing only its documented treatment of currently active sessions.
