@@ -52,7 +52,7 @@ func TestSessionTagExtractionBestEffort(t *testing.T) {
 		Args: []string{"zellij", "attach", "redeemer"},
 		Env:  map[string]string{"ZELLIJ_SESSION_NAME": "from-env"},
 	}}}
-	enricher := NewEnricherWithVerifier(reader, Config{IncludeSessionTag: true}, stubVerifier{})
+	enricher := NewEnricherWithEvidenceDependencies(reader, Config{IncludeSessionTag: true}, stubVerifier{}, stubSessionCWDResolver{}, stubEvidenceObserver{evidence: ZellijSessionEvidence{KittyVerified: true, Complete: true, Candidates: []string{"from-env"}}})
 
 	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "terminal [session:title]"}
 	got, err := enricher.EnrichWindow(window)
@@ -68,10 +68,12 @@ func TestSessionTagExtractionBestEffort(t *testing.T) {
 func TestSessionTagExtractedFromTitleWhenVerified(t *testing.T) {
 	t.Parallel()
 
-	enricher := NewEnricherWithVerifier(
+	enricher := NewEnricherWithEvidenceDependencies(
 		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/home/jmo"}}},
 		Config{IncludeSessionTag: true},
 		stubVerifier{ok: map[string]bool{"sensible-bee": true}},
+		stubSessionCWDResolver{},
+		stubEvidenceObserver{evidence: ZellijSessionEvidence{KittyVerified: true, Complete: true}},
 	)
 
 	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "sensible-bee | OC | Restore-terminal-session boot failure..."}
@@ -85,13 +87,48 @@ func TestSessionTagExtractedFromTitleWhenVerified(t *testing.T) {
 	}
 }
 
+func TestSessionEvidenceRejectsAmbiguousIncompleteAndUnverifiedRoot(t *testing.T) {
+	for _, evidence := range []ZellijSessionEvidence{
+		{KittyVerified: true, Complete: true, Candidates: []string{"one", "two"}},
+		{KittyVerified: true, Complete: false, Candidates: []string{"one"}},
+		{KittyVerified: false, Complete: true, Candidates: []string{"one"}},
+	} {
+		enricher := NewEnricherWithEvidenceDependencies(
+			stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/tmp"}}},
+			Config{IncludeSessionTag: true}, stubVerifier{ok: map[string]bool{"title-session": true}},
+			stubSessionCWDResolver{}, stubEvidenceObserver{evidence: evidence},
+		)
+		got, err := enricher.EnrichWindow(model.Window{AppID: "kitty", PID: 4242, Title: "title-session | work"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Terminal != nil && got.Terminal.SessionTag != "" {
+			t.Fatalf("unsafe evidence produced session: evidence=%+v terminal=%+v", evidence, got.Terminal)
+		}
+	}
+}
+
+func TestExactEvidenceIdentifiesSessionWhenTitleIsZellij(t *testing.T) {
+	enricher := NewEnricherWithEvidenceDependencies(
+		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/tmp"}}}, Config{IncludeSessionTag: true},
+		stubVerifier{}, stubSessionCWDResolver{},
+		stubEvidenceObserver{evidence: ZellijSessionEvidence{KittyVerified: true, Complete: true, Candidates: []string{"Case-Sensitive"}}},
+	)
+	got, err := enricher.EnrichWindow(model.Window{AppID: "kitty", PID: 4242, Title: "zellij"})
+	if err != nil || got.Terminal == nil || got.Terminal.SessionTag != "Case-Sensitive" {
+		t.Fatalf("exact evidence not used: terminal=%+v err=%v", got.Terminal, err)
+	}
+}
+
 func TestSessionTagFromTitleDroppedWhenNotVerified(t *testing.T) {
 	t.Parallel()
 
-	enricher := NewEnricherWithVerifier(
+	enricher := NewEnricherWithEvidenceDependencies(
 		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/home/jmo"}}},
 		Config{IncludeSessionTag: true},
 		stubVerifier{ok: map[string]bool{}},
+		stubSessionCWDResolver{},
+		stubEvidenceObserver{evidence: ZellijSessionEvidence{KittyVerified: true, Complete: true}},
 	)
 
 	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "sensible-bee | OC | Restore-terminal-session boot failure..."}
@@ -108,11 +145,12 @@ func TestSessionTagFromTitleDroppedWhenNotVerified(t *testing.T) {
 func TestSessionTitleCanUpgradeHomeCWDUsingResolver(t *testing.T) {
 	t.Parallel()
 
-	enricher := NewEnricherWithDependencies(
+	enricher := NewEnricherWithEvidenceDependencies(
 		stubReader{byPID: map[int]ProcessInfo{4242: {CWD: "/home/jmo"}}},
 		Config{IncludeSessionTag: true},
 		stubVerifier{ok: map[string]bool{"sensible-bee": true}},
 		stubSessionCWDResolver{cwdBySession: map[string]string{"sensible-bee": "/home/jmo/Development/active/tools/terminal-redeemer"}},
+		stubEvidenceObserver{evidence: ZellijSessionEvidence{KittyVerified: true, Complete: true}},
 	)
 
 	window := model.Window{Key: "w-1", AppID: "kitty", PID: 4242, Title: "sensible-bee | OC | Restore-terminal-session boot failure..."}
@@ -164,6 +202,15 @@ type stubVerifier struct {
 type stubSessionCWDResolver struct {
 	cwdBySession map[string]string
 	err          error
+}
+
+type stubEvidenceObserver struct {
+	evidence ZellijSessionEvidence
+	err      error
+}
+
+func (s stubEvidenceObserver) ObserveZellijSessions(int) (ZellijSessionEvidence, error) {
+	return s.evidence, s.err
 }
 
 func (s stubVerifier) Exists(session string) (bool, error) {

@@ -16,6 +16,156 @@ type processIdentity struct {
 	startTime string
 }
 
+// ZellijSessionEvidence is a complete, point-in-time observation of the
+// process tree below a Kitty window. Candidates contains the distinct session
+// names from exact descendant argv of the form zellij attach -- <session>.
+// Callers must reject evidence unless Complete and KittyVerified are both true.
+type ZellijSessionEvidence struct {
+	KittyVerified bool
+	Candidates    []string
+	Complete      bool
+}
+
+// ExactZellijAttachSession parses the one attach form used by resume and by
+// visible-session observation. It deliberately accepts no optional flags,
+// omitted separator, environment inference, or shell text.
+func ExactZellijAttachSession(args []string) (string, bool) {
+	if len(args) != 4 || filepath.Base(args[0]) != "zellij" || args[1] != "attach" || args[2] != "--" || args[3] == "" {
+		return "", false
+	}
+	return args[3], true
+}
+
+// ObserveZellijSessionEvidence returns exact and complete session evidence for
+// a Kitty process. A nil error with Complete=false means the process tree could
+// not be observed without a PID replacement, disappearance, or unreadable
+// metadata; no candidate in that result is trustworthy.
+func ObserveZellijSessionEvidence(ctx context.Context, procRoot string, rootPID int) (ZellijSessionEvidence, error) {
+	return observeZellijSessionEvidence(ctx, procRoot, rootPID, nil)
+}
+
+// SessionEvidenceObserver is shared by capture and mirror enrichment.
+type SessionEvidenceObserver interface {
+	ObserveZellijSessions(pid int) (ZellijSessionEvidence, error)
+}
+
+// ProcSessionEvidenceObserver observes the live procfs process tree.
+type ProcSessionEvidenceObserver struct{ ProcRoot string }
+
+func (observer ProcSessionEvidenceObserver) ObserveZellijSessions(pid int) (ZellijSessionEvidence, error) {
+	return ObserveZellijSessionEvidence(context.Background(), observer.ProcRoot, pid)
+}
+
+func observeZellijSessionEvidence(ctx context.Context, procRoot string, rootPID int, afterSnapshot func()) (ZellijSessionEvidence, error) {
+	evidence := ZellijSessionEvidence{}
+	if rootPID <= 0 {
+		return evidence, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return evidence, err
+	}
+	root := strings.TrimSpace(procRoot)
+	if root == "" {
+		root = "/proc"
+	}
+	table, children, err := processTable(ctx, root)
+	if err != nil {
+		return evidence, err
+	}
+	if afterSnapshot != nil {
+		afterSnapshot()
+	}
+	rootIdentity, ok := table[rootPID]
+	if !ok {
+		return evidence, nil
+	}
+	if current, err := readProcessIdentity(root, rootPID); err != nil || current != rootIdentity {
+		return evidence, nil
+	}
+	verified, metadataComplete := verifyKittyProcess(root, rootPID)
+	if !metadataComplete {
+		return evidence, nil
+	}
+	evidence.KittyVerified = verified
+	if !verified {
+		evidence.Complete = true
+		return evidence, nil
+	}
+
+	candidates := make(map[string]struct{})
+	queue := append([]int(nil), children[rootPID]...)
+	seen := map[int]struct{}{}
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return ZellijSessionEvidence{}, err
+		}
+		pid := queue[0]
+		queue = queue[1:]
+		if _, duplicate := seen[pid]; duplicate {
+			continue
+		}
+		seen[pid] = struct{}{}
+		identity, ok := table[pid]
+		if !ok {
+			return evidence, nil
+		}
+		current, err := readProcessIdentity(root, pid)
+		if err != nil || current != identity {
+			return evidence, nil
+		}
+		args, err := readProcArgs(root, pid)
+		if err != nil {
+			return evidence, nil
+		}
+		after, err := readProcessIdentity(root, pid)
+		if err != nil || after != identity {
+			return evidence, nil
+		}
+		if session, exact := ExactZellijAttachSession(args); exact {
+			candidates[session] = struct{}{}
+		}
+		queue = append(queue, children[pid]...)
+	}
+	if current, err := readProcessIdentity(root, rootPID); err != nil || current != rootIdentity {
+		return evidence, nil
+	}
+	for candidate := range candidates {
+		evidence.Candidates = append(evidence.Candidates, candidate)
+	}
+	sort.Strings(evidence.Candidates)
+	evidence.Complete = true
+	return evidence, nil
+}
+
+func verifyKittyProcess(root string, pid int) (verified bool, complete bool) {
+	processDir := filepath.Join(root, strconv.Itoa(pid))
+	executable, executableErr := os.Readlink(filepath.Join(processDir, "exe"))
+	if executableErr == nil && isKittyBasename(filepath.Base(executable)) {
+		return true, true
+	}
+	payload, commErr := os.ReadFile(filepath.Join(processDir, "comm"))
+	if commErr == nil {
+		comm := strings.TrimSpace(string(payload))
+		if strings.ContainsAny(comm, "/\\\x00") {
+			return false, true
+		}
+		return isKittyBasename(comm), true
+	}
+	if executableErr != nil {
+		return false, false
+	}
+	return false, true
+}
+
+func isKittyBasename(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "kitty", "kitty.bin":
+		return true
+	default:
+		return false
+	}
+}
+
 // DescendantArgvMatch walks a bounded-by-/proc process tree below rootPID and
 // reports whether any live descendant argv satisfies match. A process must
 // retain the parent and start-time identity observed with the tree before its

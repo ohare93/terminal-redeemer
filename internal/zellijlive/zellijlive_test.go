@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jmo/terminal-redeemer/internal/procmeta"
 )
 
 func TestRunBoundedKillsPipeHoldingDescendantsOnContextExpiry(t *testing.T) {
@@ -99,10 +101,15 @@ func TestCommandCatalogClassifiesActiveDeadPrefixAndNeverAttaches(t *testing.T) 
 	}
 }
 
-func TestConflictingEnvironmentAndArgvRemainAmbiguous(t *testing.T) {
-	values := candidatesFrom([]string{"zellij", "attach", "--", "target"}, []string{"ZELLIJ_SESSION_NAME=outer"})
-	if len(values) != 2 || values[0] != "outer" || values[1] != "target" {
-		t.Fatalf("conflicting evidence collapsed: %v", values)
+func TestProcessEvidenceRequiresExactAttachArgv(t *testing.T) {
+	for _, args := range [][]string{
+		{"zellij", "attach", "target"},
+		{"zellij", "attach", "--", "target", "--create"},
+		{"zellij-helper", "attach", "--", "target"},
+	} {
+		if session, ok := procmeta.ExactZellijAttachSession(args); ok {
+			t.Fatalf("non-literal argv accepted as %q: %v", session, args)
+		}
 	}
 }
 
@@ -195,7 +202,7 @@ func TestProcObserverFindsChildCreatedByNonLeaderThread(t *testing.T) {
 	if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
 		t.Fatal(err)
 	}
-	writeProcFixture(t, root, 200, 100, "zellij", []byte("zellij\x00attach\x00project\x00"), nil)
+	writeProcFixture(t, root, 200, 100, "zellij", []byte("zellij\x00attach\x00--\x00project\x00"), nil)
 	leaderChildren := filepath.Join(root, "100", "task", "100", "children")
 	if err := os.WriteFile(leaderChildren, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -213,38 +220,6 @@ func TestProcObserverFindsChildCreatedByNonLeaderThread(t *testing.T) {
 	}
 }
 
-func TestProcObserverRejectsTruncatedNodeAndDepthTraversal(t *testing.T) {
-	t.Run("node bound", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		for pid := 2; pid <= maxProcessNodes+2; pid++ {
-			writeProcFixture(t, root, pid, 1, "sh", nil, nil)
-		}
-		if _, err := (ProcObserver{ProcRoot: root}).Observe(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "node bound") {
-			t.Fatalf("partial node traversal accepted: %v", err)
-		}
-	})
-	t.Run("depth bound", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		parent := 1
-		for depth := 1; depth <= maxProcessDepth+1; depth++ {
-			pid := depth + 1
-			writeProcFixture(t, root, pid, parent, "sh", nil, nil)
-			parent = pid
-		}
-		if _, err := (ProcObserver{ProcRoot: root}).Observe(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "depth bound") {
-			t.Fatalf("partial depth traversal accepted: %v", err)
-		}
-	})
-}
-
 func TestExactProcessAndVersionBasenamesRejectNearMatches(t *testing.T) {
 	root := t.TempDir()
 	process := writeProcFixture(t, root, 1, 0, "notkitty", nil, nil)
@@ -258,8 +233,8 @@ func TestExactProcessAndVersionBasenamesRejectNearMatches(t *testing.T) {
 	if evidence.KittyVerified {
 		t.Fatal("notkitty accepted as Kitty")
 	}
-	if got := candidatesFrom([]string{"zellij-helper", "attach", "project"}, nil); len(got) != 0 {
-		t.Fatalf("zellij-helper accepted: %v", got)
+	if _, ok := procmeta.ExactZellijAttachSession([]string{"zellij-helper", "attach", "--", "project"}); ok {
+		t.Fatal("zellij-helper accepted")
 	}
 	base := filepath.Join(t.TempDir(), "sockets")
 	if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
@@ -371,29 +346,6 @@ func TestProcObserverRejectsUnreadableOrMalformedRelevantTreeEvidence(t *testing
 		}
 		assertIncomplete(t, root)
 	})
-	t.Run("malformed root children edge", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "1", "task", "1", "children"), []byte("not-a-pid"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		assertIncomplete(t, root)
-	})
-	t.Run("relevant child disappears", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		writeProcFixture(t, root, 2, 1, "zellij", []byte("zellij\x00attach\x00project\x00"), nil)
-		if err := os.RemoveAll(filepath.Join(root, "2")); err != nil {
-			t.Fatal(err)
-		}
-		assertIncomplete(t, root)
-	})
 	t.Run("relevant child metadata disappears", func(t *testing.T) {
 		root := t.TempDir()
 		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
@@ -402,42 +354,6 @@ func TestProcObserverRejectsUnreadableOrMalformedRelevantTreeEvidence(t *testing
 		}
 		child := writeProcFixture(t, root, 2, 1, "zellij", []byte("zellij\x00attach\x00project\x00"), nil)
 		if err := os.Remove(filepath.Join(child, "cmdline")); err != nil {
-			t.Fatal(err)
-		}
-		assertIncomplete(t, root)
-	})
-	t.Run("malformed relevant child identity", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		child := writeProcFixture(t, root, 2, 1, "zellij", []byte("zellij\x00attach\x00project\x00"), nil)
-		if err := os.WriteFile(filepath.Join(child, "stat"), []byte("malformed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		assertIncomplete(t, root)
-	})
-	t.Run("malformed relevant child metadata", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		child := writeProcFixture(t, root, 2, 1, "zellij", []byte{0xff, 0}, nil)
-		if _, err := os.Stat(child); err != nil {
-			t.Fatal(err)
-		}
-		assertIncomplete(t, root)
-	})
-	t.Run("malformed relevant child edge", func(t *testing.T) {
-		root := t.TempDir()
-		kitty := writeProcFixture(t, root, 1, 0, "kitty", nil, nil)
-		if err := os.Symlink("/bin/kitty", filepath.Join(kitty, "exe")); err != nil {
-			t.Fatal(err)
-		}
-		child := writeProcFixture(t, root, 2, 1, "zellij", []byte("zellij\x00attach\x00project\x00"), nil)
-		if err := os.WriteFile(filepath.Join(child, "task", "2", "children"), []byte("3 broken"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		assertIncomplete(t, root)

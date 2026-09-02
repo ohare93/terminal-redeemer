@@ -26,11 +26,12 @@ type Config struct {
 }
 
 type Enricher struct {
-	reader    Reader
-	whitelist map[string]struct{}
-	config    Config
-	verifier  SessionVerifier
-	resolver  SessionCWDResolver
+	reader          Reader
+	whitelist       map[string]struct{}
+	config          Config
+	verifier        SessionVerifier
+	resolver        SessionCWDResolver
+	sessionEvidence SessionEvidenceObserver
 }
 
 func NewEnricher(reader Reader, config Config) *Enricher {
@@ -42,6 +43,10 @@ func NewEnricherWithVerifier(reader Reader, config Config, verifier SessionVerif
 }
 
 func NewEnricherWithDependencies(reader Reader, config Config, verifier SessionVerifier, resolver SessionCWDResolver) *Enricher {
+	return NewEnricherWithEvidenceDependencies(reader, config, verifier, resolver, defaultSessionEvidenceObserver(reader))
+}
+
+func NewEnricherWithEvidenceDependencies(reader Reader, config Config, verifier SessionVerifier, resolver SessionCWDResolver, evidence SessionEvidenceObserver) *Enricher {
 	whitelist := map[string]struct{}{
 		"opencode": {},
 		"claude":   {},
@@ -53,7 +58,7 @@ func NewEnricherWithDependencies(reader Reader, config Config, verifier SessionV
 		whitelist[strings.ToLower(strings.TrimSpace(p))] = struct{}{}
 	}
 
-	return &Enricher{reader: reader, whitelist: whitelist, config: config, verifier: verifier, resolver: resolver}
+	return &Enricher{reader: reader, whitelist: whitelist, config: config, verifier: verifier, resolver: resolver, sessionEvidence: evidence}
 }
 
 func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
@@ -79,7 +84,7 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 		terminal.ProcessTags = tags
 	}
 	if e.config.IncludeSessionTag {
-		terminal.SessionTag = e.extractSessionTag(window.Title, info)
+		terminal.SessionTag = e.extractSessionTag(window.PID, window.Title)
 		if session := strings.TrimSpace(terminal.SessionTag); session != "" && e.resolver != nil {
 			if upgraded, err := e.resolver.Resolve(session); err == nil {
 				upgraded = strings.TrimSpace(upgraded)
@@ -97,21 +102,39 @@ func (e *Enricher) EnrichWindow(window model.Window) (model.Window, error) {
 	return out, nil
 }
 
-func (e *Enricher) extractSessionTag(windowTitle string, info ProcessInfo) string {
-	if session := extractSessionTagFromProcess(info); session != "" {
-		return session
-	}
-
-	candidate := extractSessionTagFromTitle(windowTitle)
-	if candidate == "" || e.verifier == nil {
+func (e *Enricher) extractSessionTag(pid int, windowTitle string) string {
+	if e.sessionEvidence == nil {
 		return ""
 	}
-
-	ok, err := e.verifier.Exists(candidate)
-	if err != nil || !ok {
+	evidence, err := e.sessionEvidence.ObserveZellijSessions(pid)
+	if err != nil || !evidence.Complete || !evidence.KittyVerified {
 		return ""
 	}
-	return candidate
+	switch len(evidence.Candidates) {
+	case 1:
+		return evidence.Candidates[0]
+	case 0:
+		candidate := extractSessionTagFromTitle(windowTitle)
+		if candidate == "" || e.verifier == nil {
+			return ""
+		}
+		ok, err := e.verifier.Exists(candidate)
+		if err == nil && ok {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func defaultSessionEvidenceObserver(reader Reader) SessionEvidenceObserver {
+	switch procReader := reader.(type) {
+	case ProcReader:
+		return ProcSessionEvidenceObserver{ProcRoot: procReader.ProcRoot}
+	case *ProcReader:
+		return ProcSessionEvidenceObserver{ProcRoot: procReader.ProcRoot}
+	default:
+		return nil
+	}
 }
 
 func (e *Enricher) filterTags(chain []string) []string {
@@ -141,24 +164,6 @@ func isTerminal(appID string) bool {
 
 var titleSessionPattern = regexp.MustCompile(`\[session:([^\]]+)\]`)
 var titlePrefixPattern = regexp.MustCompile(`^([^|]+)\s+\|`)
-
-func extractSessionTagFromProcess(info ProcessInfo) string {
-	if session := strings.TrimSpace(info.Env["ZELLIJ_SESSION_NAME"]); session != "" {
-		return session
-	}
-
-	for i := range info.Args {
-		arg := info.Args[i]
-		if (arg == "--session" || arg == "-s" || arg == "attach") && i+1 < len(info.Args) {
-			next := strings.TrimSpace(info.Args[i+1])
-			if next != "" && !strings.HasPrefix(next, "-") {
-				return next
-			}
-		}
-	}
-
-	return ""
-}
 
 func extractSessionTagFromTitle(windowTitle string) string {
 	match := titleSessionPattern.FindStringSubmatch(windowTitle)

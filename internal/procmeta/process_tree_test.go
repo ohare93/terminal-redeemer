@@ -77,6 +77,65 @@ func TestDescendantArgvMatchRejectsPIDReplacementAfterTreeSnapshot(t *testing.T)
 	}
 }
 
+func TestObserveZellijSessionEvidenceRequiresLiteralUniqueCompleteAttach(t *testing.T) {
+	root := t.TempDir()
+	writeProcessTreeFixture(t, root, 100, 1, 10, []byte("kitty\x00"))
+	if err := os.WriteFile(filepath.Join(root, "100", "comm"), []byte("kitty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeProcessTreeFixture(t, root, 101, 100, 11, []byte("zellij\x00attach\x00--\x00Exact-Session\x00"))
+	writeProcessTreeFixture(t, root, 102, 100, 12, []byte("zellij\x00attach\x00missing-separator\x00"))
+	evidence, err := ObserveZellijSessionEvidence(context.Background(), root, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidence.Complete || !evidence.KittyVerified || !reflect.DeepEqual(evidence.Candidates, []string{"Exact-Session"}) {
+		t.Fatalf("evidence = %+v", evidence)
+	}
+
+	writeProcessTreeFixture(t, root, 103, 100, 13, []byte("/bin/zellij\x00attach\x00--\x00other\x00"))
+	evidence, err = ObserveZellijSessionEvidence(context.Background(), root, 100)
+	if err != nil || !evidence.Complete || !reflect.DeepEqual(evidence.Candidates, []string{"Exact-Session", "other"}) {
+		t.Fatalf("ambiguous evidence = %+v, err=%v", evidence, err)
+	}
+}
+
+func TestObserveZellijSessionEvidenceRejectsIncompleteOrReplacedProcesses(t *testing.T) {
+	fixture := func(t *testing.T) string {
+		root := t.TempDir()
+		writeProcessTreeFixture(t, root, 100, 1, 10, []byte("kitty\x00"))
+		if err := os.WriteFile(filepath.Join(root, "100", "comm"), []byte("kitty\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeProcessTreeFixture(t, root, 101, 100, 11, []byte("zellij\x00attach\x00--\x00target\x00"))
+		return root
+	}
+	t.Run("root replacement", func(t *testing.T) {
+		root := fixture(t)
+		evidence, err := observeZellijSessionEvidence(context.Background(), root, 100, func() { writeProcessStat(t, root, 100, 1, 99) })
+		if err != nil || evidence.Complete || evidence.KittyVerified || len(evidence.Candidates) != 0 {
+			t.Fatalf("replacement evidence = %+v, err=%v", evidence, err)
+		}
+	})
+	t.Run("descendant disappears", func(t *testing.T) {
+		root := fixture(t)
+		evidence, err := observeZellijSessionEvidence(context.Background(), root, 100, func() { _ = os.RemoveAll(filepath.Join(root, "101")) })
+		if err != nil || evidence.Complete || len(evidence.Candidates) != 0 {
+			t.Fatalf("disappearance evidence = %+v, err=%v", evidence, err)
+		}
+	})
+	t.Run("descendant metadata unreadable", func(t *testing.T) {
+		root := fixture(t)
+		if err := os.Remove(filepath.Join(root, "101", "cmdline")); err != nil {
+			t.Fatal(err)
+		}
+		evidence, err := ObserveZellijSessionEvidence(context.Background(), root, 100)
+		if err != nil || evidence.Complete || len(evidence.Candidates) != 0 {
+			t.Fatalf("unreadable evidence = %+v, err=%v", evidence, err)
+		}
+	})
+}
+
 func TestDescendantArgvMatchRejectsReparentedDescendantAfterTreeSnapshot(t *testing.T) {
 	root := t.TempDir()
 	writeProcessTreeFixture(t, root, 100, 1, 10, []byte("kitty\x00"))

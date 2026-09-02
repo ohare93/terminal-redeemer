@@ -27,8 +27,14 @@ func (v fakeVerifier) Exists(session string) (bool, error) {
 
 type fakeResolver map[string]string
 
+type fakeEvidence map[int]procmeta.ZellijSessionEvidence
+
 func (r fakeResolver) Resolve(session string) (string, error) {
 	return r[session], nil
+}
+
+func (e fakeEvidence) ObserveZellijSessions(pid int) (procmeta.ZellijSessionEvidence, error) {
+	return e[pid], nil
 }
 
 type fakeLister []string
@@ -72,9 +78,14 @@ func TestCaptureOrdersWindowsAndIncludesZellijSession(t *testing.T) {
 		FixturePath: fixturePath,
 		GeneratedAt: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC),
 		Reader: fakeReader{
-			100: {CWD: "/home/jmo/one", Env: map[string]string{"ZELLIJ_SESSION_NAME": "one"}},
-			200: {CWD: "/home/jmo/two", Env: map[string]string{"ZELLIJ_SESSION_NAME": "two"}},
-			300: {CWD: "/home/jmo/three", Env: map[string]string{"ZELLIJ_SESSION_NAME": "three"}},
+			100: {CWD: "/home/jmo/one"},
+			200: {CWD: "/home/jmo/two"},
+			300: {CWD: "/home/jmo/three"},
+		},
+		SessionEvidence: fakeEvidence{
+			100: {KittyVerified: true, Complete: true, Candidates: []string{"one"}},
+			200: {KittyVerified: true, Complete: true, Candidates: []string{"two"}},
+			300: {KittyVerified: true, Complete: true, Candidates: []string{"three"}},
 		},
 		ProcessMetadata: procmeta.Config{IncludeSessionTag: true},
 	})
@@ -134,10 +145,11 @@ func TestCaptureExtractsVerifiedSessionFromTitle(t *testing.T) {
 	}
 
 	snapshot, err := Capture(context.Background(), Options{
-		FixturePath: fixturePath,
-		Reader:      fakeReader{100: {CWD: "/home/jmo", Env: map[string]string{}}},
-		Verifier:    fakeVerifier{"title-session": true},
-		Resolver:    fakeResolver{"title-session": "/home/jmo/project"},
+		FixturePath:     fixturePath,
+		Reader:          fakeReader{100: {CWD: "/home/jmo"}},
+		Verifier:        fakeVerifier{"title-session": true},
+		Resolver:        fakeResolver{"title-session": "/home/jmo/project"},
+		SessionEvidence: fakeEvidence{100: {KittyVerified: true, Complete: true}},
 		ProcessMetadata: procmeta.Config{
 			IncludeSessionTag: true,
 		},
@@ -217,8 +229,9 @@ func TestCaptureAddsHeadlessSessionsWithoutExactDuplicates(t *testing.T) {
 
 	snapshot, err := Capture(context.Background(), Options{
 		Host: "lattice", FixturePath: fixturePath,
-		Reader:          fakeReader{100: {CWD: "/visible", Env: map[string]string{"ZELLIJ_SESSION_NAME": "visible"}}},
+		Reader:          fakeReader{100: {CWD: "/visible"}},
 		Resolver:        fakeResolver{"visible": "/visible", "detached": "/headless/project"},
+		SessionEvidence: fakeEvidence{100: {KittyVerified: true, Complete: true, Candidates: []string{"visible"}}},
 		Lister:          fakeLister{"detached", "visible", "detached"},
 		ProcessMetadata: procmeta.Config{IncludeSessionTag: true},
 	})

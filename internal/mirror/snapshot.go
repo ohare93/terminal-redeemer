@@ -55,6 +55,7 @@ type Options struct {
 	Reader          procmeta.Reader
 	Verifier        procmeta.SessionVerifier
 	Resolver        procmeta.SessionCWDResolver
+	SessionEvidence procmeta.SessionEvidenceObserver
 	Lister          SessionLister
 }
 
@@ -176,7 +177,11 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 	if resolver == nil {
 		resolver = procmeta.NewZellijSessionCWDResolver("")
 	}
-	enricher := procmeta.NewEnricherWithDependencies(reader, opts.ProcessMetadata, verifier, resolver)
+	evidence := opts.SessionEvidence
+	if evidence == nil {
+		evidence = procmeta.ProcSessionEvidenceObserver{}
+	}
+	enricher := procmeta.NewEnricherWithEvidenceDependencies(reader, opts.ProcessMetadata, verifier, resolver, evidence)
 
 	workspaces := workspaceRefs(parsed.Workspaces)
 	workspaceInventory := snapshotWorkspaces(parsed.Workspaces)

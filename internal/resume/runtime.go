@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -69,7 +68,8 @@ func (p ProcAttachmentProbe) Attached(_ context.Context, rootPID int, session st
 		return false, nil
 	}
 	return procmeta.DescendantArgvMatch(p.ProcRoot, rootPID, func(args []string) bool {
-		return len(args) == 4 && filepath.Base(args[0]) == "zellij" && args[1] == "attach" && args[2] == "--" && args[3] == session
+		candidate, exact := procmeta.ExactZellijAttachSession(args)
+		return exact && candidate == session
 	})
 }
 

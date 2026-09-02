@@ -1,6 +1,10 @@
 package zellijlive
 
-import "context"
+import (
+	"context"
+
+	"github.com/jmo/terminal-redeemer/internal/procmeta"
+)
 
 type Status string
 
@@ -45,10 +49,7 @@ type Cataloger interface {
 	Observe(context.Context) (Catalog, error)
 }
 
-type ProcessEvidence struct {
-	KittyVerified bool
-	Candidates    []string
-}
+type ProcessEvidence = procmeta.ZellijSessionEvidence
 
 type ProcessObserver interface {
 	Observe(context.Context, int) (ProcessEvidence, error)
