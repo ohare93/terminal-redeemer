@@ -23,3 +23,25 @@ Correct stack detection and persisted occupancy validation to use Niri's documen
 ## Implementation Notes
 
 Live `niri msg` and `move-column-to-index --help` confirm scrolling-layout coordinates are one-based. Current code incorrectly checks row 0 in capture/planner/checkpoint validation and treats row >0 as stacked in executor.
+
+
+## Completion Summary
+
+- Corrected capture, planner, checkpoint validation, and executor stack detection to preserve Niri's one-based row coordinates.
+- Normal row 1 now participates in ordering; row greater than 1 and same-column occupancy remain conservatively unsupported.
+- Converted Niri coordinate fixtures and empty-workspace simulations to one-based columns and rows.
+- Focused/full Go tests, vet, Nix checks, and independent review passed without live resume.
+
+### Files Changed
+
+- cmd/redeem/main_test.go
+- internal/capture/runner.go
+- internal/capture/runner_test.go
+- internal/checkpoints/store.go
+- internal/checkpoints/store_test.go
+- internal/resume/executor.go
+- internal/resume/executor_test.go
+- internal/resume/planner.go
+- internal/resume/planner_all_test.go
+- internal/resume/planner_test.go
+- internal/resume/runtime_test.go
