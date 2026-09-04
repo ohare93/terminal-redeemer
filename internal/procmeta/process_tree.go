@@ -175,7 +175,7 @@ func verifyKittyProcess(root string, pid int) (verified bool, complete bool) {
 
 func isKittyBasename(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "kitty", "kitty.bin":
+	case "kitty", "kitty.bin", ".kitty-wrapped":
 		return true
 	default:
 		return false

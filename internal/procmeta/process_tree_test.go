@@ -78,6 +78,29 @@ func TestDescendantArgvMatchRejectsPIDReplacementAfterTreeSnapshot(t *testing.T)
 	}
 }
 
+func TestObserveZellijSessionEvidenceRecognizesNixWrappedKitty(t *testing.T) {
+	root := t.TempDir()
+	writeProcessTreeFixture(t, root, 100, 1, 10, []byte("/nix/store/example-kitty/bin/.kitty-wrapped\x00"))
+	if err := os.Symlink("/nix/store/example-kitty/bin/.kitty-wrapped", filepath.Join(root, "100", "exe")); err != nil {
+		t.Fatal(err)
+	}
+	writeProcessTreeFixture(t, root, 101, 100, 11, []byte("zellij\x00attach\x00--\x00wrapped-session\x00"))
+
+	evidence, err := ObserveZellijSessionEvidence(context.Background(), root, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidence.KittyVerified || !evidence.Complete || !reflect.DeepEqual(evidence.Candidates, []string{"wrapped-session"}) {
+		t.Fatalf("evidence = %+v", evidence)
+	}
+}
+
+func TestKittyBasenameRejectsWrappedNearMatch(t *testing.T) {
+	if isKittyBasename(".kitty-wrapped-extra") {
+		t.Fatal("accepted a suffix near-match for .kitty-wrapped")
+	}
+}
+
 func TestObserveZellijSessionEvidenceRequiresLiteralUniqueCompleteAttach(t *testing.T) {
 	root := t.TempDir()
 	writeProcessTreeFixture(t, root, 100, 1, 10, []byte("kitty\x00"))
