@@ -22,3 +22,15 @@ Allow exact session evidence collection from the deployed Nix Kitty wrapper with
 ## Implementation Notes
 
 Root cause reproduced live: all visible Kitty processes have exe/comm `.kitty-wrapped`; 17 observed trees already contain exact `zellij attach -- <name>` argv and should become position-trackable after deployment and capture.
+
+
+## Completion Summary
+
+- Accepted the exact Nix Kitty wrapper basename `.kitty-wrapped` in the shared executable/comm verifier.
+- Preserved strict exact-name, process-tree completeness, and `zellij attach -- <session>` matching without title or arbitrary-wrapper fallback.
+- Added live-shaped wrapped-Kitty and near-match regressions; focused and full Go tests passed independent review.
+
+### Files Changed
+
+- internal/procmeta/process_tree.go
+- internal/procmeta/process_tree_test.go
