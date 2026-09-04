@@ -685,7 +685,7 @@ func TestExecutorRejectsDuplicateExistingAttachmentsBeforeMutation(t *testing.T)
 }
 
 func TestExecutorOrdersTargetsDescendingAcrossUnrelatedColumns(t *testing.T) {
-	for _, columns := range [][]int{{0, 1, 2}, {0, 2, 1}} {
+	for _, columns := range [][]int{{1, 2, 3}, {1, 3, 2}} {
 		t.Run(fmt.Sprint(columns), func(t *testing.T) {
 			desktop := &fakeDesktop{
 				windows: []ObservedWindow{
@@ -727,10 +727,10 @@ func TestExecutorOrdersTargetsDescendingAcrossUnrelatedColumns(t *testing.T) {
 func TestExecutorRepairsHigherTargetShiftedByLowerTarget(t *testing.T) {
 	desktop := &fakeDesktop{
 		windows: []ObservedWindow{
-			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(0)},
-			{ID: 30, PID: 130, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(1), IsFocused: true},
-			{ID: 40, PID: 140, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(2)},
-			{ID: 20, PID: 120, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(3)},
+			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(1)},
+			{ID: 30, PID: 130, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(2), IsFocused: true},
+			{ID: 40, PID: 140, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(3)},
+			{ID: 20, PID: 120, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(4)},
 		},
 		attached: map[int]string{110: "high", 120: "low"},
 	}
@@ -757,7 +757,7 @@ func TestExecutorRepairsHigherTargetShiftedByLowerTarget(t *testing.T) {
 
 func TestExecutorFinalWorkspaceObservationRejectsPostMoveRace(t *testing.T) {
 	desktop := &fakeDesktop{
-		windows:  []ObservedWindow{{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(0), IsFocused: true}},
+		windows:  []ObservedWindow{{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(2), IsFocused: true}},
 		attached: map[int]string{110: "target"}, mutateAfterMoveObservation: true,
 	}
 	launcher := &fakeLauncher{desktop: desktop}
@@ -777,9 +777,9 @@ func TestExecutorFinalWorkspaceObservationRejectsPostMoveRace(t *testing.T) {
 func TestExecutorUnexpectedFocusMutationStopsAffectedWorkspace(t *testing.T) {
 	desktop := &fakeDesktop{
 		windows: []ObservedWindow{
-			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(0)},
-			{ID: 20, PID: 120, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(1)},
-			{ID: 30, PID: 130, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(2), IsFocused: true},
+			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(1)},
+			{ID: 20, PID: 120, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(2)},
+			{ID: 30, PID: 130, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(3), IsFocused: true},
 		},
 		attached: map[int]string{110: "high", 120: "low"}, focusMutationID: 10,
 	}
@@ -841,7 +841,7 @@ func TestExecutorOrderingVerificationFailureDegradesOnlyAffectedWorkspace(t *tes
 func TestExecutorLivePlacementRowOneAllowsOrderingActions(t *testing.T) {
 	desktop := &fakeDesktop{
 		windows: []ObservedWindow{
-			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(0), Row: intPointer(1)},
+			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(2), Row: intPointer(1)},
 			{ID: 20, PID: 120, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(1), Row: intPointer(1), IsFocused: true},
 		},
 		attached: map[int]string{110: "target"},
