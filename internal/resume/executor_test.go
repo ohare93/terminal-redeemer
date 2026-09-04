@@ -93,13 +93,14 @@ func (d *fakeDesktop) MoveToWorkspace(_ context.Context, id int, target Workspac
 	for i := range d.windows {
 		if d.windows[i].ID == id {
 			if d.windows[i].WorkspaceID != target.ID {
-				nextColumn := 0
+				nextColumn := 1
 				for j := range d.windows {
 					if d.windows[j].ID != id && d.windows[j].WorkspaceID == target.ID && d.windows[j].Column != nil && *d.windows[j].Column >= nextColumn {
 						nextColumn = *d.windows[j].Column + 1
 					}
 				}
 				d.windows[i].Column = intPointer(nextColumn)
+				d.windows[i].Row = intPointer(1)
 			}
 			d.windows[i].WorkspaceID = target.ID
 			return nil
@@ -637,9 +638,14 @@ func TestExecutorTwoPhaseRestoresExistingAndNewWindowsThenOrdersColumns(t *testi
 	if len(launcher.specs) != 1 || !reflect.DeepEqual(desktop.moves, []string{"ws", "ws"}) {
 		t.Fatalf("launches=%d moves=%#v", len(launcher.specs), desktop.moves)
 	}
-	wantOrder := []string{"focus:2001", "column:2001:2", "focus:88", "column:88:1", "focus:77"}
+	wantOrder := []string{"focus:2001", "column:2001:2", "focus:77"}
 	if !reflect.DeepEqual(desktop.orderActions, wantOrder) {
 		t.Fatalf("order actions=%#v want=%#v", desktop.orderActions, wantOrder)
+	}
+	for _, window := range desktop.windows {
+		if (window.ID == 88 || window.ID == 2001) && (window.Row == nil || *window.Row != 1) {
+			t.Fatalf("moved window row = %#v, want 1", window)
+		}
 	}
 	if got.Items[0].LayoutStatus != LayoutApplied || got.Items[1].LayoutStatus != LayoutApplied {
 		t.Fatalf("layout statuses = %#v", got.Items)
@@ -809,7 +815,7 @@ func TestExecutorUnexpectedFocusMutationStopsAffectedWorkspace(t *testing.T) {
 func TestExecutorOrderingVerificationFailureDegradesOnlyAffectedWorkspace(t *testing.T) {
 	for _, failure := range []string{"focus", "column"} {
 		t.Run(failure, func(t *testing.T) {
-			column := 1
+			column := 2
 			desktop := &fakeDesktop{attached: map[int]string{}, skipFocusObservation: map[int]bool{}, skipColumnObservation: map[int]bool{}}
 			launcher := &fakeLauncher{desktop: desktop}
 			executor := testExecutor(desktop, launcher)
