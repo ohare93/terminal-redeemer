@@ -143,13 +143,13 @@ func TestNiriOptionalLayoutLeavesColumnForVerifiedOrderingPhase(t *testing.T) {
 	}
 }
 
-func TestSnapshotObserverExposesFocusAndColumnForVerification(t *testing.T) {
-	observer := SnapshotObserver{Source: staticSnapshot(`{"windows":[{"id":42,"pid":900,"app_id":"kitty","workspace_id":7,"is_focused":true,"layout":{"pos_in_scrolling_layout":[3,0]}}]}`)}
+func TestSnapshotObserverExposesFocusAndOneBasedRowForVerification(t *testing.T) {
+	observer := SnapshotObserver{Source: staticSnapshot(`{"windows":[{"id":42,"pid":900,"app_id":"kitty","workspace_id":7,"is_focused":true,"layout":{"pos_in_scrolling_layout":[3,1]}}]}`)}
 	windows, err := observer.Windows(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(windows) != 1 || !windows[0].IsFocused || windows[0].Column == nil || *windows[0].Column != 3 || windows[0].Row == nil || *windows[0].Row != 0 {
+	if len(windows) != 1 || !windows[0].IsFocused || windows[0].Column == nil || *windows[0].Column != 3 || windows[0].Row == nil || *windows[0].Row != 1 {
 		t.Fatalf("observed windows=%#v", windows)
 	}
 }

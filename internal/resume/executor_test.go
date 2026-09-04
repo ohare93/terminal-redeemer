@@ -838,6 +838,32 @@ func TestExecutorOrderingVerificationFailureDegradesOnlyAffectedWorkspace(t *tes
 	}
 }
 
+func TestExecutorLivePlacementRowOneAllowsOrderingActions(t *testing.T) {
+	desktop := &fakeDesktop{
+		windows: []ObservedWindow{
+			{ID: 10, PID: 110, AppID: "kitty", WorkspaceID: "ws", Column: intPointer(0), Row: intPointer(1)},
+			{ID: 20, PID: 120, AppID: "firefox", WorkspaceID: "ws", Column: intPointer(1), Row: intPointer(1), IsFocused: true},
+		},
+		attached: map[int]string{110: "target"},
+	}
+	executor := testExecutor(desktop, &fakeLauncher{desktop: desktop})
+	executor.Layout = fakeLayout{result: LayoutResult{Status: LayoutNotRequested}}
+	executor.Orderer = desktop
+	item := readyItem("a", "target", "ws")
+	item.Status = StatusAlreadyOpen
+	// This matches the live dry-run evidence: placement_row=1.
+	item.CapturedPlacement = &model.Placement{Column: intPointer(1), Row: intPointer(1)}
+
+	got := executor.Apply(context.Background(), Plan{Items: []Item{item}})
+	if got.Items[0].LayoutStatus != LayoutApplied {
+		t.Fatalf("row-one ordering result=%#v", got.Items[0])
+	}
+	want := []string{"focus:10", "column:10:1", "focus:20"}
+	if !reflect.DeepEqual(desktop.orderActions, want) {
+		t.Fatalf("row-one ordering actions=%#v want=%#v", desktop.orderActions, want)
+	}
+}
+
 func TestExecutorRejectsHiddenCapturedStackWithoutGuessing(t *testing.T) {
 	desktop := &fakeDesktop{attached: map[int]string{}}
 	launcher := &fakeLauncher{desktop: desktop}
@@ -845,7 +871,7 @@ func TestExecutorRejectsHiddenCapturedStackWithoutGuessing(t *testing.T) {
 	executor.Layout = fakeLayout{result: LayoutResult{Status: LayoutNotRequested}}
 	executor.Orderer = desktop
 	item := readyItem("a", "hidden-stack", "ws")
-	item.CapturedPlacement = &model.Placement{Column: intPointer(1), Row: intPointer(0)}
+	item.CapturedPlacement = &model.Placement{Column: intPointer(1), Row: intPointer(1)}
 	item.CapturedColumnOccupied = true
 	got := executor.Apply(context.Background(), Plan{Items: []Item{item}})
 	if got.Items[0].LayoutStatus != LayoutUnsupported || !strings.Contains(got.Items[0].LayoutReason, "stacked rows") || len(desktop.orderActions) != 0 {
@@ -854,7 +880,7 @@ func TestExecutorRejectsHiddenCapturedStackWithoutGuessing(t *testing.T) {
 }
 
 func TestExecutorRejectsCapturedStackedRowsWithoutGuessing(t *testing.T) {
-	column, row := 1, 1
+	column, row := 1, 2
 	desktop := &fakeDesktop{attached: map[int]string{}}
 	launcher := &fakeLauncher{desktop: desktop}
 	executor := testExecutor(desktop, launcher)

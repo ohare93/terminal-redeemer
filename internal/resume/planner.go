@@ -324,10 +324,10 @@ func newItem(window model.Window, state model.State) Item {
 }
 
 // capturedColumnOccupied carries stack evidence only in the transient plan. A
-// row-zero target that shared its captured column cannot safely be restored by
+// row-one target that shared its captured column cannot safely be restored by
 // guessing consume/expel actions, even when the other row was not a terminal.
 func capturedColumnOccupied(state model.State, workspace model.WorkspaceRef, placement *model.Placement, targetKey, targetSession string) bool {
-	if placement == nil || placement.Column == nil || placement.Row == nil || *placement.Row != 0 {
+	if placement == nil || placement.Column == nil || placement.Row == nil || *placement.Row != 1 {
 		return false
 	}
 	for _, window := range state.Windows {

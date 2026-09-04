@@ -133,7 +133,7 @@ func TestAllZeroPlacementObservationIsUnavailable(t *testing.T) {
 
 func TestAllCarriesPersistedColumnOccupancyFromHeadlessStickyCheckpoint(t *testing.T) {
 	now := time.Now().UTC()
-	column, targetRow := 2, 0
+	column, targetRow := 2, 1
 	checkpoint := allCheckpoint("current", now, "hidden")
 	checkpoint.Recovery.Sessions[0].WorkspaceRef = &model.WorkspaceRef{Name: "dev"}
 	checkpoint.Recovery.Sessions[0].Placement = &model.Placement{Column: &column, Row: &targetRow}

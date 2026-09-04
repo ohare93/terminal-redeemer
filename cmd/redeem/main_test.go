@@ -256,9 +256,9 @@ func TestResumeAllDryRunUsesExactCatalogStickyInventoryAndDetailedReasons(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	column := 4
+	column, row := 4, 1
 	workspace := model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 2}
-	placement := model.Placement{Column: &column}
+	placement := model.Placement{Column: &column, Row: &row}
 	recovery := model.RecoveryInventory{
 		ActiveSessions: []string{"headless"},
 		Sessions:       []model.RecoverySession{{Name: "headless", CWD: "/tmp/project", WorkspaceRef: &workspace, Placement: &placement, PlacementObservedAt: &now}},
@@ -313,6 +313,7 @@ func TestResumeAllDryRunUsesExactCatalogStickyInventoryAndDetailedReasons(t *tes
 		"source=current_boot_active_catalog",
 		`session="headless" status=ready candidate_source=current_boot_active_catalog zellij_status=active placement_source=current_boot_sticky`,
 		"placement_column=4",
+		"placement_row=1",
 		`workspace_method=name workspace_id="current-dev"`,
 		`session="without-placement" status=degraded`,
 		`placement_source=none`,

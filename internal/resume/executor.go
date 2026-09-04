@@ -874,7 +874,7 @@ func stackedReason(plan *Plan, group []attachedTarget) string {
 	for _, target := range group {
 		item := plan.Items[target.item]
 		placement := item.CapturedPlacement
-		if item.CapturedColumnOccupied || placement.Row != nil && *placement.Row > 0 {
+		if item.CapturedColumnOccupied || placement.Row != nil && *placement.Row > 1 {
 			return "captured stacked rows are unsupported without consume or expel actions"
 		}
 		column := *placement.Column

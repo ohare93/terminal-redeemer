@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func TestRecoveryIntegrityDetectsTampering(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpoint := testCheckpoint(t, "boot-a", "host", "default", time.Now().UTC())
-	column, row := 2, 0
+	column, row := 2, 1
 	observed := checkpoint.ObservedAt
 	checkpoint.Recovery = model.RecoveryInventory{
 		ActiveSessions: []string{"alpha"},
@@ -77,6 +78,26 @@ func TestRecoveryIntegrityDetectsTampering(t *testing.T) {
 	}
 	if _, err := store.Read("boot-a", "host", "default"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("tampered recovery payload accepted: %v", err)
+	}
+}
+
+func TestRecoveryColumnOccupancyRequiresRowOnePlacement(t *testing.T) {
+	column, firstRow, secondRow := 2, 1, 2
+	observed := time.Now().UTC()
+	recovery := model.RecoveryInventory{
+		ActiveSessions: []string{"alpha"},
+		Sessions: []model.RecoverySession{{
+			Name: "alpha", WorkspaceRef: &model.WorkspaceRef{Name: "dev"},
+			Placement: &model.Placement{Column: &column, Row: &firstRow}, PlacementObservedAt: &observed,
+			CapturedColumnOccupied: true,
+		}},
+	}
+	if err := validateRecovery(recovery); err != nil {
+		t.Fatalf("row-one occupancy rejected: %v", err)
+	}
+	recovery.Sessions[0].Placement.Row = &secondRow
+	if err := validateRecovery(recovery); err == nil || !strings.Contains(err.Error(), "row-one placement") {
+		t.Fatalf("non-row-one occupancy accepted: %v", err)
 	}
 }
 

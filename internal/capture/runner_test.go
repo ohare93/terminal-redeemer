@@ -203,7 +203,7 @@ func TestCaptureEmptyPostRestartObservationRetainsStickyPlacementSameAndNewBoot(
 func TestCaptureCarriesObservedColumnOccupancySameAndNewBoot(t *testing.T) {
 	root := t.TempDir()
 	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	column, targetRow, otherRow := 3, 0, 1
+	column, targetRow, otherRow := 3, 1, 2
 	workspace := model.WorkspaceRef{Name: "dev", Index: 1}
 	visible := model.State{Windows: []model.Window{
 		{
@@ -251,10 +251,28 @@ func TestCaptureCarriesObservedColumnOccupancySameAndNewBoot(t *testing.T) {
 	}
 }
 
+func TestRecoveryColumnOccupiedUsesOneBasedRows(t *testing.T) {
+	column, firstRow, secondRow := 3, 1, 2
+	workspace := &model.WorkspaceRef{Name: "dev", Index: 1}
+	target := model.Window{Key: "target", WorkspaceRef: workspace, Placement: &model.Placement{Column: &column, Row: &firstRow}}
+
+	if recoveryColumnOccupied(model.State{Windows: []model.Window{target}}, target) {
+		t.Fatal("an unoccupied row-one column was classified as stacked")
+	}
+	other := model.Window{Key: "other", WorkspaceRef: workspace, Placement: &model.Placement{Column: &column, Row: &secondRow}}
+	if !recoveryColumnOccupied(model.State{Windows: []model.Window{target, other}}, target) {
+		t.Fatal("same-column occupancy was not captured for a row-one target")
+	}
+	target.Placement.Row = &secondRow
+	if recoveryColumnOccupied(model.State{Windows: []model.Window{target, other}}, target) {
+		t.Fatal("occupancy evidence was recorded against a non-first-row target")
+	}
+}
+
 func TestCaptureTitleFallbackCannotOverwriteStickyPlacement(t *testing.T) {
 	root := t.TempDir()
 	t0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-	column, row, replacementColumn := 3, 0, 9
+	column, row, replacementColumn := 3, 1, 9
 	initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column, Row: &row})
 	titleFallback := recoveryWindow("alpha", false, &model.WorkspaceRef{Name: "unrelated", Index: 8}, &model.Placement{Column: &replacementColumn})
 	times := []time.Time{t0, t0.Add(time.Minute)}
@@ -325,7 +343,7 @@ func TestCapturePartialPlacementRetainsPriorAtomicObservation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			column, targetRow, otherRow := 3, 0, 1
+			column, targetRow, otherRow := 3, 1, 2
 			initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &column, Row: &targetRow})
 			other := model.Window{Key: "w:browser:2", AppID: "firefox", WorkspaceRef: &model.WorkspaceRef{Name: "dev", Index: 1}, Placement: &model.Placement{Column: &column, Row: &otherRow}}
 			times := []time.Time{t0, t0.Add(time.Minute)}
@@ -400,7 +418,7 @@ func TestCaptureCompletePlacementRefreshesAtomicObservation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			priorColumn, priorRow, otherRow := 3, 0, 1
+			priorColumn, priorRow, otherRow := 3, 1, 2
 			initial := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "dev", Index: 1}, &model.Placement{Column: &priorColumn, Row: &priorRow})
 			other := model.Window{Key: "w:browser:2", AppID: "firefox", WorkspaceRef: &model.WorkspaceRef{Name: "dev", Index: 1}, Placement: &model.Placement{Column: &priorColumn, Row: &otherRow}}
 			replacement := recoveryWindow("alpha", true, &model.WorkspaceRef{Name: "review", Index: 2}, test.placement)

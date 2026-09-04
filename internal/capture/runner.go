@@ -262,7 +262,7 @@ func completeRecoveryPlacement(window model.Window) bool {
 // target from a successful full-state collection. Missing layout for another
 // window in the same workspace is treated conservatively as possible stacking.
 func recoveryColumnOccupied(state model.State, target model.Window) bool {
-	if target.Placement == nil || target.Placement.Column == nil || target.Placement.Row == nil || *target.Placement.Row != 0 {
+	if target.Placement == nil || target.Placement.Column == nil || target.Placement.Row == nil || *target.Placement.Row != 1 {
 		return false
 	}
 	for _, other := range state.Windows {

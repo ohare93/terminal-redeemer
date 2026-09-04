@@ -93,8 +93,8 @@ func validateRecovery(recovery model.RecoveryInventory) error {
 			return fmt.Errorf("session %q has an empty placement observation time", session.Name)
 		}
 		if session.CapturedColumnOccupied {
-			if session.PlacementObservedAt == nil || session.WorkspaceRef == nil || session.Placement == nil || session.Placement.Column == nil || session.Placement.Row == nil || *session.Placement.Row != 0 {
-				return fmt.Errorf("session %q has column occupancy without a complete row-zero placement observation", session.Name)
+			if session.PlacementObservedAt == nil || session.WorkspaceRef == nil || session.Placement == nil || session.Placement.Column == nil || session.Placement.Row == nil || *session.Placement.Row != 1 {
+				return fmt.Errorf("session %q has column occupancy without a complete row-one placement observation", session.Name)
 			}
 		}
 	}

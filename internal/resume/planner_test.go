@@ -138,6 +138,27 @@ func TestUnresolvedWorkspacePolicies(t *testing.T) {
 	}
 }
 
+func TestCapturedColumnOccupiedUsesOneBasedRows(t *testing.T) {
+	column, firstRow, secondRow := 2, 1, 2
+	workspace := model.WorkspaceRef{Name: "dev", Index: 1}
+	placement := &model.Placement{Column: &column, Row: &firstRow}
+	state := model.State{Windows: []model.Window{{
+		Key: "other", WorkspaceRef: &workspace,
+		Placement: &model.Placement{Column: &column, Row: &secondRow},
+	}}}
+
+	if !capturedColumnOccupied(state, workspace, placement, "target", "target") {
+		t.Fatal("same-column occupancy was not detected for a row-one target")
+	}
+	if capturedColumnOccupied(model.State{}, workspace, placement, "target", "target") {
+		t.Fatal("an unoccupied row-one column was classified as stacked")
+	}
+	placement.Row = &secondRow
+	if capturedColumnOccupied(state, workspace, placement, "target", "target") {
+		t.Fatal("occupancy evidence was attached to a non-first-row target")
+	}
+}
+
 func TestStalePlanDoesNotRequireLiveStateOrAvailability(t *testing.T) {
 	selection := readySelection(stateWithTerminal("w", "session", model.WorkspaceRef{Index: 1}))
 	selection.Status = CandidateStale
